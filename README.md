@@ -1,2 +1,2 @@
 # Project-aquanex
-Intelligent Irrigation Pipeline Monitoring System
+Intelligent Irrigation Smart Platform
