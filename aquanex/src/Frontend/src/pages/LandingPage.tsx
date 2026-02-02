@@ -157,7 +157,7 @@ const LandingPage = () => {
               <address className="not-italic text-gray-400">
                 <p>Dubai, UAE</p>
                 <p>Email: info@aquanex.ae</p>
-                <p>Phone: +971 4 123 4567</p>
+                <p>Phone: +971 4 xxx xxxx</p>
               </address>
             </div>
           </div>
