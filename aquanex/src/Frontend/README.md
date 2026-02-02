@@ -1,8 +1,8 @@
-# Official Repository for CSIT321 - AquaNex by Team Technium
+# Frontend Specifications
 
 smart irrigation system
 
-## Frontend Application (Lovable Project)
+## Frontend Application 
 
 **URL**: https://lovable.dev/projects/ce6bcdb6-0fd8-49ec-b1e4-009859d51b0f
 
