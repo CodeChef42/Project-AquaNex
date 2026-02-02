@@ -1,3 +1,3 @@
-Official Repository for CSIT321 - AquaNex by Team Technium
+#Official Repository for CSIT321 - AquaNex by Team Technium
 
-## smart irrigation system
+smart irrigation system
