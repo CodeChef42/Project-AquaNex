@@ -42,13 +42,7 @@ const LandingPage = () => {
   const navigate = useNavigate();
 
   const handleGetStarted = () => {
-    console.log("Get Started button clicked. Attempting navigation to /dashboard");
-    try {
-      navigate("/dashboard");
-      console.log("Navigation command executed");
-    } catch (error) {
-      console.error("Navigation failed:", error);
-    }
+    navigate("/signin");
   };
 
   return (
