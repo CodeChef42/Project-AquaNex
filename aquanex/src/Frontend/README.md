@@ -7,7 +7,7 @@ smart irrigation system
 **URL**: https://lovable.dev/projects/ce6bcdb6-0fd8-49ec-b1e4-009859d51b0f
 
 ### Project info
-
+Pre-requisites: NodeJS to use npm
 This project is built with:
 - Vite
 - TypeScript
