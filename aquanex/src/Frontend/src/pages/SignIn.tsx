@@ -7,20 +7,22 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from "../assets/Picture1.png";
 
+
 const SignIn = () => {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(username, password);
       toast({
         title: 'Success',
         description: 'Logged in successfully!',
@@ -36,6 +38,7 @@ const SignIn = () => {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -63,13 +66,13 @@ const SignIn = () => {
           <div className="bg-card border border-border rounded-xl shadow-sm p-8">
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
+                <Label htmlFor="username">Username</Label>
                 <Input
-                  id="email"
-                  type="email"
-                  placeholder="admin@aquanex.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="username"
+                  type="text"
+                  placeholder="johndoe"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   required
                   className="w-full"
                 />
@@ -100,8 +103,8 @@ const SignIn = () => {
             {/* Demo credentials hint */}
             <div className="mt-4 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
               <p className="font-medium mb-1">Demo Credentials:</p>
-              <p>Email: admin@aquanex.com</p>
-              <p>Password: admin123</p>
+              <p>Username: johndoe</p>
+              <p>Password: mypass123</p>
             </div>
           </div>
 

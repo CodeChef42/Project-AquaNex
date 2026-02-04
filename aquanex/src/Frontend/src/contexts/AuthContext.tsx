@@ -1,17 +1,24 @@
-import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import api from '../lib/api';
 
 interface User {
   id: number;
+  username: string;
+  full_name: string;
   email: string;
   role: string;
-  access: string;
 }
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, role?: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  register: (
+    username: string, 
+    password: string, 
+    fullName: string,
+    email: string,
+    role: string
+  ) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   loading: boolean;
@@ -19,51 +26,59 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in
     const token = localStorage.getItem('access_token');
     if (token) {
-      fetchProfile();
+      fetchUser();
     } else {
       setLoading(false);
     }
   }, []);
 
-  const fetchProfile = async () => {
+  const fetchUser = async () => {
     try {
-      const response = await api.get('/auth/profile/');
+      const response = await api.get('/auth/user/');
       setUser(response.data);
     } catch (error) {
-      localStorage.clear();
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (email: string, password: string) => {
-    const response = await api.post('/auth/login/', { email, password });
-    const { user, access, refresh } = response.data;
+  const login = async (username: string, password: string) => {
+    const response = await api.post('/auth/login/', { username, password });
+    localStorage.setItem('access_token', response.data.access);
+    localStorage.setItem('refresh_token', response.data.refresh);
     
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
-    setUser(user);
+    // Set user immediately from response instead of fetching again
+    setUser(response.data.user);
   };
 
-  const register = async (email: string, password: string, role: string = 'user') => {
-    const response = await api.post('/auth/register/', { email, password, role });
-    const { user, access, refresh } = response.data;
-    
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
-    setUser(user);
+  const register = async (
+    username: string, 
+    password: string, 
+    fullName: string,
+    email: string,
+    role: string
+  ) => {
+    await api.post('/auth/register/', { 
+      username, 
+      password, 
+      full_name: fullName,
+      email,
+      role 
+    });
   };
 
   const logout = () => {
-    localStorage.clear();
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     setUser(null);
   };
 
@@ -85,8 +100,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 };

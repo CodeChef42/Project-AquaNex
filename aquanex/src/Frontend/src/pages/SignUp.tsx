@@ -7,14 +7,19 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from "../assets/Picture1.png";
 
+
 const SignUp = () => {
+  const [username, setUsername] = useState('');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [role, setRole] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,25 +42,35 @@ const SignUp = () => {
       return;
     }
 
+    if (!role) {
+      toast({
+        title: 'Error',
+        description: 'Please select a role',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await register(email, password);
+      await register(username, password, fullName, email, role);
       toast({
         title: 'Success',
-        description: 'Account created successfully!',
+        description: 'Account created successfully! Please sign in.',
       });
-      navigate('/dashboard');
+      navigate('/signin');
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.email?.[0] || 'Registration failed',
+        description: error.response?.data?.username?.[0] || error.response?.data?.email?.[0] || error.response?.data?.detail || 'Registration failed',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -83,16 +98,59 @@ const SignUp = () => {
           <div className="bg-card border border-border rounded-xl shadow-sm p-8">
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
+                <Label htmlFor="username">Username</Label>
+                <Input
+                  id="username"
+                  type="text"
+                  placeholder="johndoe"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  className="w-full"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="fullName">Full Name</Label>
+                <Input
+                  id="fullName"
+                  type="text"
+                  placeholder="John Doe"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  className="w-full"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   type="email"
-                  placeholder="you@example.com"
+                  placeholder="john@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   className="w-full"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="role">Role</Label>
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  required
+                  className="w-full h-10 px-3 py-2 text-sm rounded-md border border-input bg-background ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <option value="">Select Role</option>
+                  <option value="Admin">Admin</option>
+                  <option value="Planner">Planner</option>
+                  <option value="Technician">Technician</option>
+                  <option value="Operator">Operator</option>
+                </select>
               </div>
 
               <div className="space-y-2">

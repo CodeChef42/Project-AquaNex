@@ -49,7 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'apps.core.apps.CoreConfig'
+    'apps.core',  # Change this (remove .apps.CoreConfig)
 ]
 
 MIDDLEWARE = [
@@ -88,23 +88,26 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
 # Database - SQLite (temporary for testing)
-DATABASES = {
+'''DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
-}
+}'''
 
-'''DATABASES = {
+DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'your_db_name',
-        'USER': 'postgres',
-        'PASSWORD': 'your_supabase_password',
-        'HOST': 'your-project-ref.supabase.co',
-        'PORT': '5432',
+        'NAME': 'postgres',
+        'USER': 'postgres.xxiojmtocfiawqzcxffi',
+        'PASSWORD': 'Aquapercolation',  # The password you set/reset
+        'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',  # From screenshot
+        'PORT': '5432',  # Session pooler uses 5432, not 6543
+        'OPTIONS': {
+            'sslmode': 'require',
+        },
     }
-}'''
+}
 
 
 # Password validation
@@ -125,6 +128,10 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+AUTHENTICATION_BACKENDS = [
+    'apps.core.backends.CustomUserBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.0/topics/i18n/
@@ -175,5 +182,7 @@ from datetime import timedelta
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'USER_ID_FIELD': 'user_id',
+    'USER_ID_CLAIM': 'user_id'
 }
 
