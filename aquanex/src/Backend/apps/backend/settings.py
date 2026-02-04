@@ -11,8 +11,9 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
 from pathlib import Path
-AUTH_USER_MODEL = 'core.User'
+from datetime import timedelta
 
+AUTH_USER_MODEL = 'core.User'
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,16 +30,13 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
-
 # Application definition
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -49,7 +47,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'apps.core',  # Change this (remove .apps.CoreConfig)
+    'apps.core',
 ]
 
 MIDDLEWARE = [
@@ -83,36 +81,36 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
+# =============================================================================
+# DATABASE CONFIGURATION - Uncomment the one you want to use
+# =============================================================================
 
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-
-# Database - SQLite (temporary for testing)
-'''DATABASES = {
+# Option 1: SQLite (Local Development - CURRENTLY ACTIVE)
+DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
-}'''
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres.xxiojmtocfiawqzcxffi',
-        'PASSWORD': 'Aquapercolation',  # The password you set/reset
-        'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',  # From screenshot
-        'PORT': '5432',  # Session pooler uses 5432, not 6543
-        'OPTIONS': {
-            'sslmode': 'require',
-        },
-    }
 }
 
+# Option 2: Supabase PostgreSQL (Production/Team Development)
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'postgres',
+#         'USER': 'postgres.xxiojmtocfiawqzcxffi',
+#         'PASSWORD': 'Aquapercolation',
+#         'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
+#         'PORT': '5432',
+#         'OPTIONS': {
+#             'sslmode': 'require',
+#         },
+#     }
+# }
+
+# =============================================================================
 
 # Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -134,27 +132,18 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 # Internationalization
-# https://docs.djangoproject.com/en/5.0/topics/i18n/
-
 LANGUAGE_CODE = 'en-us'
-
 TIME_ZONE = 'UTC'
-
 USE_I18N = True
-
 USE_TZ = True
 
-
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.0/howto/static-files/
-
 STATIC_URL = 'static/'
 
 # Default primary key field type
-# https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -177,12 +166,10 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',
 }
 
-
-from datetime import timedelta
+# JWT Configuration
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id'
 }
-
