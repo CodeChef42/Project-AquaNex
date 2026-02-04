@@ -42,12 +42,12 @@ const AlertList = () => {
   return (
     <div className="p-8 space-y-6">
       <Breadcrumbs 
-        items={[
-          { label: "Dashboard", path: "/" },
-          { label: "Pipeline Monitoring", path: "/pipeline" },
-          { label: "Full Alert List" }
-        ]} 
-      />
+          items={[
+            { label: "Home", path: "/home" },
+            { label: "Pipeline Management", path: "/pipeline" },
+            { label: "Alert List" }
+          ]} 
+        />
 
       <div className="flex items-center justify-between">
         <div>

@@ -27,10 +27,10 @@ const ZoneDetail = () => {
   return (
     <div className="p-8 space-y-6">
       <Breadcrumbs 
-        items={[
-          { label: "Dashboard", path: "/" },
-          { label: "Soil Salinity", path: "/soil-salinity" },
-          { label: `Zone ${zoneId}` }
+          items={[
+            { label: "Home", path: "/home" },
+            { label: "Soil Salinity", path: "/soil-salinity" },
+            { label: `Zone ${zoneId}` }
         ]} 
       />
 

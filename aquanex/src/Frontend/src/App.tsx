@@ -7,13 +7,13 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { useAuth } from "./contexts/AuthContext";
 import MainLayout from "./components/layout/MainLayout";
 import LandingPage from "./pages/LandingPage";
-import Dashboard from "./pages/Dashboard";
+import Home from "./pages/Home";
 import PipelinesManagementPage from "./pages/pipeline/PipelinesManagementPage";
 import IncidentDetail from "./pages/pipeline/IncidentDetail";
 import AlertList from "./pages/pipeline/AlertList";
 import SoilSalinity from "./pages/SoilSalinity";
 import ZoneDetail from "./pages/soil/ZoneDetail";
-import AnomalyAnalysis from "./pages/AnomalyAnalysis";
+import IncidentAnalysis from "./pages/IncidentAnalysis";
 import WaterQuality from "./pages/WaterQuality";
 import DemandForecasting from "./pages/DemandForecasting";
 import HistoryLog from "./pages/HistoryLog";
@@ -64,13 +64,13 @@ const App = () => (
             
             {/* Protected routes with MainLayout */}
             <Route element={<ProtectedRoute />}>
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/home" element={<Home />} />
               <Route path="/pipeline" element={<PipelinesManagementPage />} />
               <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
               <Route path="/pipeline/alerts" element={<AlertList />} />
               <Route path="/soil-salinity" element={<SoilSalinity />} />
               <Route path="/soil-salinity/zone/:zoneId" element={<ZoneDetail />} />
-              <Route path="/anomaly-analysis" element={<AnomalyAnalysis />} />
+              <Route path="/incident-analytics" element={<IncidentAnalysis />} />
               <Route path="/water-quality" element={<WaterQuality />} />
               <Route path="/demand-forecasting" element={<DemandForecasting />} />
               <Route path="/history" element={<HistoryLog />} />
@@ -78,6 +78,8 @@ const App = () => (
             </Route>
             
             {/* Redirect from old paths to new ones */}
+            <Route path="/dashboard" element={<Navigate to="/home" replace />} />
+            <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
             <Route path="/pipeline/incidents/:incidentId" element={<Navigate to="/pipeline/incident/:incidentId" replace />} />
             
             {/* 404 - Keep this last */}

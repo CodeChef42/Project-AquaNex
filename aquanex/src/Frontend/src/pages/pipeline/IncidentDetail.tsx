@@ -23,8 +23,8 @@ const IncidentDetail = () => {
     <div className="p-8 space-y-6">
       <Breadcrumbs 
         items={[
-          { label: "Dashboard", path: "/" },
-          { label: "Pipeline Monitoring", path: "/pipeline" },
+          { label: "Home", path: "/home" },
+          { label: "Pipeline Management", path: "/pipeline" },
           { label: `Incident ${incidentId}` }
         ]} 
       />

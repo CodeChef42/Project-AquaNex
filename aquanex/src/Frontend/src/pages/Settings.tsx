@@ -12,7 +12,7 @@ const Settings = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Settings" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Settings" }]} />
 
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Settings</h1>

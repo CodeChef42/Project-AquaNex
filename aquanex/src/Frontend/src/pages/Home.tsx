@@ -20,7 +20,7 @@ const recentIssues = [
   { id: 1, title: "Pipeline Leak Detected in Zone A", timestamp: "2 hours ago", severity: "High", link: "/pipeline/incident/1" },
   { id: 2, title: "Water Quality Alert - pH Levels", timestamp: "4 hours ago", severity: "Medium", link: "/water-quality" },
   { id: 3, title: "Soil Salinity Exceeded Threshold", timestamp: "6 hours ago", severity: "Low", link: "/soil-salinity" },
-  { id: 4, title: "Anomaly in Demand Forecasting", timestamp: "8 hours ago", severity: "Medium", link: "/anomaly-analysis" },
+  { id: 4, title: "Incident in Demand Forecasting", timestamp: "8 hours ago", severity: "Medium", link: "/incident-analytics" },
   { id: 5, title: "Maintenance Required on Pipe ID-123", timestamp: "12 hours ago", severity: "Low", link: "/pipeline" },
 ];
 
@@ -55,7 +55,7 @@ const Dashboard = () => {
             <div className="text-3xl font-bold text-destructive">14</div>
             <p className="text-xs text-muted-foreground mt-1">Critical/High priority alerts</p>
             <Button variant="link" className="px-0 mt-2 text-destructive hover:text-destructive/80">
-              View Pipeline Monitoring →
+              View Pipeline Management →
             </Button>
           </CardContent>
         </Card>
@@ -83,7 +83,7 @@ const Dashboard = () => {
             <div className="text-3xl font-bold text-primary">AED 2.4M</div>
             <p className="text-xs text-success mt-1">↓ 8% from last quarter</p>
             <Button variant="link" className="px-0 mt-2 text-primary hover:text-primary/80">
-              View Anomaly Analysis →
+              View Incident Analytics →
             </Button>
           </CardContent>
         </Card>

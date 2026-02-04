@@ -47,7 +47,7 @@ const PipelinesManagementPage = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Pipelines Management" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
 
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Pipelines Management</h1>

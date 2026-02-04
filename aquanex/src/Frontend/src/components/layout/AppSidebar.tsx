@@ -22,12 +22,12 @@ import {
 } from "@/components/ui/sidebar";
 
 const items = [
-  { title: "Home", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Pipelines Management", url: "/pipeline", icon: Pipeline },
+  { title: "Home", url: "/home", icon: LayoutDashboard },
+  { title: "Pipeline Management", url: "/pipeline", icon: Pipeline },
   { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet },
   { title: "Water Quality", url: "/water-quality", icon: TestTube },
   { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart },
-  { title: "Incidents Analytics", url: "/anomaly-analysis", icon: TrendingUp },
+  { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp },
   { title: "History Log", url: "/history", icon: History },
 ];
 

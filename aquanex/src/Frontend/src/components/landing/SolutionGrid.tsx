@@ -8,8 +8,8 @@ import arrowRightIcon from "../../assets/icons/icons8-right-arrow-32.png";
 const SolutionGrid = () => {
   const features = [
     {
-      icon: <img src={wrenchIcon} alt="Pipeline Monitoring Icon" width={40} height={40} className="icon-hover" />,
-      title: "Pipeline Monitoring",
+      icon: <img src={wrenchIcon} alt="Pipeline Management Icon" width={40} height={40} className="icon-hover" />,
+      title: "Pipeline Management",
       description: "Detect breaks, geolocate, allocate crews",
       color: "text-primary",
       bgColor: "bg-primary/10",
@@ -40,8 +40,8 @@ const SolutionGrid = () => {
       borderColor: "border-secondary/20"
     },
     {
-      icon: <img src={barChartIcon} alt="Anomaly Analytics Icon" width={40} height={40} className="icon-hover" />,
-      title: "Anomaly Analytics",
+      icon: <img src={barChartIcon} alt="Incident Analysis Icon" width={40} height={40} className="icon-hover" />,
+      title: "Incident Analysis",
       description: "Correlate incidents with costs for ROI insights",
       color: "text-warning",
       bgColor: "bg-warning/10",

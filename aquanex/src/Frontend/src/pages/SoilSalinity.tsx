@@ -32,7 +32,7 @@ const SoilSalinity = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Soil Salinity" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Soil Salinity" }]} />
 
       <div className="flex items-center justify-between">
         <div>

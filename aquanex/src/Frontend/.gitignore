@@ -22,3 +22,25 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python Bytecode (Safe to ignore)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Database (Do not track production data)
+db.sqlite3
+db.sqlite3-journal
+
+# Environment Variables (Security risk if tracked)
+.env
+.venv
+env/
+venv/
+
+# IDE Settings
+.vscode/
+.idea/
+
+# macOS
+._*

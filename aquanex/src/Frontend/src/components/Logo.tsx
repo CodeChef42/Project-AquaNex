@@ -26,11 +26,6 @@ const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
         alt="AquaNex Logo"
         className={sizeClasses[size]}
       />
-      {withText && (
-        <span className={`font-bold ${textSizes[size]} bg-gradient-to-r from-blue-600 to-teal-500 bg-clip-text text-transparent`}>
-          AquaNex
-        </span>
-      )}
     </div>
   );
 };

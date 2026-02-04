@@ -49,7 +49,7 @@ const incidents = [
   { timestamp: "2024-11-13 16:19", type: "Flow Interruption", zone: "Zone 5", severity: "critical", cost: "AED 198k", status: "Resolved" },
 ];
 
-const AnomalyAnalysis = () => {
+const IncidentAnalysis = () => {
   const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
 
   const toggleCard = (index: number) => {
@@ -64,7 +64,7 @@ const AnomalyAnalysis = () => {
 
   const kpiCards = [
     { 
-      title: "Total Anomalies This Quarter", 
+      title: "Total Incidents This Quarter", 
       value: "342", 
       change: "+12%",
       trend: "up",
@@ -111,10 +111,10 @@ const AnomalyAnalysis = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Anomaly Analysis" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Incident Analytics" }]} />
 
       <div>
-        <h1 className="text-3xl font-bold text-foreground mb-1">ANOMALY ANALYSIS ENGINE</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-1">INCIDENT ANALYTICS ENGINE</h1>
         <p className="text-muted-foreground">Cross-module operational and financial intelligence</p>
       </div>
 
@@ -410,5 +410,4 @@ const AnomalyAnalysis = () => {
     </div>
   );
 };
-
-export default AnomalyAnalysis;
+export default IncidentAnalysis;

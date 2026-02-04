@@ -4,7 +4,7 @@ import Breadcrumbs from "@/components/Breadcrumbs";
 const DemandForecasting = () => {
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Demand Forecasting" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Demand Forecasting" }]} />
 
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Predictive Water Demand Forecasting</h1>

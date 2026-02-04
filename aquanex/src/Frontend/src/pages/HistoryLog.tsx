@@ -48,7 +48,7 @@ const HistoryLog = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "History Log" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "History Log" }]} />
 
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">History Log</h1>

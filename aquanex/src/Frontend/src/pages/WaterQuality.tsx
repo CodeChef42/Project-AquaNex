@@ -4,7 +4,7 @@ import Breadcrumbs from "@/components/Breadcrumbs";
 const WaterQuality = () => {
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Dashboard", path: "/" }, { label: "Water Quality" }]} />
+      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Water Quality" }]} />
 
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Water Quality Monitoring</h1>
