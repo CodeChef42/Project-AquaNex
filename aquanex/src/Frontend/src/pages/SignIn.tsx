@@ -56,8 +56,8 @@ const SignIn = () => {
       <main className="flex-1 flex items-center justify-center py-12">
         <div className="w-full max-w-lg">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-foreground mb-2">Welcome Back</h1>
-            <p className="text-muted-foreground">Sign in to access your irrigation dashboard</p>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Welcome</h1>
+            <p className="text-muted-foreground">Sign in to access your irrigation platform</p>
           </div>
           
           <div className="bg-card border border-border rounded-xl shadow-sm p-8">
@@ -116,7 +116,7 @@ const SignIn = () => {
       <footer className="border-t border-border py-6">
         <div className="container mx-auto px-4 max-w-7xl">
           <p className="text-center text-muted-foreground text-sm">
-            © 2024 AquaNex. Intelligent Irrigation Systems.
+            © 2026 AquaNex. Intelligent Irrigation Systems.
           </p>
         </div>
       </footer>

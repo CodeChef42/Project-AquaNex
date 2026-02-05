@@ -87,6 +87,11 @@ All colors MUST be HSL.
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
     --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
     --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+
+    /* Page backgrounds */
+    --page-background: 190 100% 98%;
+    --page-gradient-start: 196 100% 98%;
+    --page-gradient-end: 190 100% 96%;
   }
 
   .dark {
@@ -141,6 +146,10 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 0 0% 96%;
     --sidebar-border: 0 0% 20%;
     --sidebar-ring: 190 100% 42%;
+
+    --page-background: 0 0% 10%;
+    --page-gradient-start: 0 0% 12%;
+    --page-gradient-end: 0 0% 10%;
   }
 }
 
@@ -155,5 +164,45 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* Custom page styling */
+@layer utilities {
+  .page-background {
+    background: linear-gradient(135deg, 
+      hsl(var(--page-gradient-start)) 0%, 
+      hsl(var(--page-background)) 50%, 
+      hsl(var(--page-gradient-end)) 100%);
+    min-height: 100vh;
+    position: relative;
+  }
+
+  .page-background::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+      radial-gradient(circle at 20% 50%, hsla(196, 100%, 36%, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, hsla(190, 100%, 42%, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 40% 20%, hsla(172, 55%, 39%, 0.03) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  .header-glass {
+    @apply bg-white/90 backdrop-blur-md border-b border-border/50 shadow-sm;
+  }
+
+  .card-elevated {
+    @apply bg-card shadow-md hover:shadow-lg transition-shadow duration-200;
   }
 }

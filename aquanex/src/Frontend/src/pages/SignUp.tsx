@@ -207,7 +207,7 @@ const SignUp = () => {
       <footer className="border-t border-border py-6">
         <div className="container mx-auto px-4 max-w-7xl">
           <p className="text-center text-muted-foreground text-sm">
-            © 2024 AquaNex. Intelligent Irrigation Systems.
+            © 2026 AquaNex. Intelligent Irrigation Systems.
           </p>
         </div>
       </footer>

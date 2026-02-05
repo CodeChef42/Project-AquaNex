@@ -66,7 +66,7 @@ const LandingPage = () => {
             Conserve Water, <span className="bg-gradient-to-r from-teal-600 to-blue-600 bg-clip-text text-transparent">Maximize Yield</span>
           </h1>
           <p className="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
-            AI-Powered Smart Irrigation for UAE Farms
+            AI-Powered Smart Irrigation for urban and agricultural spaces
           </p>
           <button 
             onClick={handleGetStarted}
