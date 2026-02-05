@@ -1,4 +1,4 @@
-import { Search, User, Settings, LogOut, LayoutDashboard, GitBranch, Droplet, TrendingUp, TestTube, LineChart, History } from "lucide-react";
+import { Search, User, Settings, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -15,13 +15,7 @@ const GlobalHeader = () => {
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    // Clear any user session data here if needed
-    // For example: localStorage.removeItem('authToken');
-    
-    // Show logout success message
     toast.success("Successfully logged out");
-    
-    // Redirect to landing page
     navigate("/");
   };
 
@@ -33,7 +27,7 @@ const GlobalHeader = () => {
         className="flex items-center gap-3 cursor-pointer"
         onClick={() => navigate("/home")}
       >
-        <Logo withText size="md" />
+        <Logo withText={false} size="lg" />
       </div>
 
       {/* Global Search */}

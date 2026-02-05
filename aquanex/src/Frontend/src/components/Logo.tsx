@@ -3,29 +3,36 @@ import React from 'react';
 interface LogoProps {
   className?: string;
   withText?: boolean;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
 }
 
 const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
   const sizeClasses = {
-    sm: 'h-6 w-6',
-    md: 'h-8 w-8',
-    lg: 'h-12 w-12'
+    sm: 'h-8',
+    md: 'h-10',
+    lg: 'h-14',
+    xl: 'h-16'
   };
 
   const textSizes = {
     sm: 'text-lg',
     md: 'text-xl',
-    lg: 'text-2xl'
+    lg: 'text-2xl',
+    xl: 'text-3xl'
   };
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex items-center gap-3 ${className}`}>
       <img
         src="/aquanex-logo.png"
         alt="AquaNex Logo"
-        className={sizeClasses[size]}
+        className={`${sizeClasses[size]} w-auto object-contain`}
       />
+      {withText && (
+        <span className={`font-semibold ${textSizes[size]} text-foreground`}>
+          AquaNex
+        </span>
+      )}
     </div>
   );
 };

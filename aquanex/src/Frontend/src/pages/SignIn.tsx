@@ -7,7 +7,6 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from "../assets/Picture1.png";
 
-
 const SignIn = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -15,7 +14,6 @@ const SignIn = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
-
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,7 +37,6 @@ const SignIn = () => {
     }
   };
 
-
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -49,7 +46,7 @@ const SignIn = () => {
             <img 
               src={aquanexLogo} 
               alt="AquaNex Intelligent Irrigation Systems" 
-              className="h-10 w-auto object-contain"
+              className="h-16 w-auto object-contain"
             />
           </div>
         </div>
@@ -99,13 +96,6 @@ const SignIn = () => {
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
             </form>
-
-            {/* Demo credentials hint */}
-            <div className="mt-4 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
-              <p className="font-medium mb-1">Demo Credentials:</p>
-              <p>Username: johndoe</p>
-              <p>Password: mypass123</p>
-            </div>
           </div>
 
           <div className="text-center mt-6">

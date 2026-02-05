@@ -36,7 +36,7 @@ const ResourceAllocationModal = ({ open, onOpenChange, alertId }: ResourceAlloca
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Allocate Resources - Alert #{alertId}</DialogTitle>
+          <DialogTitle>Allocated Resources - Alert #{alertId}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div>

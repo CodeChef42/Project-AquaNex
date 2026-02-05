@@ -9,3 +9,9 @@ Thumbs.db
 
 # Environment
 .env
+
+echo "venv/" >> .gitignore
+echo "node_modules/" >> .gitignore
+echo "*.pkl" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore

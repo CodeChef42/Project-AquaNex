@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useAuth } from "../contexts/AuthContext";
 
 const alertData = [
   { day: "Mon", count: 12 },
@@ -26,8 +27,9 @@ const recentIssues = [
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   
-  const userName = "Demo User";
+  const userName = user?.full_name || user?.username || "User";
   console.log("Dashboard component rendering");
 
   return (

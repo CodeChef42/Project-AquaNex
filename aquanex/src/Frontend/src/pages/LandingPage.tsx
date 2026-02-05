@@ -48,12 +48,14 @@ const LandingPage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-blue-50">
       {/* Navigation */}
-      <nav className="container mx-auto px-6 py-4 flex justify-between items-center">
-        <Logo size="lg" withText />
-        <div className="hidden md:flex space-x-8">
-          <a href="#about" className="text-gray-600 hover:text-teal-600 transition-colors">About</a>
-          <a href="#contact" className="text-gray-600 hover:text-teal-600 transition-colors">Contact</a>
-          <a href="#products" className="text-gray-600 hover:text-teal-600 transition-colors">Products & Services</a>
+      <nav className="sticky top-0 z-50 bg-gradient-to-r from-cyan-700 to-blue-700 border-b border-cyan-600 shadow-lg">
+        <div className="container mx-auto px-6 py-4 flex justify-between items-center">
+          <Logo size="xl" withText={false} />
+          <div className="hidden md:flex space-x-8">
+            <a href="#about" className="text-white hover:text-cyan-200 transition-colors font-medium">About</a>
+            <a href="#contact" className="text-white hover:text-cyan-200 transition-colors font-medium">Contact</a>
+            <a href="#products" className="text-white hover:text-cyan-200 transition-colors font-medium">Products & Services</a>
+          </div>
         </div>
       </nav>
 
