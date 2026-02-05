@@ -33,7 +33,7 @@ latest_prediction = None
 last_prediction_time = 0
 
 # MQTT Configuration
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "broker.emqx.io"
 MQTT_PORT = 1883
 MQTT_TOPICS = [
     "aquanex/flowmeter/1",
@@ -170,7 +170,7 @@ def on_message(client, userdata, msg):
 
 def start_mqtt():
     global mqtt_client
-    mqtt_client = mqtt.Client()
+    mqtt_client = mqtt.Client(client_id="aquanex_ml_service")
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
     
@@ -201,8 +201,8 @@ async def startup_event():
         print(f"Failed to load model: {e}")
     
     # Start MQTT in a separate thread
-    mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
-    mqtt_thread.start()
+    #mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
+    #mqtt_thread.start()
     print("AquaNex ML Service with Delta-based Anomaly Detection started")
 
 

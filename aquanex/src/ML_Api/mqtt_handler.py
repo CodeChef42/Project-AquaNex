@@ -1,4 +1,4 @@
-import json
+'''import json
 import asyncio
 from datetime import datetime
 import paho.mqtt.client as mqtt
@@ -6,7 +6,7 @@ from database import SessionLocal
 from ml_service import predict_breakage
 
 # MQTT Configuration
-MQTT_BROKER = "broker.hivemq.com"  # or your broker
+MQTT_BROKER = "test.mosquitto.org"  # Alternative broker
 MQTT_PORT = 1883
 MQTT_TOPIC = "aquanex/sensors/#"
 
@@ -53,4 +53,4 @@ class MQTTHandler:
         
     def stop(self):
         self.client.loop_stop()
-        self.client.disconnect()
+        self.client.disconnect()'''
