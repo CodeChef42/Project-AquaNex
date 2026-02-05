@@ -10,7 +10,11 @@ import paho.mqtt.client as mqtt
 import threading
 import time
 
+
+
 app = FastAPI(title="AquaNex ML Service", version="1.0.0")
+
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,9 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
 # Global variables
 model = None
 mqtt_client = None
+sensor_buffer = []  # Buffer to collect 4 readings
 latest_sensor_data = {
     'flow_1': None,
     'pressure_1': None,
@@ -32,8 +39,10 @@ latest_sensor_data = {
 latest_prediction = None
 last_prediction_time = 0
 
+
+
 # MQTT Configuration
-MQTT_BROKER = "broker.emqx.io"
+MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPICS = [
     "aquanex/flowmeter/1",
@@ -43,11 +52,15 @@ MQTT_TOPICS = [
 ]
 
 
+
+
 class SensorData(BaseModel):
     flow_1: float
     pressure_1: float
     flow_2: float
     pressure_2: float
+
+
 
 
 class PredictionResponse(BaseModel):
@@ -58,9 +71,13 @@ class PredictionResponse(BaseModel):
     timestamp: str
 
 
+
+
 class LiveDataResponse(BaseModel):
     sensor_data: dict
     latest_prediction: dict = None
+
+
 
 
 def calculate_deltas(flow_1, pressure_1, flow_2, pressure_2):
@@ -76,6 +93,8 @@ def calculate_deltas(flow_1, pressure_1, flow_2, pressure_2):
         'flow_ratio': flow_ratio,
         'pressure_ratio': pressure_ratio
     }
+
+
 
 
 def run_prediction():
@@ -130,8 +149,16 @@ def run_prediction():
             print(f"   Delta      - Flow: {deltas['flow_delta']:.2f}, Pressure: {deltas['pressure_delta']:.2f}")
             print(f"   Ratio      - Flow: {deltas['flow_ratio']:.2f}, Pressure: {deltas['pressure_ratio']:.2f}")
             
+            # Reset buffer after prediction
+            latest_sensor_data['flow_1'] = None
+            latest_sensor_data['pressure_1'] = None
+            latest_sensor_data['flow_2'] = None
+            latest_sensor_data['pressure_2'] = None
+            
         except Exception as e:
             print(f"Prediction error: {e}")
+
+
 
 
 def on_connect(client, userdata, flags, rc):
@@ -144,6 +171,8 @@ def on_connect(client, userdata, flags, rc):
         print(f"Failed to connect to MQTT broker, return code {rc}")
 
 
+
+
 def on_message(client, userdata, msg):
     global latest_sensor_data
     
@@ -154,18 +183,30 @@ def on_message(client, userdata, msg):
         # Update sensor data based on topic
         if topic == "aquanex/flowmeter/1":
             latest_sensor_data['flow_1'] = payload.get('flow_rate')
+            print(f"Received Flow1: {latest_sensor_data['flow_1']:.2f}")
         elif topic == "aquanex/pressure/1":
             latest_sensor_data['pressure_1'] = payload.get('pressure')
+            print(f"Received Pressure1: {latest_sensor_data['pressure_1']:.2f}")
         elif topic == "aquanex/flowmeter/2":
             latest_sensor_data['flow_2'] = payload.get('flow_rate')
+            print(f"Received Flow2: {latest_sensor_data['flow_2']:.2f}")
         elif topic == "aquanex/pressure/2":
             latest_sensor_data['pressure_2'] = payload.get('pressure')
+            print(f"Received Pressure2: {latest_sensor_data['pressure_2']:.2f}")
         
-        # Run prediction after receiving any sensor update
-        run_prediction()
+        # Count how many values we have
+        filled = sum(1 for v in latest_sensor_data.values() if v is not None)
+        print(f"Buffer: {filled}/4")
+        
+        # Run prediction only when we have all 4 values
+        if filled == 4:
+            print("Running prediction...")
+            run_prediction()
             
     except Exception as e:
         print(f"Error processing MQTT message: {e}")
+
+
 
 
 def start_mqtt():
@@ -176,10 +217,11 @@ def start_mqtt():
     
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        mqtt_client.loop_start()
-        print("MQTT client started")
+        mqtt_client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT client: {e}")
+
+
 
 
 def stop_mqtt():
@@ -188,6 +230,8 @@ def stop_mqtt():
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
         print("MQTT client stopped")
+
+
 
 
 @app.on_event("startup")
@@ -201,14 +245,18 @@ async def startup_event():
         print(f"Failed to load model: {e}")
     
     # Start MQTT in a separate thread
-    #mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
-    #mqtt_thread.start()
+    mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
+    mqtt_thread.start()
     print("AquaNex ML Service with Delta-based Anomaly Detection started")
+
+
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     stop_mqtt()
+
+
 
 
 @app.get("/")
@@ -222,6 +270,8 @@ async def root():
     }
 
 
+
+
 @app.get("/health")
 async def health_check():
     return {
@@ -232,6 +282,8 @@ async def health_check():
     }
 
 
+
+
 @app.get("/live-data", response_model=LiveDataResponse)
 async def get_live_data():
     """Get the latest sensor data and prediction from MQTT stream"""
@@ -239,6 +291,8 @@ async def get_live_data():
         sensor_data=latest_sensor_data,
         latest_prediction=latest_prediction
     )
+
+
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -276,6 +330,8 @@ async def predict_breakage(data: SensorData):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
 
 
 if __name__ == "__main__":
