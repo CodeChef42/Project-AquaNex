@@ -9,12 +9,10 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "node server.js",
-    "heroku-postbuild": "npm run build"
+    "start": "node server.js"
   },
   "engines": {
-    "node": "18.x",
-    "npm": "8.x"
+    "node": "24.x"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

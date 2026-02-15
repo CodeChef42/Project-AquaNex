@@ -7,6 +7,8 @@ interface LogoProps {
 }
 
 const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
+  const logoSrc = `${import.meta.env.BASE_URL}aquanex-logo.png`;
+
   const sizeClasses = {
     sm: 'h-8',
     md: 'h-10',
@@ -24,7 +26,7 @@ const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <img
-        src="/aquanex-logo.png"
+        src={logoSrc}
         alt="AquaNex Logo"
         className={`${sizeClasses[size]} w-auto object-contain`}
       />

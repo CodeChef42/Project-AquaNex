@@ -9,6 +9,7 @@ Thumbs.db
 
 # Environment
 .env
+DEPLOYMENT_VERCEL.md
 
 echo "venv/" >> .gitignore
 echo "node_modules/" >> .gitignore

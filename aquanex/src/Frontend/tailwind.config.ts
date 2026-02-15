@@ -78,6 +78,10 @@ export default {
           ring: "hsl(var(--sidebar-ring))",
         },
       },
+      height: {
+        "map-lg": "500px",
+        "map-md": "400px",
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
