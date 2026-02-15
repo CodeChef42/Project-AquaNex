@@ -74,8 +74,8 @@ const SoilSalinity = () => {
             <CardHeader>
               <CardTitle>Zone Map</CardTitle>
             </CardHeader>
-            <CardContent className="h-full">
-              <div className="relative w-full h-[400px] bg-muted rounded-lg overflow-hidden">
+            <CardContent className="h-full pb-12">
+              <div className="relative w-full h-full bg-muted rounded-lg overflow-hidden">
                 {/* Simplified map grid */}
                 <div className="absolute inset-4 grid grid-cols-3 gap-4">
                   {zones.map((zone) => (

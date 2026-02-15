@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, TrendingUp, MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import {
   Table,
@@ -111,12 +111,11 @@ const IncidentAnalysis = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Incident Analytics" }]} />
-
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-1">INCIDENT ANALYTICS ENGINE</h1>
-        <p className="text-muted-foreground">Cross-module operational and financial intelligence</p>
-      </div>
+      <PageHeader 
+        title="INCIDENT ANALYTICS ENGINE"
+        subtitle="Cross-module operational and financial intelligence"
+        breadcrumbs={[{ label: "Home", path: "/home" }, { label: "Incident Analytics" }]}
+      />
 
       {/* Expandable KPI Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

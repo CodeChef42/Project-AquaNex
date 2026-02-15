@@ -4,7 +4,7 @@ import { MapPin, Package, Users, Activity, ChevronDown, ChevronUp } from "lucide
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Collapsible,
   CollapsibleContent,
@@ -21,26 +21,25 @@ const IncidentDetail = () => {
 
   return (
     <div className="p-8 space-y-6">
-      <Breadcrumbs 
-        items={[
+      <PageHeader 
+        title={
+          <div className="flex items-center gap-3">
+            <span>Incident #{incidentId}</span>
+            <Badge variant="destructive">CRITICAL</Badge>
+          </div>
+        }
+        subtitle="In Progress - Blocked"
+        breadcrumbs={[
           { label: "Home", path: "/home" },
           { label: "Pipeline Management", path: "/pipeline" },
           { label: `Incident ${incidentId}` }
-        ]} 
+        ]}
+        action={
+          <Button onClick={() => navigate("/pipeline")}>
+            Back to Dashboard
+          </Button>
+        }
       />
-
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-3xl font-bold text-foreground">Incident #{incidentId}</h1>
-            <Badge variant="destructive">CRITICAL</Badge>
-          </div>
-          <p className="text-muted-foreground">In Progress - Blocked</p>
-        </div>
-        <Button onClick={() => navigate("/pipeline")}>
-          Back to Dashboard
-        </Button>
-      </div>
 
       {/* Incident Summary */}
       <Card>
@@ -48,7 +47,7 @@ const IncidentDetail = () => {
           <CardTitle>Incident Summary</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Severity</p>
               <p className="font-semibold text-destructive">Critical</p>
