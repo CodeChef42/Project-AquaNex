@@ -1,27 +1,10 @@
-import { useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import Header from "@/components/landing/Header";
+import HeroSection from "@/components/landing/HeroSection";
+import FeaturesSection from "@/components/landing/FeaturesSection";
+import StatsSection from "@/components/landing/StatsSection";
+import SolutionsSection from "@/components/landing/SolutionsSection";
+import CTASection from "@/components/landing/CTASection";
 import Logo from "@/components/Logo";
-
-const stats = [
-  { 
-    icon: "/icons8-water-48.png", 
-    alt: "Water Drop",
-    value: "25% Water Savings", 
-    description: "Average reduction in water usage" 
-  },
-  { 
-    icon: "/icons8-leaf-32.png",
-    alt: "Leaf",
-    value: "Real-Time Monitoring", 
-    description: "Soil and weather tracking" 
-  },
-  { 
-    icon: "/icons8-clock-32.png",
-    alt: "24/7 Clock",
-    value: "Response", 
-    description: "Rapid incident management" 
-  },
-];
 
 const articles = [
   {
@@ -39,67 +22,18 @@ const articles = [
 ];
 
 const LandingPage = () => {
-  const navigate = useNavigate();
-
-  const handleGetStarted = () => {
-    navigate("/signin");
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-blue-50">
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-gradient-to-r from-cyan-700 to-blue-700 border-b border-cyan-600 shadow-lg">
-        <div className="container mx-auto px-6 py-4 flex justify-between items-center">
-          <Logo size="xl" withText={false} />
-          <div className="hidden md:flex space-x-8">
-            <a href="#about" className="text-white hover:text-cyan-200 transition-colors font-medium">About</a>
-            <a href="#contact" className="text-white hover:text-cyan-200 transition-colors font-medium">Contact</a>
-            <a href="#products" className="text-white hover:text-cyan-200 transition-colors font-medium">Products & Services</a>
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen bg-gradient-to-b from-sky-100/60 via-white to-sky-50">
+      <Header />
 
-      {/* Hero Section */}
-      <section className="container mx-auto px-6 py-20 md:py-32 text-center">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl md:text-6xl font-bold text-gray-900 mb-6">
-            Conserve Water, <span className="bg-gradient-to-r from-teal-600 to-blue-600 bg-clip-text text-transparent">Maximize Yield</span>
-          </h1>
-          <p className="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
-            AI-Powered Smart Irrigation for urban and agricultural spaces
-          </p>
-          <button 
-            onClick={handleGetStarted}
-            className="bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white px-8 py-6 text-lg rounded-lg inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 h-11"
-          >
-            Get Started <span className="ml-2">→</span>
-          </button>
-        </div>
-      </section>
-
-      {/* Stats Section */}
-      <section className="py-16 bg-white">
-        <div className="container mx-auto px-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {stats.map((stat, index) => (
-              <div key={index} className="bg-white p-6 rounded-xl shadow-md text-center">
-                <div className="mx-auto mb-4 w-16 h-16 flex items-center justify-center">
-                  <img 
-                    src={stat.icon} 
-                    alt={stat.alt} 
-                    className="w-12 h-12 object-contain"
-                  />
-                </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">{stat.value}</h3>
-                <p className="text-gray-600">{stat.description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <HeroSection />
+      <FeaturesSection />
+      <StatsSection />
+      <SolutionsSection />
+      <CTASection />
 
       {/* Articles Section */}
-      <section className="py-16 bg-gray-50">
+      <section id="resources" className="py-16 bg-sky-50/30">
         <div className="container mx-auto px-6">
           <h2 className="text-3xl font-bold text-center mb-12">Sustainability Resources</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -136,24 +70,13 @@ const LandingPage = () => {
               <h4 className="text-lg font-semibold mb-4">Product</h4>
               <ul className="space-y-2">
                 <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Features</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Pricing</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Case Studies</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="text-lg font-semibold mb-4">Company</h4>
-              <ul className="space-y-2">
-                <li><a href="#about" className="text-gray-400 hover:text-white transition-colors">About Us</a></li>
-                <li><a href="#contact" className="text-gray-400 hover:text-white transition-colors">Contact</a></li>
-                <li><a href="#careers" className="text-gray-400 hover:text-white transition-colors">Careers</a></li>
               </ul>
             </div>
             <div>
               <h4 className="text-lg font-semibold mb-4">Contact Us</h4>
               <address className="not-italic text-gray-400">
                 <p>Dubai, UAE</p>
-                <p>Email: info@aquanex.ae</p>
-                <p>Phone: +971 4 xxx xxxx</p>
+                <p>Email: info@aquanex.app</p>
               </address>
             </div>
           </div>
