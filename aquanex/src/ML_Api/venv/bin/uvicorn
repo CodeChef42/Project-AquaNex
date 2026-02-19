@@ -1,6 +1,0 @@
-#!/Volumes/PortableSSD/Project-AquaNex/aquanex/src/ML_Api/venv/bin/python3.12
-import sys
-from uvicorn.main import main
-if __name__ == '__main__':
-    sys.argv[0] = sys.argv[0].removesuffix('.exe')
-    sys.exit(main())
