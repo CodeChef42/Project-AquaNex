@@ -43,6 +43,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://www.aquanex.com",
     "https://aquanex.com",
+    "https://aquanex-deployment-2-mbilal-1120s-projects.vercel.app/",
     "https://project-aquanex.onrender.com",
 ]
 
@@ -52,8 +53,6 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-
-CORS_ALLOW_ALL_ORIGINS = True
 
 # Application definition
 INSTALLED_APPS = [
