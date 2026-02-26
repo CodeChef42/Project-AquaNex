@@ -191,7 +191,7 @@ const SignUp = () => {
                 type="submit" 
                 className="w-full bg-primary text-primary-foreground px-6 py-3 rounded-xl hover:bg-primary/90 transition-all duration-200 font-medium shadow-md"
                 disabled={true}
-              > /* Temporarily disabled registration until backend is ready */
+              >
                 {loading ? 'Creating account...' : 'Create Account'}
               </Button>
             </form>
