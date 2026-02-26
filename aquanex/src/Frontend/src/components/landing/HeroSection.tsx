@@ -1,4 +1,5 @@
-import { ArrowRight, Play } from "lucide-react";
+import playIcon from "@/assets/icons/icons8-play-32.png";
+import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 
 const HeroSection = () => {
   return (
@@ -27,14 +28,14 @@ const HeroSection = () => {
           </p>
 
           <div className="flex items-center gap-3">
-            <a href="#" className="btn-ghost">
-              <Play size={14} className="text-foreground" />
+            <a href="#" className="btn-ghost bg-accent text-accent-foreground">
+              <img src={playIcon} alt="Play demo" className="h-5 w-5" />
               View Demo
             </a>
-            <a href="#" className="btn-primary">
+            <a href="#" className="btn-primary bg-accent text-accent-foreground hover:bg-accent">
               Get Started
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-foreground/20">
-                <ArrowRight size={14} className="text-primary-foreground" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-foreground/20">
+                <img src={rightArrowIcon} alt="Get started" className="h-5 w-5" />
               </div>
             </a>
           </div>

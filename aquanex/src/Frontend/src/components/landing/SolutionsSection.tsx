@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ArrowRight } from "lucide-react";
+import chevronDownIcon from "@/assets/icons/icons8-chevron-down-26.png";
 
 const solutions = [
   {
@@ -47,9 +47,10 @@ const SolutionsSection = () => {
                   {solution.title}
                 </span>
                 <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-accent-foreground/30 transition-transform duration-300 group-hover:bg-accent-foreground/10">
-                  <ChevronDown
-                    size={18}
-                    className={`text-accent-foreground transition-transform duration-300 ${
+                  <img
+                    src={chevronDownIcon}
+                    alt="Toggle solution details"
+                    className={`h-5 w-5 transition-transform duration-300 ${
                       openIndex === i ? "rotate-180" : ""
                     }`}
                   />

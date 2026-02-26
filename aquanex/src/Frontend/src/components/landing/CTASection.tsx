@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { ArrowRight, Phone } from "lucide-react";
+import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 
 const CTASection = () => {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -18,7 +18,7 @@ const CTASection = () => {
           <a href="#" className="btn-pill bg-accent text-accent-foreground">
             Get Started
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-foreground/20">
-              <ArrowRight size={14} className="text-accent-foreground" />
+              <img src={rightArrowIcon} alt="Get started" className="h-5 w-5" />
             </div>
           </a>
         </div>

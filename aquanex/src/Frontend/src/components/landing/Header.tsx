@@ -1,14 +1,11 @@
 import { useState } from "react";
-import { Menu, X, ArrowRight } from "lucide-react";
+import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 import { useNavigate } from "react-router-dom";
 import Logo from "@/components/Logo";
 
 const navLinks = [
   { label: "Features", href: "#features" },
-  { label: "Platform", href: "#platform" },
-  { label: "Impact", href: "#impact" },
   { label: "Solutions", href: "#solutions" },
-  { label: "Resources", href: "#resources" },
   { label: "Contact", href: "#contact" },
 ];
 
@@ -53,7 +50,7 @@ const Header = () => {
           </button>
           <button type="button" onClick={handleGetStarted} className="btn-primary text-sm">
             Get Started
-            <ArrowRight size={14} />
+            <img src={rightArrowIcon} alt="Get started" className="h-5 w-5 ml-1" />
           </button>
         </div>
 
@@ -62,7 +59,7 @@ const Header = () => {
           className="text-foreground md:hidden"
           onClick={() => setMobileOpen(!mobileOpen)}
         >
-          {mobileOpen ? <X size={24} /> : <Menu size={24} />}
+          <span className="text-2xl">{mobileOpen ? "✕" : "☰"}</span>
         </button>
       </div>
 
@@ -88,7 +85,7 @@ const Header = () => {
             </button>
             <button type="button" onClick={handleGetStarted} className="btn-primary text-sm">
               Get Started
-              <ArrowRight size={14} />
+              <img src={rightArrowIcon} alt="Get started" className="h-5 w-5 ml-1" />
             </button>
           </div>
         </div>

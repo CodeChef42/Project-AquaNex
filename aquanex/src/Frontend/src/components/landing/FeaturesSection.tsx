@@ -1,37 +1,42 @@
 import { useRef } from "react";
-import { Droplets, FlaskConical, BarChart3, Waves, BrainCircuit, ArrowRight } from "lucide-react";
+import wavesIcon from "@/assets/icons/icons8-waves-32.png";
+import testTubeIcon from "@/assets/icons/icons8-test-tube-32.png";
+import barChartIcon from "@/assets/icons/icons8-bar-chart-48.png";
+import wetIcon from "@/assets/icons/icons8-wet-32.png";
+import brainIcon from "@/assets/icons/icons8-brain-32.png";
+import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 
 const agents = [
   {
-    icon: Waves,
+    icon: wavesIcon,
     title: "Pipeline Agent",
     description:
       "Real-time leak detection and flow monitoring across your entire pipeline network. Prevent water loss before it happens.",
     color: "primary",
   },
   {
-    icon: FlaskConical,
+    icon: testTubeIcon,
     title: "Soil Agent",
     description:
       "Continuous salinity and pH monitoring with automated alerts. Keep your soil health optimal for every crop cycle.",
     color: "accent",
   },
   {
-    icon: BarChart3,
+    icon: barChartIcon,
     title: "Demand Agent",
     description:
       "Predictive water demand forecasting using weather, crop type, and historical data. Allocate resources with precision.",
     color: "primary",
   },
   {
-    icon: Droplets,
+    icon: wetIcon,
     title: "Quality Agent",
     description:
       "Monitor water quality metrics including TDS, turbidity, and contaminant levels. Ensure safe irrigation at every outlet.",
     color: "accent",
   },
   {
-    icon: BrainCircuit,
+    icon: brainIcon,
     title: "Analytics Agent",
     description:
       "Unified dashboard with AI-driven insights, anomaly detection, and ROI reporting across all water management operations.",
@@ -64,7 +69,6 @@ const FeaturesSection = () => {
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {agents.map((agent, i) => {
-            const Icon = agent.icon;
             return (
               <div
                 key={agent.title}
@@ -73,16 +77,25 @@ const FeaturesSection = () => {
                 }`}
               >
                 <div
-                  className={`mb-5 flex h-12 w-12 items-center justify-center rounded-xl ${
+                  className={`mb-5 flex h-14 w-14 items-center justify-center rounded-xl ${
                     agent.color === "primary" ? "bg-primary/10" : "bg-accent/10"
                   }`}
                 >
-                  <Icon size={22} className={agent.color === "primary" ? "text-primary" : "text-accent"} />
+                  <img
+                    src={agent.icon}
+                    alt={agent.title}
+                    className="h-9 w-9 object-contain"
+                  />
                 </div>
                 <h3 className="mb-2 text-lg font-semibold text-foreground">{agent.title}</h3>
                 <p className="mb-4 text-sm leading-relaxed text-muted-foreground">{agent.description}</p>
                 <div className="flex items-center gap-1.5 text-sm font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100">
-                  Learn more <ArrowRight size={14} />
+                  Learn more
+                  <img
+                    src={rightArrowIcon}
+                    alt="Learn more"
+                    className="h-4 w-4"
+                  />
                 </div>
               </div>
             );

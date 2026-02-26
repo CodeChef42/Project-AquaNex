@@ -77,12 +77,20 @@ const SignUp = () => {
       {/* Header */}
       <header className="border-b border-border">
         <div className="container mx-auto px-4 max-w-7xl py-6">
-          <div className="flex items-center space-x-3">
-            <img 
-              src={aquanexLogo} 
-              alt="AquaNex Intelligent Irrigation Systems" 
-              className="h-10 w-auto object-contain"
-            />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <img 
+                src={aquanexLogo} 
+                alt="AquaNex Intelligent Irrigation Systems" 
+                className="h-10 w-auto object-contain"
+              />
+            </div>
+            <Link
+              to="/"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Back to landing
+            </Link>
           </div>
         </div>
       </header>

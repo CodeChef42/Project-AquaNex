@@ -15,7 +15,7 @@ All colors should be HSL.
     /* AquaNex Design System - HSL Colors */
     
     /* Base Surfaces */
-    --background: 0 0% 96%;
+    --background: 40 33% 96%;
     --foreground: 0 0% 20%;
 
     --card: 0 0% 100%;
@@ -24,16 +24,16 @@ All colors should be HSL.
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 20%;
 
-    /* Primary - Deep Water Blue */
-    --primary: 196 100% 36%;
+    /* Primary - Teal */
+    --primary: 196 71% 33%;
     --primary-foreground: 0 0% 100%;
 
-    /* Secondary - Aqua Teal */
-    --secondary: 190 100% 42%;
+    /* Secondary - Muted Teal */
+    --secondary: 196 55% 40%;
     --secondary-foreground: 0 0% 100%;
 
-    /* Success/Healthy - Leaf Green */
-    --success: 172 55% 39%;
+    /* Success/Healthy - Soft Green */
+    --success: 150 40% 38%;
     --success-foreground: 0 0% 100%;
 
     /* Earth/Soil - Brown */
@@ -59,9 +59,10 @@ All colors should be HSL.
     /* Neutrals */
     --muted: 0 0% 96%;
     --muted-foreground: 0 0% 45%;
-
-    --accent: 190 100% 42%;
-    --accent-foreground: 0 0% 100%;
+    
+    /* Accent - Deep Green (Solutions & CTAs) */
+    --accent: 160 56% 23%;
+    --accent-foreground: 150 30% 92%;
 
     --border: 0 0% 90%;
     --input: 0 0% 90%;
@@ -80,7 +81,7 @@ All colors should be HSL.
     --sidebar-ring: 196 100% 36%;
 
     /* Custom gradients */
-    --gradient-primary: linear-gradient(135deg, hsl(196 100% 36%), hsl(190 100% 42%));
+    --gradient-primary: linear-gradient(135deg, hsl(196 71% 40%), hsl(196 71% 30%));
     --gradient-card: linear-gradient(180deg, hsl(0 0% 100%), hsl(0 0% 98%));
     
     /* Shadows */
@@ -89,9 +90,9 @@ All colors should be HSL.
     --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
 
     /* Page backgrounds */
-    --page-background: 190 100% 98%;
-    --page-gradient-start: 196 100% 98%;
-    --page-gradient-end: 190 100% 96%;
+    --page-background: 40 33% 96%;
+    --page-gradient-start: 40 33% 98%;
+    --page-gradient-end: 40 33% 94%;
   }
 
   .dark {
@@ -104,13 +105,13 @@ All colors should be HSL.
     --popover: 0 0% 12%;
     --popover-foreground: 0 0% 96%;
 
-    --primary: 196 100% 36%;
+    --primary: 196 71% 33%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 190 100% 42%;
+    --secondary: 196 55% 40%;
     --secondary-foreground: 0 0% 100%;
 
-    --success: 172 55% 39%;
+    --success: 150 40% 38%;
     --success-foreground: 0 0% 100%;
 
     --earth: 25 40% 39%;
@@ -131,12 +132,12 @@ All colors should be HSL.
     --muted: 0 0% 15%;
     --muted-foreground: 0 0% 60%;
 
-    --accent: 190 100% 42%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 160 56% 23%;
+    --accent-foreground: 150 30% 92%;
 
     --border: 0 0% 20%;
     --input: 0 0% 20%;
-    --ring: 190 100% 42%;
+    --ring: 196 71% 33%;
 
     --sidebar-background: 0 0% 12%;
     --sidebar-foreground: 0 0% 96%;
