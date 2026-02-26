@@ -102,32 +102,61 @@ import os
 
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 
+import os
+import django
+from pathlib import Path
+
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
 if DB_PASSWORD:
-    # Production: Supabase PostgreSQL (when DB_PASSWORD env var is set)
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'postgres',
-            'USER': 'postgres.xxiojmtocfiawqzcxffi',
-            'PASSWORD': DB_PASSWORD,
-            'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
-            'PORT': '5432',
-            'OPTIONS': {
-                'sslmode': 'require',
-                'connect_timeout': 10,
-            },
-            'CONN_MAX_AGE': 60,
-            'CONN_HEALTH_CHECKS': True,
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            dbname='postgres',
+            user='postgres.xxiojmtocfiawqzcxffi',
+            password=DB_PASSWORD,
+            host='aws-1-ap-northeast-1.pooler.supabase.com',
+            port='5432',
+            sslmode='require',
+            connect_timeout=5,
+        )
+        conn.close()
+        # Connection succeeded → use Supabase
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': 'postgres',
+                'USER': 'postgres.xxiojmtocfiawqzcxffi',
+                'PASSWORD': DB_PASSWORD,
+                'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
+                'PORT': '5432',
+                'OPTIONS': {
+                    'sslmode': 'require',
+                    'connect_timeout': 5,
+                },
+                'CONN_MAX_AGE': 60,
+                'CONN_HEALTH_CHECKS': True,
+            }
         }
-    }
-else:
-    # Local fallback: SQLite
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+        print("✅ Connected to Supabase PostgreSQL")
+    except Exception as e:
+        # Any failure → fall back to SQLite
+        print(f"⚠️ Supabase connection failed: {e}")
+        print("⚠️ Falling back to SQLite")
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
         }
-    }
+
 
 
 # =============================================================================
