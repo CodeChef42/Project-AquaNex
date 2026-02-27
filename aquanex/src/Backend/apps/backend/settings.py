@@ -41,8 +41,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://localhost:3000",
     "http://localhost:5173",
-    "https://www.aquanex.com",
-    "https://aquanex.com",
+    "https://www.aquanex.app",
+    "https://aquanex.app",
     "https://aquanex-deployment-2-mbilal-1120s-projects.vercel.app",
     "https://project-aquanex.onrender.com",
 ]
