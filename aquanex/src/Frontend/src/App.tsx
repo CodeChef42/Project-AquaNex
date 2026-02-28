@@ -8,6 +8,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { useAuth } from "./contexts/AuthContext";
 import MainLayout from "./components/layout/MainLayout";
 
+
 const LandingPage = lazy(() => import("./pages/LandingPage"));
 const Home = lazy(() => import("./pages/Home"));
 const PipelinesManagementPage = lazy(() => import("./pages/pipeline/PipelinesManagementPage"));
@@ -22,16 +23,18 @@ const HistoryLog = lazy(() => import("./pages/HistoryLog"));
 const Settings = lazy(() => import("./pages/Settings"));
 const SignIn = lazy(() => import("./pages/SignIn"));
 const SignUp = lazy(() => import("./pages/SignUp"));
+const Onboarding = lazy(() => import("./pages/onboarding/Onboarding"));
 const NotFound = lazy(() => import("./pages/NotFound"));
+
 
 const queryClient = new QueryClient();
 
-// Wrapper component for protected routes with MainLayout
+
 const ProtectedRoute = () => {
   const { isAuthenticated, loading } = useAuth();
-  
+
   console.log("ProtectedRoute rendering", { isAuthenticated, loading });
-  
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -39,17 +42,38 @@ const ProtectedRoute = () => {
       </div>
     );
   }
-  
+
   if (!isAuthenticated) {
     return <Navigate to="/signin" replace />;
   }
-  
+
   return (
     <MainLayout>
       <Outlet />
     </MainLayout>
   );
 };
+
+
+// Onboarding has no MainLayout sidebar — just auth check
+const OnboardingRoute = () => {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/signin" replace />;
+  }
+
+  return <Outlet />;
+};
+
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -71,6 +95,11 @@ const App = () => (
               <Route path="/signin" element={<SignIn />} />
               <Route path="/signup" element={<SignUp />} />
 
+              {/* Onboarding — auth protected but no sidebar */}
+              <Route element={<OnboardingRoute />}>
+                <Route path="/onboarding" element={<Onboarding />} />
+              </Route>
+
               {/* Protected routes with MainLayout */}
               <Route element={<ProtectedRoute />}>
                 <Route path="/home" element={<Home />} />
@@ -86,12 +115,12 @@ const App = () => (
                 <Route path="/settings" element={<Settings />} />
               </Route>
 
-              {/* Redirect from old paths to new ones */}
+              {/* Redirects */}
               <Route path="/dashboard" element={<Navigate to="/home" replace />} />
               <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
               <Route path="/pipeline/incidents/:incidentId" element={<Navigate to="/pipeline/incident/:incidentId" replace />} />
 
-              {/* 404 - Keep this last */}
+              {/* 404 */}
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
