@@ -101,3 +101,54 @@ def predict_breakage(request):
             'error': 'Internal server error',
             'details': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+from .models import Workspace, WorkspaceInvite, Gateway
+from .serializers import WorkspaceSerializer
+
+class OnboardingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data
+
+        workspace = Workspace.objects.create(
+            owner=request.user,
+            company_name=data.get('companyName', ''),
+            company_type=data.get('companyType', ''),
+            location=data.get('location', ''),
+            team_size=data.get('teamSize', ''),
+            modules=data.get('modules', []),
+            gateway_id=data.get('gatewayId', ''),
+            threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
+            threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
+            threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
+            notifications=data.get('notifications', []),
+            status='active',
+        )
+
+        for email in data.get('inviteEmails', []):
+            WorkspaceInvite.objects.create(
+                workspace=workspace,
+                email=email,
+            )
+
+        gateway_id = data.get('gatewayId', '').strip()
+        if gateway_id:
+            Gateway.objects.create(
+                id=gateway_id,
+                workspace=workspace,
+            )
+
+        return Response({
+            'success': True,
+            'workspace_id': str(workspace.id),
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        workspace = Workspace.objects.filter(owner=request.user).first()
+        if not workspace:
+            return Response({'exists': False})
+        return Response({
+            'exists': True,
+            'workspace': WorkspaceSerializer(workspace).data,
+        })

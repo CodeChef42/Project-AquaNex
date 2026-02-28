@@ -5,6 +5,7 @@ declare module '*.png' {
 
 interface ImportMetaEnv {
   readonly BASE_URL: string;
+  readonly VITE_API_URL: string;
 }
 
 interface ImportMeta {

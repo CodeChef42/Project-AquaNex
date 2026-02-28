@@ -54,7 +54,7 @@ const SignIn = () => {
               to="/"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
-              Back to landing
+              Back
             </Link>
           </div>
         </div>
