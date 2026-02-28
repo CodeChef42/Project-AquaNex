@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from "../assets/Picture1.png";
 
+const SECRET_KEY = "adminTester";
 
 const SignUp = () => {
   const [username, setUsername] = useState('');
@@ -15,14 +16,23 @@ const SignUp = () => {
   const [role, setRole] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [secretKey, setSecretKey] = useState('');
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (secretKey !== SECRET_KEY) {
+      toast({
+        title: 'Access Denied',
+        description: 'Invalid secret key. Registration is currently restricted.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     if (password !== confirmPassword) {
       toast({
@@ -57,20 +67,23 @@ const SignUp = () => {
       await register(username, password, fullName, email, role);
       toast({
         title: 'Success',
-        description: 'Account created successfully! Please sign in.',
+        description: 'Account created successfully!',
       });
-      navigate('/signin');
+      navigate('/onboarding');
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.username?.[0] || error.response?.data?.email?.[0] || error.response?.data?.detail || 'Registration failed',
+        description:
+          error.response?.data?.username?.[0] ||
+          error.response?.data?.email?.[0] ||
+          error.response?.data?.detail ||
+          'Registration failed',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
   };
-
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -79,9 +92,9 @@ const SignUp = () => {
         <div className="container mx-auto px-4 max-w-7xl py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <img 
-                src={aquanexLogo} 
-                alt="AquaNex Intelligent Irrigation Systems" 
+              <img
+                src={aquanexLogo}
+                alt="AquaNex Intelligent Irrigation Systems"
                 className="h-10 w-auto object-contain"
               />
             </div>
@@ -100,11 +113,14 @@ const SignUp = () => {
         <div className="w-full max-w-lg">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-foreground mb-2">Get Started</h1>
-            <p className="text-muted-foreground">Create your account to transform your irrigation system</p>
+            <p className="text-muted-foreground">
+              Create your account to transform your irrigation system
+            </p>
           </div>
-          
+
           <div className="bg-card border border-border rounded-xl shadow-sm p-8">
             <form onSubmit={handleSubmit} className="space-y-6">
+
               <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
                 <Input
@@ -187,10 +203,29 @@ const SignUp = () => {
                 />
               </div>
 
-              <Button 
-                type="submit" 
+              {/* Secret Key — hidden from casual users */}
+              <div className="space-y-2">
+                <Label htmlFor="secretKey">
+                  Secret Key{" "}
+                  <span className="text-xs text-muted-foreground font-normal">
+                    (required for access)
+                  </span>
+                </Label>
+                <Input
+                  id="secretKey"
+                  type="password"
+                  placeholder="Enter access key"
+                  value={secretKey}
+                  onChange={(e) => setSecretKey(e.target.value)}
+                  required
+                  className="w-full"
+                />
+              </div>
+
+              <Button
+                type="submit"
                 className="w-full bg-primary text-primary-foreground px-6 py-3 rounded-xl hover:bg-primary/90 transition-all duration-200 font-medium shadow-md"
-                disabled={true}
+                disabled={loading}
               >
                 {loading ? 'Creating account...' : 'Create Account'}
               </Button>
@@ -200,8 +235,8 @@ const SignUp = () => {
           <div className="text-center mt-6">
             <p className="text-muted-foreground">
               Already have an account?{" "}
-              <Link 
-                to="/signin" 
+              <Link
+                to="/signin"
                 className="text-primary hover:text-primary/80 font-medium transition-colors"
               >
                 Sign in
