@@ -144,7 +144,7 @@ const Onboarding = () => {
     setSaving(true);
     try {
       const token = localStorage.getItem('access_token');
-      await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/`, {
+      await fetch(`${import.meta.env.VITE_API_URL}/onboarding/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
