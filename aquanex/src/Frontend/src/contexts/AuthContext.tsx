@@ -47,7 +47,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const fetchUser = async () => {
     try {
-      const response = await api.get('/auth/user/');
+      const response = await api.get('/auth/profile/');
       setUser(response.data);
     } catch (error) {
       localStorage.removeItem('access_token');
