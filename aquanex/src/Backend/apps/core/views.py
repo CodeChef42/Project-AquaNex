@@ -1036,6 +1036,7 @@ class LayoutUploadView(APIView):
         try:
             saved_name = default_storage.save(storage_name, layout_file)
         except Exception as exc:
+            logger.exception("Layout storage upload failed for workspace %s", workspace.id)
             workspace.layout_status = 'failed'
             workspace.layout_job_error = f"Storage upload error: {exc}"
             workspace.save(update_fields=['layout_status', 'layout_job_error'])
@@ -1054,6 +1055,7 @@ class LayoutUploadView(APIView):
                 task_filename,
             )
         except KombuOperationalError as exc:
+            logger.exception("Layout queue unavailable for workspace %s", workspace.id)
             workspace.layout_status = 'failed'
             workspace.layout_job_error = f"Queue connection error: {exc}"
             workspace.save(update_fields=['layout_status', 'layout_job_error'])
@@ -1062,6 +1064,7 @@ class LayoutUploadView(APIView):
                 'details': str(exc),
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as exc:
+            logger.exception("Layout task enqueue failed for workspace %s", workspace.id)
             workspace.layout_status = 'failed'
             workspace.layout_job_error = f"Task queue error: {exc}"
             workspace.save(update_fields=['layout_status', 'layout_job_error'])
