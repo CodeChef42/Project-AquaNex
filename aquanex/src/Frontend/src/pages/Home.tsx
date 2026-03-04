@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
+import { useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../contexts/AuthContext";
 import { MapContainer, Polygon, TileLayer } from "react-leaflet";
@@ -29,7 +30,7 @@ const recentIssues = [
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, workspace } = useAuth();
+  const { user, workspace, fetchWorkspace } = useAuth();
   
   const userName = user?.full_name || user?.username || "User";
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
@@ -39,7 +40,10 @@ const Dashboard = () => {
     layoutPolygon.length > 0
       ? [layoutPolygon[0][1], layoutPolygon[0][0]]
       : [25.2048, 55.2708];
-  console.log("Dashboard component rendering");
+
+  useEffect(() => {
+    fetchWorkspace();
+  }, [fetchWorkspace]);
 
   return (
     <div className="p-8 space-y-8">
@@ -100,10 +104,10 @@ const Dashboard = () => {
         </Card>
       </div>
 
-      {layoutPolygon.length >= 3 && (
+      {layoutPolygon.length >= 3 ? (
         <Card>
           <CardHeader>
-            <CardTitle>Confirmed Layout Map</CardTitle>
+            <CardTitle>Saved Onboarding Layout</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="rounded-xl border overflow-hidden">
@@ -124,6 +128,22 @@ const Dashboard = () => {
             </div>
             <p className="text-xs text-muted-foreground">
               Area: {workspace?.layout_area_m2 ? `${(workspace.layout_area_m2 / 1000).toFixed(2)}k m²` : "—"}
+            </p>
+            {workspace?.layout_notes && (
+              <p className="text-xs text-muted-foreground">
+                Notes: {workspace.layout_notes}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Saved Onboarding Layout</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              No confirmed layout saved yet. Complete Step 4 and confirm layout in onboarding.
             </p>
           </CardContent>
         </Card>
