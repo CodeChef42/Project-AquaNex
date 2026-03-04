@@ -13,6 +13,7 @@ import uuid
 import random
 import hashlib
 import os
+from pathlib import Path
 from datetime import datetime, timezone as dt_timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
 from django.utils import timezone
