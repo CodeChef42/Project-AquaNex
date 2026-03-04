@@ -301,8 +301,18 @@ def _tb_get_attrs(token, device_id):
     return {}
 
 
-def _tb_pick_metric_reading(timeseries):
-    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ph", "flow", "pressure"]
+def _tb_pick_metric_reading(timeseries, device_type_hint=None):
+    hint = (device_type_hint or "").lower()
+    if hint == "pressure_sensor":
+        preferred = ["pressure_bar", "pressure", "q_m3h", "flow_lpm", "soil_moisture_pct", "ph", "flow"]
+    elif hint == "flowmeter":
+        preferred = ["q_m3h", "flow_lpm", "flow", "pressure_bar", "pressure", "soil_moisture_pct", "ph"]
+    elif hint == "ph_sensor":
+        preferred = ["ph", "pressure_bar", "q_m3h", "flow_lpm", "soil_moisture_pct", "flow", "pressure"]
+    elif hint == "soil_moisture_sensor":
+        preferred = ["soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
+    else:
+        preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ph", "flow", "pressure"]
     for key in preferred:
         values = timeseries.get(key)
         if isinstance(values, list) and values:
@@ -314,17 +324,25 @@ def _tb_pick_metric_reading(timeseries):
 
 
 def _tb_infer_type(device_name, attrs, metric):
+    explicit_type = str(attrs.get("device_type") or "").strip().lower()
+    explicit_map = {
+        "pressure_sensor": "pressure_sensor",
+        "flowmeter": "flowmeter",
+        "ph_sensor": "ph_sensor",
+        "soil_moisture_sensor": "soil_moisture_sensor",
+    }
+    if explicit_type in explicit_map:
+        return explicit_map[explicit_type]
+
     name = str(device_name or "").lower()
-    if "flow" in name or metric in {"q_m3h", "flow_lpm", "flow"}:
-        return "flowmeter"
-    if "pressure" in name or metric in {"pressure_bar", "pressure"}:
+    if "ps" in name or "pressure" in name or metric in {"pressure_bar", "pressure"}:
         return "pressure_sensor"
+    if "fm" in name or "flow" in name or metric in {"q_m3h", "flow_lpm", "flow"}:
+        return "flowmeter"
     if "ph" in name or metric == "ph":
         return "ph_sensor"
     if "soil" in name or metric == "soil_moisture_pct":
         return "soil_moisture_sensor"
-    if str(attrs.get("device_type") or "").strip():
-        return str(attrs.get("device_type"))
     return "sensor"
 
 
@@ -535,7 +553,8 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
         ts = _tb_get_latest_values(token, d["id"])
-        metric, reading = _tb_pick_metric_reading(ts)
+        provisional_type = _tb_infer_type(d["name"], attrs, "")
+        metric, reading = _tb_pick_metric_reading(ts, provisional_type)
         lat_val = _tb_optional_float(attrs.get("lat"))
         lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
         if lat_val is None or lng_val is None:
@@ -569,7 +588,8 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             dev_name = _tb_device_name(dev_obj) or _tb_device_name(rel) or dev_id
             attrs = _tb_get_attrs(token, dev_id)
             ts = _tb_get_latest_values(token, dev_id)
-            metric, reading = _tb_pick_metric_reading(ts)
+            provisional_type = _tb_infer_type(dev_name, attrs, "")
+            metric, reading = _tb_pick_metric_reading(ts, provisional_type)
             lat_val = _tb_optional_float(attrs.get("lat"))
             lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
             if lat_val is None or lng_val is None:
