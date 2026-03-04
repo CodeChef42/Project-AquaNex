@@ -1033,7 +1033,16 @@ class LayoutUploadView(APIView):
             f"layout_uploads/{workspace.id}/"
             f"{int(time.time())}_{uuid.uuid4().hex}{file_suffix}"
         )
-        saved_name = default_storage.save(storage_name, layout_file)
+        try:
+            saved_name = default_storage.save(storage_name, layout_file)
+        except Exception as exc:
+            workspace.layout_status = 'failed'
+            workspace.layout_job_error = f"Storage upload error: {exc}"
+            workspace.save(update_fields=['layout_status', 'layout_job_error'])
+            return Response({
+                'error': 'Failed to upload layout file to storage.',
+                'details': str(exc),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         logger.info(f"Queueing layout_process for workspace {workspace.id}, file {layout_file.name}")
 
@@ -1052,6 +1061,14 @@ class LayoutUploadView(APIView):
                 'error': 'Task queue unavailable. Ensure Redis is running and Celery worker is connected.',
                 'details': str(exc),
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as exc:
+            workspace.layout_status = 'failed'
+            workspace.layout_job_error = f"Task queue error: {exc}"
+            workspace.save(update_fields=['layout_status', 'layout_job_error'])
+            return Response({
+                'error': 'Failed to queue layout processing task.',
+                'details': str(exc),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({
             'success': True,
