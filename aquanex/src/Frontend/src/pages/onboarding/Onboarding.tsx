@@ -583,6 +583,7 @@ const Onboarding = () => {
       const response = await api.post("/gateway-discover/", {
         gateway_id: gatewayId,
         protocol: data.gatewayProtocol || "mqtt",
+        force_refresh: true,
       });
       const payload = response?.data || {};
       const devices = Array.isArray(payload?.devices) ? payload.devices : [];

@@ -733,6 +733,7 @@ class GatewayDiscoverView(APIView):
     def post(self, request):
         gateway_id = (request.data.get("gateway_id") or "").strip()
         protocol = str(request.data.get("protocol") or "").strip().lower()
+        force_refresh = bool(request.data.get("force_refresh", False))
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -747,7 +748,7 @@ class GatewayDiscoverView(APIView):
             )
 
         # Return existing memory if gateway already paired.
-        if workspace.gateway_id == gateway_id and workspace.devices:
+        if not force_refresh and workspace.gateway_id == gateway_id and workspace.devices:
             return Response({
                 "success": True,
                 "gateway_id": gateway_id,
