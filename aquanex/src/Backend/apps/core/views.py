@@ -42,6 +42,15 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _optional_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_device(raw, fallback_mcu_id, index):
     if not isinstance(raw, dict):
         return None
@@ -55,8 +64,8 @@ def _normalize_device(raw, fallback_mcu_id, index):
         "id": device_id,
         "microcontroller_id": mcu_id,
         "type": str(raw.get("type") or "unknown"),
-        "lat": round(_safe_float(raw.get("lat"), 25.2048), 7),
-        "lng": round(_safe_float(raw.get("lng"), 55.2708), 7),
+        "lat": _optional_float(raw.get("lat")),
+        "lng": _optional_float(raw.get("lng")),
         "status": str(raw.get("status") or "online"),
         "metric": str(raw.get("metric") or "value"),
         "reading": raw.get("reading", 0),
@@ -331,6 +340,15 @@ def _tb_float(value, default):
         return default
 
 
+def _tb_optional_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return round(float(value), 7)
+    except (TypeError, ValueError):
+        return None
+
+
 def _tb_device_name(obj):
     return str(obj.get("name") or obj.get("toName") or obj.get("label") or "").strip()
 
@@ -408,8 +426,8 @@ def _persist_gateway_inventory(workspace, gateway_id, devices, protocol=None):
                     "device_type": str(device.get("type") or "sensor"),
                     "metric_key": str(device.get("metric") or "value"),
                     "status": str(device.get("status") or "online"),
-                    "lat": _safe_float(device.get("lat"), 0.0),
-                    "lng": _safe_float(device.get("lng"), 0.0),
+                    "lat": _optional_float(device.get("lat")),
+                    "lng": _optional_float(device.get("lng")),
                     "metadata": metadata,
                     "last_seen": timezone.now(),
                 },
@@ -513,20 +531,22 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         mcu_objects = [{"id": "virtual-mcu-01", "name": f"{gateway_id}-MCU-01"}]
 
     devices = []
+    missing_coordinates = []
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
         ts = _tb_get_latest_values(token, d["id"])
         metric, reading = _tb_pick_metric_reading(ts)
-        lat_default = 25.2048
-        lng_default = 55.2708
-        if workspace.layout_polygon and len(workspace.layout_polygon) >= 1:
-            lng_default, lat_default = workspace.layout_polygon[0][0], workspace.layout_polygon[0][1]
+        lat_val = _tb_optional_float(attrs.get("lat"))
+        lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
+        if lat_val is None or lng_val is None:
+            missing_coordinates.append(d["name"])
+            continue
         devices.append({
             "id": d["name"],
             "microcontroller_id": d["mcu_name"],
             "type": _tb_infer_type(d["name"], attrs, metric),
-            "lat": _tb_float(attrs.get("lat"), lat_default),
-            "lng": _tb_float(attrs.get("lng", attrs.get("lon")), lng_default),
+            "lat": lat_val,
+            "lng": lng_val,
             "status": "online",
             "metric": metric,
             "reading": reading,
@@ -550,16 +570,17 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             attrs = _tb_get_attrs(token, dev_id)
             ts = _tb_get_latest_values(token, dev_id)
             metric, reading = _tb_pick_metric_reading(ts)
-            lat_default = 25.2048
-            lng_default = 55.2708
-            if workspace.layout_polygon and len(workspace.layout_polygon) >= 1:
-                lng_default, lat_default = workspace.layout_polygon[0][0], workspace.layout_polygon[0][1]
+            lat_val = _tb_optional_float(attrs.get("lat"))
+            lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
+            if lat_val is None or lng_val is None:
+                missing_coordinates.append(dev_name)
+                continue
             devices.append({
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
                 "type": _tb_infer_type(dev_name, attrs, metric),
-                "lat": _tb_float(attrs.get("lat"), lat_default),
-                "lng": _tb_float(attrs.get("lng", attrs.get("lon")), lng_default),
+                "lat": lat_val,
+                "lng": lng_val,
                 "status": "online",
                 "metric": metric,
                 "reading": reading,
@@ -569,15 +590,16 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
 
     if not devices:
         raise ValueError(
-            "Gateway found, but no connected devices were found via relations. "
-            "Create relations: Gateway -> MCU -> Devices (or Gateway -> Devices)."
+            "Gateway found, but no geolocated connected devices were found. "
+            "Set ThingsBoard server attributes lat/lng on field devices and create relations: "
+            "Gateway -> MCU -> Devices (or Gateway -> Devices)."
         )
 
     dedup = {}
     for dev in devices:
         dedup[dev["id"]] = dev
     devices = sorted(dedup.values(), key=lambda d: (d["microcontroller_id"], d["id"]))
-    return devices
+    return devices, sorted(set(missing_coordinates))
 
 
 class RegisterView(generics.CreateAPIView):
@@ -736,7 +758,7 @@ class GatewayDiscoverView(APIView):
 
         cfg = _tb_config()
         try:
-            devices = _tb_build_inventory(gateway_id, workspace, protocol=protocol or None)
+            devices, missing_coordinates = _tb_build_inventory(gateway_id, workspace, protocol=protocol or None)
             source = "thingsboard_live"
         except Exception as exc:
             logger.warning("ThingsBoard discovery failed for gateway %s: %s", gateway_id, str(exc))
@@ -764,14 +786,15 @@ class GatewayDiscoverView(APIView):
                     "id": f"{gateway_id}-DEV-{idx:02d}",
                     "microcontroller_id": f"{gateway_id}-MCU-{((idx - 1) // 2) + 1:02d}",
                     "type": "sensor",
-                    "lat": round(center_lat + rng.uniform(-0.0004, 0.0004), 7),
-                    "lng": round(center_lng + rng.uniform(-0.0004, 0.0004), 7),
+                    "lat": None,
+                    "lng": None,
                     "status": "online",
                     "metric": "value",
                     "reading": round(rng.uniform(1.0, 99.0), 2),
                     "last_seen": "just now",
                 })
             source = "simulated_fallback"
+            missing_coordinates = [device["id"] for device in devices]
 
         workspace.gateway_id = gateway_id
         workspace.devices = devices
@@ -790,6 +813,7 @@ class GatewayDiscoverView(APIView):
             "source": source,
             "devices": devices,
             "microcontrollers": _microcontrollers_from_devices(devices),
+            "missing_coordinates": missing_coordinates,
         }, status=status.HTTP_200_OK)
 
 
@@ -964,8 +988,8 @@ class GatewayTelemetryIngestView(APIView):
             device["status"] = "online"
             device["last_seen"] = now_label
             resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
-            resolved_lat = _safe_float(device.get("lat"), 0.0)
-            resolved_lng = _safe_float(device.get("lng"), 0.0)
+            resolved_lat = _optional_float(device.get("lat"))
+            resolved_lng = _optional_float(device.get("lng"))
             readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
             _persist_telemetry_row(
                 workspace=workspace,

@@ -43,8 +43,8 @@ interface GatewayDevice {
   id: string;
   microcontroller_id: string;
   type: string;
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   status: string;
   metric: string;
   reading: number | string;
@@ -175,6 +175,7 @@ const Onboarding = () => {
   const [discoveringGateway, setDiscoveringGateway] = useState(false);
   const [gatewayError, setGatewayError] = useState("");
   const [gatewaySource, setGatewaySource] = useState("");
+  const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
   const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
@@ -278,6 +279,17 @@ const Onboarding = () => {
       .map(([id, device_ids]) => ({ id, device_ids: [...new Set(device_ids)].sort() }))
       .sort((a, b) => a.id.localeCompare(b.id));
   }, [data.devices]);
+  const geolocatedDevices = useMemo(
+    () =>
+      data.devices.filter(
+        (device) =>
+          typeof device.lat === "number" &&
+          Number.isFinite(device.lat) &&
+          typeof device.lng === "number" &&
+          Number.isFinite(device.lng)
+      ),
+    [data.devices]
+  );
   const finalLayoutPolygon =
     extractedPolygonFromPoints.length > 2
       ? extractedPolygonFromPoints
@@ -592,6 +604,9 @@ const Onboarding = () => {
         gatewayId,
         devices: persistedDevices,
       }));
+      setMissingCoordinates(
+        Array.isArray(payload?.missing_coordinates) ? payload.missing_coordinates : []
+      );
       setGatewaySource(String(payload?.source || "unknown"));
       setGatewayError("");
     } catch (error) {
@@ -601,6 +616,7 @@ const Onboarding = () => {
         "Gateway discovery failed.";
       setGatewayError(msg);
       setGatewaySource("");
+      setMissingCoordinates([]);
     } finally {
       setDiscoveringGateway(false);
     }
@@ -1309,44 +1325,55 @@ const Onboarding = () => {
                 <p className="text-xs text-emerald-700 mt-1">
                   Source: {gatewaySource || "unknown"}
                 </p>
+                {missingCoordinates.length > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    {missingCoordinates.length} device(s) skipped: missing lat/lng attributes in ThingsBoard.
+                  </p>
+                )}
               </div>
 
-              <div className="rounded-2xl border-2 border-border overflow-hidden bg-white">
-                <MapContainer
-                  center={[data.devices[0].lat, data.devices[0].lng]}
-                  zoom={17}
-                  style={{ height: "300px", width: "100%" }}
-                >
-                  <TileLayer
-                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    attribution="Tiles &copy; Esri"
-                  />
-                  {data.layout.polygon.length > 2 && (
-                    <Polygon
-                      positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
-                      pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.2 }}
+              {geolocatedDevices.length > 0 ? (
+                <div className="rounded-2xl border-2 border-border overflow-hidden bg-white">
+                  <MapContainer
+                    center={[geolocatedDevices[0].lat as number, geolocatedDevices[0].lng as number]}
+                    zoom={17}
+                    style={{ height: "300px", width: "100%" }}
+                  >
+                    <TileLayer
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      attribution="Tiles &copy; Esri"
                     />
-                  )}
-                  {data.devices.map((device) => (
-                    <CircleMarker
-                      key={device.id}
-                      center={[device.lat, device.lng]}
-                      radius={6}
-                      pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
-                    >
-                      <Popup>
-                        <div className="text-xs space-y-1">
-                          <p className="font-semibold">{device.id}</p>
-                          <p>{device.type}</p>
-                          <p>
-                            {device.metric}: {String(device.reading)}
-                          </p>
-                        </div>
-                      </Popup>
-                    </CircleMarker>
-                  ))}
-                </MapContainer>
-              </div>
+                    {data.layout.polygon.length > 2 && (
+                      <Polygon
+                        positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
+                        pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.2 }}
+                      />
+                    )}
+                    {geolocatedDevices.map((device) => (
+                      <CircleMarker
+                        key={device.id}
+                        center={[device.lat as number, device.lng as number]}
+                        radius={6}
+                        pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
+                      >
+                        <Popup>
+                          <div className="text-xs space-y-1">
+                            <p className="font-semibold">{device.id}</p>
+                            <p>{device.type}</p>
+                            <p>
+                              {device.metric}: {String(device.reading)}
+                            </p>
+                          </div>
+                        </Popup>
+                      </CircleMarker>
+                    ))}
+                  </MapContainer>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+                  No geolocated devices to render. Add `lat` and `lng` server attributes in ThingsBoard devices.
+                </div>
+              )}
 
               <div className="space-y-2">
                 <p className="text-sm font-semibold">Discovered devices</p>
@@ -1356,7 +1383,11 @@ const Onboarding = () => {
                       <span className="font-medium">{device.id}</span>
                       <span>{device.type}</span>
                       <span>{device.metric}: {String(device.reading)}</span>
-                      <span>{device.lat.toFixed(6)}, {device.lng.toFixed(6)}</span>
+                      <span>
+                        {typeof device.lat === "number" && typeof device.lng === "number"
+                          ? `${device.lat.toFixed(6)}, ${device.lng.toFixed(6)}`
+                          : "No coordinates"}
+                      </span>
                       <span className="text-emerald-700">{device.status}</span>
                     </div>
                   ))}
