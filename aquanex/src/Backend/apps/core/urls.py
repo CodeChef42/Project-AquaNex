@@ -11,7 +11,8 @@ from .views import (
     LoginView, 
     UserProfileView, 
     predict_breakage, 
-    OnboardingView
+    OnboardingView,
+    ChangePasswordView,
 )
 
 def health(request):
@@ -23,6 +24,7 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view(), name="login"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/profile/", UserProfileView.as_view(), name="profile"),
+    path("auth/change-password/", ChangePasswordView.as_view(), name="change-password"),
     path("ml/predict-breakage/", predict_breakage, name="predict_breakage"),
     path("onboarding/", OnboardingView.as_view(), name="onboarding"),
     path("gateway-discover/", GatewayDiscoverView.as_view(), name="gateway-discover"),

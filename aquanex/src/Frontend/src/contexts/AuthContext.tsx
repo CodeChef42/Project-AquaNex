@@ -47,7 +47,7 @@ interface AuthContextType {
   user: User | null;
   workspace: Workspace | null;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, fullName: string, email: string) => Promise<void>;
+  register: (username: string, password: string, fullName: string, email: string) => Promise<string>; // ← now returns string
   logout: () => void;
   fetchWorkspace: () => Promise<void>;
   isAuthenticated: boolean;
@@ -102,7 +102,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await fetchWorkspace();
   };
 
-  const register = async (username: string, password: string, fullName: string, email: string) => {
+  const register = async (username: string, password: string, fullName: string, email: string): Promise<string> => {
     const response = await api.post('/auth/register/', {
       username,
       password,
@@ -112,6 +112,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('access_token', response.data.access);
     localStorage.setItem('refresh_token', response.data.refresh);
     setUser(response.data.user);
+    return response.data.secret_key; // ← return the key to SignUp.tsx
   };
 
   const logout = () => {

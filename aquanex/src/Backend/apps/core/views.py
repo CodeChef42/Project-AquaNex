@@ -20,6 +20,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError
 from django.core.files.storage import default_storage
+from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer
+
 
 logger = logging.getLogger(__name__)
 
@@ -661,30 +663,32 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     return devices, sorted(set(missing_coordinates))
 
 
-class RegisterView(generics.CreateAPIView):
+class RegisterView(APIView):
     permission_classes = [AllowAny]
-    serializer_class = RegisterSerializer
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'user': UserSerializer(user).data,
+                'secret_key': user._plain_secret_key,  # shown ONCE at registration
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
 
-        if not Workspace.objects.filter(owner=user).exists():
-            Workspace.objects.create(
-                owner=user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle"
-            )
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            'user': UserSerializer(user).data,
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }, status=status.HTTP_201_CREATED)
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class LoginView(APIView):

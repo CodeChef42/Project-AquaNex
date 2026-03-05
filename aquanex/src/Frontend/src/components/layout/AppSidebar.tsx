@@ -7,24 +7,28 @@ import {
   LineChart,
   History,
   TerminalSquare,
+  Settings,
+  LogOut,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 
 const allItems = [
-  { title: "Home", url: "/home", icon: LayoutDashboard, module: null }, // always visible
+  { title: "Home", url: "/home", icon: LayoutDashboard, module: null },
   { title: "Pipeline Management", url: "/pipeline", icon: Pipeline, module: "pipeline_management" },
   { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet, module: "soil_salinity" },
   { title: "Water Quality", url: "/water-quality", icon: TestTube, module: "water_quality" },
@@ -32,23 +36,26 @@ const allItems = [
   { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
   { title: "History Log", url: "/history", icon: History, module: "history_log" },
   { title: "Simulation", url: "/simulation", icon: TerminalSquare, module: null },
+  { title: "Settings", url: "/settings", icon: Settings, module: null }, // always visible
 ];
 
 export function AppSidebar() {
   const { open } = useSidebar();
-  const { workspace } = useAuth();
+  const { workspace, logout } = useAuth();
+  const navigate = useNavigate();
 
   const items = allItems.filter(
     (item) => item.module === null || workspace?.modules?.includes(item.module)
   );
 
-  return (
-    <Sidebar collapsible="icon" className="border-r">
-      <SidebarContent>
-        <div className="p-4 border-b">
-          <SidebarTrigger />
-        </div>
+  const handleLogout = () => {
+    logout();
+    navigate("/");
+  };
 
+  return (
+    <Sidebar>
+      <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel>Main Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -56,13 +63,8 @@ export function AppSidebar() {
               {items.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
-                    <NavLink
-                      to={item.url}
-                      end={item.url === "/"}
-                      className="hover:bg-sidebar-accent"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <item.icon className="w-4 h-4" />
+                    <NavLink to={item.url}>
+                      <item.icon />
                       {open && <span>{item.title}</span>}
                     </NavLink>
                   </SidebarMenuButton>
@@ -72,6 +74,17 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
+      <SidebarFooter>
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+          onClick={handleLogout}
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          {open && <span>Logout</span>}
+        </Button>
+      </SidebarFooter>
     </Sidebar>
   );
 }

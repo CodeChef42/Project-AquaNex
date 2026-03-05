@@ -1,4 +1,4 @@
-import { AlertTriangle, Droplet, TrendingDown, Clock, Settings } from "lucide-react";
+import { AlertTriangle, Droplet, TrendingDown, Clock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,10 +69,6 @@ const Dashboard = () => {
           <h1 className="text-3xl font-bold text-foreground mb-2">Welcome back, {userName}</h1>
           <p className="text-muted-foreground">System Overview - Here's what's happening with your irrigation system today</p>
         </div>
-        <Button variant="outline" onClick={() => navigate("/settings")}>
-          <Settings className="w-4 h-4 mr-2" />
-          User Settings
-        </Button>
       </div>
 
       {/* KPI Cards */}

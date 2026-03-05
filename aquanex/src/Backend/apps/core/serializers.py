@@ -1,3 +1,5 @@
+import secrets
+from django.contrib.auth.hashers import make_password, check_password
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from .models import User, Customer, Technician, Request, Workspace, WorkspaceInvite, Gateway
@@ -18,12 +20,46 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ['username', 'password', 'full_name', 'email']
 
     def create(self, validated_data):
+        # Generate a random secret key — shown to user ONCE, stored hashed
+        plain_secret_key = secrets.token_urlsafe(16)
+
         user = User.objects.create_user(
             username=validated_data['username'],
             password=validated_data['password'],
             full_name=validated_data.get('full_name', ''),
             email=validated_data['email'],
         )
+        user.secret_key_hash = make_password(plain_secret_key)
+        user.save(update_fields=['secret_key_hash'])
+
+        # Attach plain key temporarily so the view can return it
+        user._plain_secret_key = plain_secret_key
+        return user
+    
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    secret_key = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate(self, data):
+        user = self.context['request'].user
+
+        if not user.check_password(data['current_password']):
+            raise serializers.ValidationError({'current_password': 'Current password is incorrect.'})
+
+        if not user.secret_key_hash:
+            raise serializers.ValidationError({'secret_key': 'No secret key found for this account.'})
+
+        if not check_password(data['secret_key'], user.secret_key_hash):
+            raise serializers.ValidationError({'secret_key': 'Invalid secret key.'})
+
+        return data
+
+    def save(self):
+        user = self.context['request'].user
+        user.set_password(self.validated_data['new_password'])
+        user.save(update_fields=['password'])
         return user
 
 
