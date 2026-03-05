@@ -10,6 +10,7 @@ type WorkspaceDevice = {
   id: string;
   microcontroller_id: string;
   type: string;
+  zone_id?: string | null;
   lat: number | null;
   lng: number | null;
   status: string;
@@ -43,6 +44,7 @@ const inferMetric = (device: WorkspaceDevice) => {
   const knownMetric = String(device.metric || "").trim();
   if (knownMetric) return knownMetric;
   const lowerType = String(device.type || "").toLowerCase();
+  if (lowerType.includes("salinity")) return "ec_ds_m";
   if (lowerType.includes("pressure")) return "pressure_bar";
   if (lowerType.includes("flow")) return "q_m3h";
   if (lowerType.includes("ph")) return "ph";
@@ -79,6 +81,9 @@ const valueForMetric = (metric: string, previous?: number) => {
   }
   if (metric === "soil_moisture_pct") {
     return randomAround(previous ?? 42, 4);
+  }
+  if (metric === "ec_ds_m" || metric === "ec_ms_cm") {
+    return randomAround(previous ?? 1.8, 0.35);
   }
   return randomAround(previous ?? 50, 5);
 };
@@ -387,7 +392,8 @@ const Simulation = () => {
                       {device.type} • MCU: {device.microcontroller_id}
                     </p>
                     <p className="text-muted-foreground">
-                      Metric: {inferMetric(device)} • Coords:{" "}
+                      Metric: {inferMetric(device)}
+                      {device.zone_id ? ` • Zone: ${device.zone_id}` : ""} • Coords:{" "}
                       {typeof device.lat === "number" && typeof device.lng === "number"
                         ? `${device.lat.toFixed(6)}, ${device.lng.toFixed(6)}`
                         : "N/A"}

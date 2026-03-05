@@ -15,6 +15,7 @@ interface Workspace {
     id: string;
     microcontroller_id: string;
     type: string;
+    zone_id?: string | null;
     lat: number | null;
     lng: number | null;
     status: string;

@@ -86,6 +86,7 @@ def _normalize_device(raw, fallback_mcu_id, index):
         "id": device_id,
         "microcontroller_id": mcu_id,
         "type": str(raw.get("type") or "unknown"),
+        "zone_id": str(raw.get("zone_id") or "").strip() or None,
         "lat": _optional_float(raw.get("lat")),
         "lng": _optional_float(raw.get("lng")),
         "status": str(raw.get("status") or "online"),
@@ -299,7 +300,7 @@ def _tb_get_device(token, device_id):
 
 def _tb_get_latest_values(token, device_id):
     keys = ",".join([
-        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ph",
+        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph",
         "temperature", "humidity", "flow", "pressure",
     ])
     try:
@@ -317,7 +318,7 @@ def _tb_get_latest_values(token, device_id):
 
 
 def _tb_get_attrs(token, device_id):
-    keys = "lat,lng,lon,microcontroller_id,mcu_id,device_type"
+    keys = "lat,lng,lon,microcontroller_id,mcu_id,device_type,zone_id,zone"
     try:
         payload = _tb_request(
             "GET",
@@ -335,15 +336,17 @@ def _tb_get_attrs(token, device_id):
 def _tb_pick_metric_reading(timeseries, device_type_hint=None):
     hint = (device_type_hint or "").lower()
     if hint == "pressure_sensor":
-        preferred = ["pressure_bar", "pressure", "q_m3h", "flow_lpm", "soil_moisture_pct", "ph", "flow"]
+        preferred = ["pressure_bar", "pressure", "q_m3h", "flow_lpm", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph", "flow"]
     elif hint == "flowmeter":
-        preferred = ["q_m3h", "flow_lpm", "flow", "pressure_bar", "pressure", "soil_moisture_pct", "ph"]
+        preferred = ["q_m3h", "flow_lpm", "flow", "pressure_bar", "pressure", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
     elif hint == "ph_sensor":
-        preferred = ["ph", "pressure_bar", "q_m3h", "flow_lpm", "soil_moisture_pct", "flow", "pressure"]
+        preferred = ["ph", "pressure_bar", "q_m3h", "flow_lpm", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "flow", "pressure"]
+    elif hint == "soil_salinity_sensor":
+        preferred = ["ec_ds_m", "ec_ms_cm", "soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
     elif hint == "soil_moisture_sensor":
-        preferred = ["soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
+        preferred = ["soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
     else:
-        preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ph", "flow", "pressure"]
+        preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph", "flow", "pressure"]
     for key in preferred:
         values = timeseries.get(key)
         if isinstance(values, list) and values:
@@ -360,6 +363,7 @@ def _tb_infer_type(device_name, attrs, metric):
         "pressure_sensor": "pressure_sensor",
         "flowmeter": "flowmeter",
         "ph_sensor": "ph_sensor",
+        "soil_salinity_sensor": "soil_salinity_sensor",
         "soil_moisture_sensor": "soil_moisture_sensor",
     }
     if explicit_type in explicit_map:
@@ -372,6 +376,8 @@ def _tb_infer_type(device_name, attrs, metric):
         return "flowmeter"
     if "ph" in name or metric == "ph":
         return "ph_sensor"
+    if "salinity" in name or metric in {"ec_ds_m", "ec_ms_cm"}:
+        return "soil_salinity_sensor"
     if "soil" in name or metric == "soil_moisture_pct":
         return "soil_moisture_sensor"
     return "sensor"
@@ -595,6 +601,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             "id": d["name"],
             "microcontroller_id": d["mcu_name"],
             "type": _tb_infer_type(d["name"], attrs, metric),
+            "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
             "lat": lat_val,
             "lng": lng_val,
             "status": "online",
@@ -630,6 +637,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
                 "type": _tb_infer_type(dev_name, attrs, metric),
+                "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
                 "lat": lat_val,
                 "lng": lng_val,
                 "status": "online",
@@ -1034,7 +1042,7 @@ class GatewayTelemetryIngestView(APIView):
                 if device.get("metric") in values:
                     device["reading"] = values[device.get("metric")]
                 else:
-                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ph"]
+                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
                     chosen_key = next((key for key in preferred if key in values), None)
                     if not chosen_key:
                         chosen_key = next(iter(values.keys()), None)
