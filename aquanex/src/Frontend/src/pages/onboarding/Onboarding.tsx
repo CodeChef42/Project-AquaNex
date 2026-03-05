@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { AxiosError } from "axios";
 import {
@@ -259,13 +259,13 @@ const Onboarding = () => {
   const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   const [gatewayError, setGatewayError] = useState("");
   const [gatewaySource, setGatewaySource] = useState("");
+  const [onboardingWorkspaceId, setOnboardingWorkspaceId] = useState<string | null>(null);
   const createNewWorkspace = searchParams.get("new") === "1";
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
-  const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
   const convexHull = (points: number[][]): number[][] => {
     const uniq = Array.from(
       new Set(points.map(([lng, lat]) => `${lng.toFixed(7)},${lat.toFixed(7)}`))
@@ -463,6 +463,34 @@ const Onboarding = () => {
     return true;
   };
 
+  const ensureTargetWorkspaceId = useCallback(async () => {
+    if (onboardingWorkspaceId) return onboardingWorkspaceId;
+    if (!createNewWorkspace) return workspace?.id || null;
+
+    const bootstrap = await api.post("/onboarding/", {
+      createNewWorkspace: true,
+      workspaceName: data.workspaceName || "New Workspace",
+      companyName: data.companyName,
+      companyType: data.companyType,
+      location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
+      teamSize: data.teamSize,
+      modules: data.modules,
+      inviteEmails: data.inviteEmails,
+      devices: data.devices,
+      layout_polygon: data.layout.polygon,
+      layout_area_m2: data.layout.area_m2,
+      layout_notes: data.layout.notes,
+      gatewayId: data.gatewayId,
+      gatewayProtocol: data.gatewayProtocol,
+      thresholds: data.thresholds,
+      notifications: data.notifications,
+    });
+    const newId = String(bootstrap?.data?.workspace_id || "");
+    if (!newId) return null;
+    setOnboardingWorkspaceId(newId);
+    return newId;
+  }, [onboardingWorkspaceId, createNewWorkspace, workspace?.id, data]);
+
  const calculateArea = (coords: number[][]): number => {
   if (coords.length < 3) return 0;
 
@@ -493,9 +521,11 @@ const Onboarding = () => {
   const handleFinish = async () => {
     setSaving(true);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      const shouldCreateWorkspace = createNewWorkspace && !targetWorkspaceId;
       const res = await api.post("/onboarding/", {
-        workspaceId: createNewWorkspace ? undefined : workspace?.id,
-        createNewWorkspace,
+        workspaceId: targetWorkspaceId || undefined,
+        createNewWorkspace: shouldCreateWorkspace,
         workspaceName: data.workspaceName,
         companyName: data.companyName,
         companyType: data.companyType,
@@ -548,6 +578,10 @@ const Onboarding = () => {
     setExtractedPoints([]);
     setLayoutTaskMessage("Upload queued. Waiting for extraction result...");
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      if (targetWorkspaceId) {
+        formData.append("workspace_id", targetWorkspaceId);
+      }
       const response = await api.post("/layout-upload/", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -672,7 +706,9 @@ const Onboarding = () => {
 
     setSavingLayout(true);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const payload = {
+        workspaceId: targetWorkspaceId || undefined,
         layout_polygon: finalLayoutPolygon,
         layout_area_m2: finalLayoutArea,
         layout_notes: data.layout.notes,
@@ -709,7 +745,9 @@ const Onboarding = () => {
     setGatewayError("");
     setDevicesConfirmed(false);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const response = await api.post("/gateway-discover/", {
+        workspaceId: targetWorkspaceId || undefined,
         gateway_id: gatewayId,
         protocol: data.gatewayProtocol || "mqtt",
         force_refresh: true,
@@ -749,7 +787,9 @@ const Onboarding = () => {
     setConfirmingDevices(true);
     setGatewayError("");
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const response = await api.post("/gateway-register/", {
+        workspaceId: targetWorkspaceId || undefined,
         gateway_id: data.gatewayId.trim(),
         protocol: data.gatewayProtocol || "mqtt",
         devices: data.devices,
@@ -776,6 +816,7 @@ const Onboarding = () => {
 
   useEffect(() => {
     if (!workspace) return;
+    if (createNewWorkspace) return;
     const [locationPart = "", cityPart = "", countryPart = ""] = String(workspace.location || "")
       .split(",")
       .map((v) => v.trim());
@@ -807,7 +848,10 @@ const Onboarding = () => {
     let isCancelled = false;
     const pollTask = async () => {
       try {
-        const response = await api.get(`/layout-status/${layoutTaskId}/`);
+        const query = onboardingWorkspaceId
+          ? `?workspace_id=${encodeURIComponent(onboardingWorkspaceId)}`
+          : "";
+        const response = await api.get(`/layout-status/${layoutTaskId}/${query}`);
         const payload = response?.data || {};
         if (response.status < 200 || response.status >= 300 || isCancelled) return;
 
@@ -880,7 +924,7 @@ const Onboarding = () => {
         window.clearTimeout(pollingTimerRef.current);
       }
     };
-  }, [layoutTaskId, API_URL, manualPolygon.length]);
+  }, [layoutTaskId, onboardingWorkspaceId, manualPolygon.length]);
 
   const finalLayoutArea =
     finalLayoutPolygon.length >= 3 ? calculateArea(finalLayoutPolygon) : 0;

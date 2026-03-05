@@ -57,18 +57,18 @@ def _is_truthy(value):
 
 
 def _workspace_id_from_request(request):
-    header_value = request.headers.get("X-Workspace-Id")
-    if header_value:
-        return str(header_value).strip()
+    data = getattr(request, "data", None)
+    if hasattr(data, "get"):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
     if hasattr(request, "query_params"):
         query_value = request.query_params.get("workspace_id")
         if query_value:
             return str(query_value).strip()
-    data = getattr(request, "data", None)
-    if isinstance(data, dict):
-        data_value = data.get("workspace_id") or data.get("workspaceId")
-        if data_value:
-            return str(data_value).strip()
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
     return ""
 
 
