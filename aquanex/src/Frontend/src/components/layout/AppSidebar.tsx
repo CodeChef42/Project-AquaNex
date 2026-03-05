@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Map,
   PipetteIcon as Pipeline,
   Droplet,
   TrendingUp,
@@ -25,6 +26,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 const allItems = [
   { title: "Home", url: "/home", icon: LayoutDashboard, module: null }, // always visible
+  { title: "Workspaces", url: "/workspaces", icon: Map, module: null },
   { title: "Pipeline Management", url: "/pipeline", icon: Pipeline, module: "pipeline_management" },
   { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet, module: "soil_salinity" },
   { title: "Water Quality", url: "/water-quality", icon: TestTube, module: "water_quality" },

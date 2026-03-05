@@ -56,6 +56,46 @@ def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _workspace_id_from_request(request):
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
+    if hasattr(request, "query_params"):
+        query_value = request.query_params.get("workspace_id")
+        if query_value:
+            return str(query_value).strip()
+    data = getattr(request, "data", None)
+    if isinstance(data, dict):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
+    return ""
+
+
+def _resolve_user_workspace(request, create_if_missing=False):
+    requested_id = _workspace_id_from_request(request)
+    owner_workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+
+    if requested_id:
+        selected = owner_workspaces.filter(id=requested_id).first()
+        if selected:
+            return selected
+        return None
+
+    selected = owner_workspaces.first()
+    if selected or not create_if_missing:
+        return selected
+
+    return Workspace.objects.create(
+        owner=request.user,
+        workspace_name="Workspace 1",
+        company_name="",
+        company_type="",
+        status="active",
+        layout_status="idle",
+    )
+
+
 def _infer_metric_family(metric, device_type):
     metric_key = str(metric or "").strip().lower()
     if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
@@ -791,15 +831,6 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        if not Workspace.objects.filter(owner=user).exists():
-            Workspace.objects.create(
-                owner=user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle"
-            )
-
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': UserSerializer(user).data,
@@ -837,10 +868,39 @@ class OnboardingView(APIView):
     def post(self, request):
         data = request.data
         user = request.user
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
+        create_new_workspace = _is_truthy(data.get("createNewWorkspace"))
+        fallback_workspace = Workspace.objects.filter(owner=user).order_by("created_at").first()
 
-        workspace = Workspace.objects.filter(owner=user).first()
+        if workspace and create_new_workspace:
+            workspace = None
 
-        if workspace:
+        if workspace is None:
+            workspace = Workspace.objects.create(
+                owner=user,
+                workspace_name=data.get('workspaceName', '') or "New Workspace",
+                company_name=data.get('companyName', '') or (fallback_workspace.company_name if fallback_workspace else ''),
+                company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
+                location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
+                team_size=data.get('teamSize', ''),
+                modules=data.get('modules', []),
+                gateway_id=data.get('gatewayId', ''),
+                devices=data.get('devices', []),
+                invite_emails=data.get('inviteEmails', []),
+                threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
+                threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
+                threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
+                notifications=data.get('notifications', []),
+                layout_polygon=data.get('layout_polygon', []),
+                layout_area_m2=float(data.get('layout_area_m2', 0)),
+                layout_notes=data.get('layout_notes', ''),
+                layout_file_name=data.get('layout_file_name'),
+                layout_status='processing' if data.get('layout_file_name') else 'idle',
+                layout_job_error=None,
+                status='active',
+            )
+        else:
+            workspace.workspace_name = data.get('workspaceName', workspace.workspace_name or workspace.company_name)
             workspace.company_name = data.get('companyName', workspace.company_name)
             workspace.company_type = data.get('companyType', workspace.company_type)
             workspace.location = data.get('location', workspace.location)
@@ -861,29 +921,6 @@ class OnboardingView(APIView):
             workspace.layout_job_error = None
             workspace.status = 'active'
             workspace.save()
-        else:
-            workspace = Workspace.objects.create(
-                owner=user,
-                company_name=data.get('companyName', ''),
-                company_type=data.get('companyType', ''),
-                location=data.get('location', ''),
-                team_size=data.get('teamSize', ''),
-                modules=data.get('modules', []),
-                gateway_id=data.get('gatewayId', ''),
-                devices=data.get('devices', []),
-                invite_emails=data.get('inviteEmails', []),
-                threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
-                threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
-                threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
-                notifications=data.get('notifications', []),
-                layout_polygon=data.get('layout_polygon', []),
-                layout_area_m2=float(data.get('layout_area_m2', 0)),
-                layout_notes=data.get('layout_notes', ''),
-                layout_file_name=data.get('layout_file_name'),
-                layout_status='processing' if data.get('layout_file_name') else 'idle',
-                layout_job_error=None,
-                status='active',
-            )
 
         for email in data.get('inviteEmails', []):
             WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
@@ -895,15 +932,30 @@ class OnboardingView(APIView):
         return Response({
             'success': True,
             'workspace_id': str(workspace.id),
+            'workspace': WorkspaceSerializer(workspace).data,
         }, status=status.HTTP_201_CREATED)
 
     def get(self, request):
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
         if not workspace:
-            return Response({'exists': False})
+            return Response({'exists': False, 'workspaces': []})
         return Response({
             'exists': True,
             'workspace': WorkspaceSerializer(workspace).data,
+            'workspaces': WorkspaceSerializer(workspaces, many=True).data,
+        })
+
+
+class WorkspaceListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+        active = _resolve_user_workspace(request, create_if_missing=False)
+        return Response({
+            "workspaces": WorkspaceSerializer(workspaces, many=True).data,
+            "active_workspace_id": str(active.id) if active else None,
         })
 
 
@@ -918,15 +970,9 @@ class GatewayDiscoverView(APIView):
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # Return existing memory if gateway already paired.
         if (
@@ -1014,15 +1060,9 @@ class GatewayRegisterView(APIView):
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         raw_devices = request.data.get("devices")
         raw_mcus = request.data.get("microcontrollers")
@@ -1346,15 +1386,9 @@ class LayoutUploadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         layout_file = request.FILES.get('layoutFile')
         if not layout_file:
@@ -1480,7 +1514,7 @@ class LayoutTaskStatus(APIView):
     def get(self, request, task_id):
         from celery.result import AsyncResult
         result = AsyncResult(task_id)
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
         workspace_payload = None
         if workspace:
             workspace_payload = {

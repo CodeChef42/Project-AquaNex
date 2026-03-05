@@ -21,6 +21,7 @@ const DemandForecasting       = lazy(() => import("./pages/DemandForecasting"));
 const HistoryLog              = lazy(() => import("./pages/HistoryLog"));
 const Settings                = lazy(() => import("./pages/Settings"));
 const Simulation              = lazy(() => import("./pages/Simulation"));
+const Workspaces              = lazy(() => import("./pages/Workspaces"));
 const SignIn                  = lazy(() => import("./pages/SignIn"));
 const SignUp                  = lazy(() => import("./pages/SignUp"));
 const Onboarding              = lazy(() => import("./pages/onboarding/Onboarding"));
@@ -49,6 +50,9 @@ const ProtectedRoute = () => {
 // Guards a route by checking if the module is in the workspace
 const ModuleRoute = ({ module }: { module: string }) => {
   const { workspace } = useAuth();
+  if (!workspace) {
+    return <Navigate to="/workspaces" replace />;
+  }
   if (workspace && !workspace.modules.includes(module)) {
     return <Navigate to="/home" replace />;
   }
@@ -73,6 +77,7 @@ const App = () => (
               {/* Protected routes */}
               <Route element={<ProtectedRoute />}>
                 <Route path="/home"     element={<Home />} />
+                <Route path="/workspaces" element={<Workspaces />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/simulation" element={<Simulation />} />
 

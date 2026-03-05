@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { AxiosError } from "axios";
 import {
   ChevronLeft,
@@ -59,8 +59,11 @@ interface GatewayMicrocontroller {
 }
 
 interface OnboardingData {
+  workspaceName: string;
   companyName: string;
   companyType: string;
+  country: string;
+  city: string;
   location: string;
   teamSize: string;
   inviteEmails: string[];
@@ -200,9 +203,21 @@ const SPACE_TYPES = [
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
 
+const COUNTRY_CITY_OPTIONS: Record<string, string[]> = {
+  UAE: ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Al Ain", "Ras Al Khaimah", "Fujairah", "Umm Al Quwain"],
+  SaudiArabia: ["Riyadh", "Jeddah", "Dammam", "Mecca", "Medina"],
+  Oman: ["Muscat", "Salalah", "Sohar", "Nizwa"],
+  Qatar: ["Doha", "Al Rayyan", "Al Wakrah"],
+  Bahrain: ["Manama", "Muharraq", "Riffa"],
+  Kuwait: ["Kuwait City", "Al Ahmadi", "Hawalli"],
+};
+
 const INITIAL: OnboardingData = {
+  workspaceName: "",
   companyName: "",
   companyType: "",
+  country: "",
+  city: "",
   location: "",
   teamSize: "",
   inviteEmails: [],
@@ -221,7 +236,8 @@ const INITIAL: OnboardingData = {
 
 const Onboarding = () => {
   const navigate = useNavigate();
-  const { fetchWorkspace, workspace } = useAuth();
+  const [searchParams] = useSearchParams();
+  const { fetchWorkspace, workspace, workspaces } = useAuth();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
@@ -243,6 +259,9 @@ const Onboarding = () => {
   const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   const [gatewayError, setGatewayError] = useState("");
   const [gatewaySource, setGatewaySource] = useState("");
+  const createNewWorkspace = searchParams.get("new") === "1";
+  const hasExistingWorkspaces = workspaces.length > 0;
+  const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
@@ -432,7 +451,12 @@ const Onboarding = () => {
 
   const canProceed = () => {
     if (step === 1)
-      return data.companyName.trim() !== "" && data.companyType !== "";
+      return (
+        data.workspaceName.trim() !== "" &&
+        (skipCompanyIdentity || data.companyName.trim() !== "") &&
+        data.companyType !== "" &&
+        (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
+      );
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
     if (step === 5) return true;
@@ -470,9 +494,12 @@ const Onboarding = () => {
     setSaving(true);
     try {
       const res = await api.post("/onboarding/", {
+        workspaceId: createNewWorkspace ? undefined : workspace?.id,
+        createNewWorkspace,
+        workspaceName: data.workspaceName,
         companyName: data.companyName,
         companyType: data.companyType,
-        location: data.location,
+        location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
         teamSize: data.teamSize,
         modules: data.modules,
         inviteEmails: data.inviteEmails,
@@ -492,7 +519,7 @@ const Onboarding = () => {
       console.error("Onboarding save failed:", err);
     } finally {
       setSaving(false);
-      navigate("/home");
+      navigate("/workspaces");
     }
   };
 
@@ -749,19 +776,30 @@ const Onboarding = () => {
 
   useEffect(() => {
     if (!workspace) return;
+    const [locationPart = "", cityPart = "", countryPart = ""] = String(workspace.location || "")
+      .split(",")
+      .map((v) => v.trim());
     const gatewayId = String(workspace?.gateway_id || "").trim();
     const devices = Array.isArray(workspace?.devices)
       ? (workspace.devices as GatewayDevice[])
       : [];
+    setData((prev) => ({
+      ...prev,
+      workspaceName:
+        createNewWorkspace
+          ? prev.workspaceName
+          : String((workspace as any)?.workspace_name || prev.workspaceName || workspace.company_name || ""),
+      companyName: skipCompanyIdentity ? prev.companyName : String(workspace.company_name || prev.companyName || ""),
+      country: skipCompanyIdentity ? prev.country : countryPart || prev.country,
+      city: skipCompanyIdentity ? prev.city : cityPart || prev.city,
+      location: skipCompanyIdentity ? prev.location : locationPart || prev.location,
+      gatewayId: gatewayId || prev.gatewayId,
+      devices: devices.length > 0 ? devices : prev.devices,
+    }));
     if (gatewayId && devices.length > 0) {
-      setData((prev) => ({
-        ...prev,
-        gatewayId,
-        devices,
-      }));
       setDevicesConfirmed(true);
     }
-  }, [workspace]);
+  }, [workspace, createNewWorkspace, skipCompanyIdentity]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -848,6 +886,7 @@ const Onboarding = () => {
     finalLayoutPolygon.length >= 3 ? calculateArea(finalLayoutPolygon) : 0;
 
   const renderStep = () => {
+    const cityOptions = COUNTRY_CITY_OPTIONS[data.country] || [];
     // ─── Step 1 ───
     if (step === 1)
       return (
@@ -862,16 +901,86 @@ const Onboarding = () => {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              Organization Name <span className="text-destructive">*</span>
+              Irrigation Project / Greenspace Name <span className="text-destructive">*</span>
             </label>
             <input
               type="text"
-              placeholder="e.g. Dubai Municipality Parks Division"
-              value={data.companyName}
-              onChange={(e) => update({ companyName: e.target.value })}
+              placeholder="e.g. Safa Park Sector A"
+              value={data.workspaceName}
+              onChange={(e) => update({ workspaceName: e.target.value })}
               className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
             />
           </div>
+          {!skipCompanyIdentity && (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Organization Name <span className="text-destructive">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dubai Municipality Parks Division"
+                  value={data.companyName}
+                  onChange={(e) => update({ companyName: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Country <span className="text-destructive">*</span>
+                </label>
+                <select
+                  value={data.country}
+                  onChange={(e) =>
+                    update({
+                      country: e.target.value,
+                      city: "",
+                    })
+                  }
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                >
+                  <option value="">Select country</option>
+                  {Object.keys(COUNTRY_CITY_OPTIONS).map((countryKey) => (
+                    <option key={countryKey} value={countryKey}>
+                      {countryKey.replace(/([A-Z])/g, " $1").trim()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  City <span className="text-destructive">*</span>
+                </label>
+                <select
+                  value={data.city}
+                  onChange={(e) => update({ city: e.target.value })}
+                  disabled={!data.country}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">
+                    {data.country ? "Select city" : "Select country first"}
+                  </option>
+                  {cityOptions.map((cityName) => (
+                    <option key={cityName} value={cityName}>
+                      {cityName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Company Location <span className="text-destructive">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dubai Municipality Parks HQ, Al Safa 2"
+                  value={data.location}
+                  onChange={(e) => update({ location: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                />
+              </div>
+            </>
+          )}
           <div className="space-y-2">
             <label className="text-sm font-medium">
               Space Type <span className="text-destructive">*</span>
@@ -892,16 +1001,6 @@ const Onboarding = () => {
                 </button>
               ))}
             </div>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Location</label>
-            <input
-              type="text"
-              placeholder="e.g. Dubai, UAE"
-              value={data.location}
-              onChange={(e) => update({ location: e.target.value })}
-              className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            />
           </div>
         </div>
       );
@@ -1723,11 +1822,12 @@ const Onboarding = () => {
             <h2 className="text-2xl font-bold">Your workspace is ready</h2>
             <p className="text-muted-foreground text-sm max-w-sm mx-auto">
               AquaNex has been configured for{" "}
-              <strong>{data.companyName || "your organization"}</strong>.
+              <strong>{data.workspaceName || data.companyName || "your organization"}</strong>.
             </p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
             {[
+              { label: "Workspace", value: data.workspaceName || "—" },
               { label: "Organization", value: data.companyName || "—" },
               { label: "Team Size", value: data.teamSize || "Not set" },
               {

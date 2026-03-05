@@ -9,6 +9,8 @@ interface User {
 }
 
 interface Workspace {
+  id: string;
+  workspace_name?: string;
   company_name?: string;
   location?: string;
   modules: string[];
@@ -46,10 +48,14 @@ interface Workspace {
 interface AuthContextType {
   user: User | null;
   workspace: Workspace | null;
+  workspaces: Workspace[];
+  selectedWorkspaceId: string | null;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string, fullName: string, email: string) => Promise<void>;
   logout: () => void;
   fetchWorkspace: () => Promise<void>;
+  fetchWorkspaces: () => Promise<void>;
+  selectWorkspace: (workspaceId: string) => Promise<void>;
   isAuthenticated: boolean;
   loading: boolean;
 }
@@ -58,7 +64,11 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
+    localStorage.getItem('selected_workspace_id')
+  );
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -74,7 +84,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const response = await api.get('/auth/profile/');
       setUser(response.data);
-      await fetchWorkspace();
+      await fetchWorkspaces();
     } catch (error) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -83,15 +93,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const fetchWorkspace = async () => {
+  const fetchWorkspaces = async () => {
     try {
       const response = await api.get('/onboarding/');
-      if (response.data.exists) {
+      const listed = Array.isArray(response.data?.workspaces) ? response.data.workspaces : [];
+      setWorkspaces(listed);
+
+      if (response.data.exists && response.data.workspace) {
+        const currentId = String(response.data.workspace.id || "");
         setWorkspace(response.data.workspace);
+        if (!selectedWorkspaceId || !listed.some((w: Workspace) => w.id === selectedWorkspaceId)) {
+          localStorage.setItem('selected_workspace_id', currentId);
+          setSelectedWorkspaceId(currentId);
+        }
+      } else {
+        setWorkspace(null);
       }
     } catch (error) {
-      // workspace not found, leave as null
+      setWorkspace(null);
+      setWorkspaces([]);
     }
+  };
+
+  const fetchWorkspace = fetchWorkspaces;
+
+  const selectWorkspace = async (workspaceId: string) => {
+    localStorage.setItem('selected_workspace_id', workspaceId);
+    setSelectedWorkspaceId(workspaceId);
+    await fetchWorkspaces();
   };
 
   const login = async (username: string, password: string) => {
@@ -99,7 +128,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('access_token', response.data.access);
     localStorage.setItem('refresh_token', response.data.refresh);
     setUser(response.data.user);
-    await fetchWorkspace();
+    await fetchWorkspaces();
   };
 
   const register = async (username: string, password: string, fullName: string, email: string) => {
@@ -117,18 +146,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const logout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('selected_workspace_id');
     setUser(null);
     setWorkspace(null);
+    setWorkspaces([]);
+    setSelectedWorkspaceId(null);
   };
 
   return (
     <AuthContext.Provider value={{
       user,
       workspace,
+      workspaces,
+      selectedWorkspaceId,
       login,
       register,
       logout,
       fetchWorkspace,
+      fetchWorkspaces,
+      selectWorkspace,
       isAuthenticated: !!user,
       loading,
     }}>

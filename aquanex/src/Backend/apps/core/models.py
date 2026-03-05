@@ -162,6 +162,7 @@ class Request(models.Model):
 class Workspace(models.Model):
     id                      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner                   = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workspaces', db_column='owner_id')
+    workspace_name          = models.CharField(max_length=255, blank=True, null=True)
     company_name            = models.CharField(max_length=255)
     company_type            = models.CharField(max_length=100, blank=True, null=True)
     location                = models.CharField(max_length=255, blank=True, null=True)
