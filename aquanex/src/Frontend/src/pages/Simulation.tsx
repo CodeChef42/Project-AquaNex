@@ -42,22 +42,33 @@ type TelemetryRecord = {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const randomAround = (base: number, span: number) => Number((base + (Math.random() * 2 - 1) * span).toFixed(3));
 
+const isPipelineDeviceType = (type = "") => {
+  const t = String(type || "").toLowerCase();
+  return t.includes("flowmeter") || t.includes("pressure_sensor");
+};
+
 const metricGroup = (metric: string, type = "", id = "") => {
   const metricKey = String(metric || "").toLowerCase();
   const typeKey = String(type || "").toLowerCase();
   const idKey = String(id || "").toLowerCase();
 
+  if (typeKey.includes("salinity") || idKey.includes("ss-")) return "salinity";
+  if (typeKey.includes("flowmeter") || typeKey.includes("pressure_sensor")) {
+    if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metricKey)) return "flow";
+    if (["pressure_bar", "pressure"].includes(metricKey)) return "pressure";
+  }
+
   if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metricKey) || typeKey.includes("flow")) return "flow";
   if (["pressure_bar", "pressure"].includes(metricKey) || typeKey.includes("pressure")) return "pressure";
-  if (["ec_ds_m", "ec_ms_cm"].includes(metricKey) || typeKey.includes("salinity") || idKey.includes("ss-")) return "salinity";
+  if (["ec_ds_m", "ec_ms_cm"].includes(metricKey)) return "salinity";
   if (["soil_moisture_pct"].includes(metricKey) || typeKey.includes("soil")) return "soil";
   if (["ph", "tds", "turbidity", "chlorine", "orp", "conductivity"].includes(metricKey) || typeKey.includes("quality")) return "water";
   return "other";
 };
 
 const matchesPage = (metric: string, type = "", id = "", page: SimPage) => {
+  if (page === "pipeline") return isPipelineDeviceType(type);
   const group = metricGroup(metric, type, id);
-  if (page === "pipeline") return group === "flow" || group === "pressure";
   if (page === "soil") return group === "salinity";
   if (page === "demand") return group === "soil";
   return group === "water";
@@ -91,13 +102,14 @@ const valueForMetric = (metric: string, previous?: number) => {
   return randomAround(previous ?? 50, 5);
 };
 
-const computePipelineDeltas = (telemetry: Array<{ metric: string; reading: number; device_id: string }>) => {
+const computePipelineDeltas = (telemetry: Array<{ metric: string; reading: number; device_id: string; device_type?: string }>) => {
   let flowUp: number | null = null;
   let flowDown: number | null = null;
   let pressureUp: number | null = null;
   let pressureDown: number | null = null;
 
   telemetry.forEach((row) => {
+    if (!isPipelineDeviceType(row.device_type)) return;
     const idx = inferSensorIndex({ id: row.device_id, type: "", metric: row.metric } as WorkspaceDevice);
     const metric = String(row.metric || "").toLowerCase();
     if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric) && idx) {
@@ -114,6 +126,42 @@ const computePipelineDeltas = (telemetry: Array<{ metric: string; reading: numbe
     flow: flowUp !== null && flowDown !== null ? Math.abs(flowUp - flowDown) : null,
     pressure: pressureUp !== null && pressureDown !== null ? Math.abs(pressureUp - pressureDown) : null,
   };
+};
+
+const extractPipelineSnapshot = (telemetry: Array<{ metric: string; reading: number; device_id: string; device_type?: string }>) => {
+  let flow1: number | null = null;
+  let flow2: number | null = null;
+  let pressure1: number | null = null;
+  let pressure2: number | null = null;
+
+  telemetry.forEach((row) => {
+    if (!isPipelineDeviceType(row.device_type)) return;
+    const id = String(row.device_id || "").toLowerCase();
+    const metric = String(row.metric || "").toLowerCase();
+    const idx = inferSensorIndex({ id: row.device_id, type: "", metric: row.metric } as WorkspaceDevice);
+    if (!idx) return;
+    const reading = Number(row.reading);
+    if (!Number.isFinite(reading)) return;
+
+    const fromIdFlow = id.includes("fm-") || id.includes("flow");
+    const fromIdPressure = id.includes("ps-") || id.includes("pressure");
+    const metricIsFlow = ["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric);
+    const metricIsPressure = ["pressure_bar", "pressure"].includes(metric);
+
+    if (fromIdFlow || metricIsFlow) {
+      if (idx === 1) flow1 = reading;
+      if (idx === 2) flow2 = reading;
+    }
+    if (fromIdPressure || metricIsPressure) {
+      if (idx === 1) pressure1 = reading;
+      if (idx === 2) pressure2 = reading;
+    }
+  });
+
+  if (flow1 === null || flow2 === null || pressure1 === null || pressure2 === null) {
+    return null;
+  }
+  return { flow_1: flow1, flow_2: flow2, pressure_1: pressure1, pressure_2: pressure2 };
 };
 
 const Simulation = () => {
@@ -238,7 +286,11 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
-    const localDeltas = computePipelineDeltas(telemetry);
+    const telemetryWithType = telemetry.map((row) => ({
+      ...row,
+      device_type: devices.find((d) => d.id === row.device_id)?.type || "",
+    }));
+    const localDeltas = computePipelineDeltas(telemetryWithType);
 
     setRecords((prev) => {
       const next = telemetry.map((row) => {
@@ -282,12 +334,34 @@ const Simulation = () => {
           "pipeline"
         );
       } else {
-        const missingSlots = Array.isArray(mlInference?.missing_slots) ? mlInference.missing_slots.join(", ") : "";
-        addLog(
-          "info",
-          `ML prediction pending${missingSlots ? ` (missing: ${missingSlots})` : ""} | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
-          "pipeline"
-        );
+        const snapshot = extractPipelineSnapshot(telemetryWithType);
+        if (snapshot) {
+          try {
+            const direct = await api.post("/ml/predict-breakage/", snapshot);
+            const directPrediction = direct?.data?.prediction;
+            const deltas = directPrediction?.deltas || {};
+            const summary = directPrediction?.is_anomaly ? "Leak detected" : "No leak detected";
+            addLog(
+              directPrediction?.is_anomaly ? "error" : "success",
+              `ML prediction: ${summary} | FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+              "pipeline"
+            );
+          } catch {
+            const missingSlots = Array.isArray(mlInference?.missing_slots) ? mlInference.missing_slots.join(", ") : "";
+            addLog(
+              "info",
+              `ML prediction pending${missingSlots ? ` (missing: ${missingSlots})` : ""} | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+              "pipeline"
+            );
+          }
+        } else {
+          const missingSlots = Array.isArray(mlInference?.missing_slots) ? mlInference.missing_slots.join(", ") : "";
+          addLog(
+            "info",
+            `ML prediction pending${missingSlots ? ` (missing: ${missingSlots})` : ""} | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+            "pipeline"
+          );
+        }
       }
 
       await fetchWorkspace();
