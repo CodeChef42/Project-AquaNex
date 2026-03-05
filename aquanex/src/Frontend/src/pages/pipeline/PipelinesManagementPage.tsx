@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import PipelineAlertCard from "@/components/PipelineAlertCard";
-import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 const alerts = [
@@ -17,6 +17,34 @@ const alerts = [
   { id: "827", severity: "critical", time: "41m ago", location: "Zone 1, Pipe 556-E", type: "Pipe Break", pipeLength: "250m", pipeType: "Steel" },
   { id: "826", severity: "medium", time: "48m ago", location: "Zone 3, Pipe 821-D", type: "Sensor Anomaly", pipeLength: "120m", pipeType: "HDPE" },
 ];
+
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+const FitMapToPoints = ({
+  points,
+  fallbackZoom = 12,
+  maxZoom = 16,
+}: {
+  points: [number, number][];
+  fallbackZoom?: number;
+  maxZoom?: number;
+}) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length >= 2) {
+      map.fitBounds(points, { padding: [36, 36], maxZoom });
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], Math.min(maxZoom, 15));
+      return;
+    }
+    map.setView(DUBAI_CENTER, fallbackZoom);
+  }, [fallbackZoom, map, maxZoom, points]);
+
+  return null;
+};
 
 const PipelinesManagementPage = () => {
   const navigate = useNavigate();
@@ -86,10 +114,17 @@ const PipelinesManagementPage = () => {
   })();
 
   const layoutPolygon = Array.isArray(workspace?.layout_polygon) ? workspace.layout_polygon : [];
-  const mapCenter =
-    geolocatedDevices.length > 0
-      ? [geolocatedDevices[0].lat, geolocatedDevices[0].lng]
-      : [25.2048, 55.2708];
+  const mapFocusPoints = useMemo<[number, number][]>(() => {
+    const fromLayout = layoutPolygon
+      .map((point: any) => [point?.[1], point?.[0]] as [number, number])
+      .filter(
+        (point) =>
+          Number.isFinite(point[0]) &&
+          Number.isFinite(point[1])
+      );
+    const fromDevices = geolocatedDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
+    return [...fromLayout, ...fromDevices];
+  }, [geolocatedDevices, layoutPolygon]);
 
   const getSeverityPriority = (severity: string) => {
     switch (severity) {
@@ -169,11 +204,12 @@ const PipelinesManagementPage = () => {
             </p>
           ) : (
             <div className="rounded-xl border border-border overflow-hidden">
-              <MapContainer center={mapCenter as [number, number]} zoom={17} style={{ height: "380px", width: "100%" }}>
+              <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "380px", width: "100%" }}>
                 <TileLayer
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                   attribution="Tiles &copy; Esri"
                 />
+                <FitMapToPoints points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
                 {layoutPolygon.length > 2 && (
                   <Polygon
                     positions={layoutPolygon.map((point: any) => [point[1], point[0]])}

@@ -16,7 +16,7 @@ import {
 import { useAuth } from "../../contexts/AuthContext";
 import api from "../../lib/api";
 
-import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline } from "react-leaflet";
+import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -85,6 +85,34 @@ interface ExtractedPoint {
   lat: number;
   enabled: boolean;
 }
+
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+const FitMapToPoints = ({
+  points,
+  fallbackZoom = 12,
+  maxZoom = 16,
+}: {
+  points: [number, number][];
+  fallbackZoom?: number;
+  maxZoom?: number;
+}) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length >= 2) {
+      map.fitBounds(points, { padding: [36, 36], maxZoom });
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], Math.min(maxZoom, 15));
+      return;
+    }
+    map.setView(DUBAI_CENTER, fallbackZoom);
+  }, [fallbackZoom, map, maxZoom, points]);
+
+  return null;
+};
 
 const inferLineOrder = (device: GatewayDevice): number | null => {
   const id = String(device.id || "").toLowerCase();
@@ -348,6 +376,14 @@ const Onboarding = () => {
 
     return ordered.length >= 2 ? ordered : [];
   }, [geolocatedDevices]);
+  const gatewayMapFocusPoints = useMemo<[number, number][]>(() => {
+    const layoutPoints = data.layout.polygon
+      .map(([lng, lat]) => [lat, lng] as [number, number])
+      .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const devicePoints = geolocatedDevices
+      .map((device) => [device.lat as number, device.lng as number] as [number, number]);
+    return [...layoutPoints, ...devicePoints];
+  }, [data.layout.polygon, geolocatedDevices]);
   const finalLayoutPolygon =
     extractedPolygonFromPoints.length > 2
       ? extractedPolygonFromPoints
@@ -362,6 +398,13 @@ const Onboarding = () => {
       : manualPolygon.length > 2
       ? "manual_draw"
       : "none";
+  const finalLayoutLatLng = useMemo<[number, number][]>(
+    () =>
+      finalLayoutPolygon
+        .map(([lng, lat]) => [lat, lng] as [number, number])
+        .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1])),
+    [finalLayoutPolygon]
+  );
 
   const update = (fields: Partial<OnboardingData>) =>
     setData((prev) => ({ ...prev, ...fields }));
@@ -1006,8 +1049,8 @@ const Onboarding = () => {
 
           <div className="rounded-2xl border-2 border-border overflow-hidden shadow-lg bg-white">
             <MapContainer
-              center={[25.2048, 55.2708]}
-              zoom={16}
+              center={DUBAI_CENTER}
+              zoom={12}
               style={{ height: "400px", width: "100%" }}
             >
               <TileLayer
@@ -1274,14 +1317,15 @@ const Onboarding = () => {
 
               <div className="rounded-xl border border-border overflow-hidden">
                 <MapContainer
-                  center={[finalLayoutPolygon[0][1], finalLayoutPolygon[0][0]]}
-                  zoom={17}
+                  center={DUBAI_CENTER}
+                  zoom={12}
                   style={{ height: "260px", width: "100%" }}
                 >
                   <TileLayer
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     attribution='Tiles &copy; Esri'
                   />
+                  <FitMapToPoints points={finalLayoutLatLng} fallbackZoom={12} maxZoom={16} />
                   <Polygon
                     positions={finalLayoutPolygon.map(([lng, lat]) => [lat, lng])}
                     pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
@@ -1443,14 +1487,15 @@ const Onboarding = () => {
               {geolocatedDevices.length > 0 ? (
                 <div className="rounded-2xl border-2 border-border overflow-hidden bg-white">
                   <MapContainer
-                    center={[geolocatedDevices[0].lat as number, geolocatedDevices[0].lng as number]}
-                    zoom={17}
+                    center={DUBAI_CENTER}
+                    zoom={12}
                     style={{ height: "300px", width: "100%" }}
                   >
                     <TileLayer
                       url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                       attribution="Tiles &copy; Esri"
                     />
+                    <FitMapToPoints points={gatewayMapFocusPoints} fallbackZoom={12} maxZoom={16} />
                     {data.layout.polygon.length > 2 && (
                       <Polygon
                         positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
