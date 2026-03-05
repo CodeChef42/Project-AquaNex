@@ -171,7 +171,7 @@ const Simulation = () => {
     }
 
     const elapsedMs = Date.now() - simulationStartMsRef.current;
-    const anomalyMode = elapsedMs % 30000 >= 15000;
+    const highDeltaMode = elapsedMs >= 20000;
 
     return activeDevices.map((device) => {
       const metric = inferMetric(device);
@@ -180,11 +180,11 @@ const Simulation = () => {
       const sensorIndex = inferSensorIndex(device);
 
       let reading = valueForMetric(metric, prev);
-      if (anomalyMode && (group === "flow" || group === "pressure") && sensorIndex) {
+      if (highDeltaMode && (group === "flow" || group === "pressure") && sensorIndex) {
         if (group === "flow") {
-          reading = sensorIndex === 1 ? 55 : 10;
+          reading = sensorIndex === 1 ? randomAround(85, 0.6) : randomAround(35, 0.6);
         } else {
-          reading = sensorIndex === 1 ? randomAround(4.4, 0.15) : randomAround(1.0, 0.15);
+          reading = sensorIndex === 1 ? randomAround(16, 0.2) : randomAround(6, 0.2);
         }
       }
 
@@ -230,16 +230,6 @@ const Simulation = () => {
       return [...next, ...prev].slice(0, 600);
     });
 
-    const counters = { pipeline: 0, soil: 0, demand: 0, water: 0 };
-    telemetry.forEach((row) => {
-      const type = devices.find((d) => d.id === row.device_id)?.type || "";
-      if (matchesPage(row.metric, type, row.device_id, "pipeline")) counters.pipeline += 1;
-      if (matchesPage(row.metric, type, row.device_id, "soil")) counters.soil += 1;
-      if (matchesPage(row.metric, type, row.device_id, "demand")) counters.demand += 1;
-      if (matchesPage(row.metric, type, row.device_id, "water")) counters.water += 1;
-    });
-    addLog("info", `Stream batch: pipeline=${counters.pipeline}, soil=${counters.soil}, demand=${counters.demand}, water=${counters.water}`);
-
     setIsSending(true);
     try {
       const response = await api.post("/gateway-telemetry/", {
@@ -247,26 +237,15 @@ const Simulation = () => {
         telemetry,
       });
 
-      const accepted = Number(response?.data?.accepted || 0);
-      const rejectedCount = Array.isArray(response?.data?.rejected) ? response.data.rejected.length : 0;
-      const rejectedRows = Array.isArray(response?.data?.rejected) ? response.data.rejected : [];
       const mlInference = response?.data?.ml_inference;
-
-      addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
-      if (rejectedRows.length > 0) {
-        rejectedRows.slice(0, 3).forEach((rej: any) => {
-          addLog("error", `Reject ${rej.index}: ${rej.error}${rej.device_id ? ` (${rej.device_id})` : ""}`);
-        });
-      }
 
       const prediction = mlInference?.prediction;
       if (prediction) {
         const deltas = prediction.deltas || {};
-        const isAnomaly = prediction.is_anomaly;
-        const status = isAnomaly ? "ANOMALY" : "NORMAL";
+        const summary = prediction.is_anomaly ? "Leak detected" : "No leak detected";
         addLog(
-          isAnomaly ? "error" : "success",
-          `[${status}] FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A"}, PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A"}`,
+          prediction.is_anomaly ? "error" : "success",
+          `ML prediction: ${summary} | FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A"} | PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A"}`,
           "pipeline"
         );
       } else if (mlInference?.error) {
@@ -292,7 +271,7 @@ const Simulation = () => {
     if (timerRef.current) window.clearInterval(timerRef.current);
     simulationStartMsRef.current = Date.now();
     setIsRunning(true);
-    addLog("info", `Streaming started at ${safeInterval}s interval.`);
+    addLog("info", "Telemetry started.");
     pushOnce();
     timerRef.current = window.setInterval(pushOnce, safeInterval * 1000);
   };
@@ -313,7 +292,6 @@ const Simulation = () => {
 
     const t = window.setTimeout(() => {
       if (!autoStartArmedRef.current && !isRunning) {
-        addLog("info", "Auto-starting stream 5 seconds after login/page load.");
         autoStartArmedRef.current = true;
         startSimulation();
       }
