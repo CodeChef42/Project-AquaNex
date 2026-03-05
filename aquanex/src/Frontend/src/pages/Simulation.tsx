@@ -62,8 +62,8 @@ const inferFamily = (device: WorkspaceDevice, metric: string) => {
 
 const inferSensorIndex = (device: WorkspaceDevice) => {
   const descriptor = `${device.id} ${device.type} ${device.metric}`.toLowerCase();
-  if (/(^|[^0-9])(1|f1|p1|upstream|inlet)([^0-9]|$)/.test(descriptor)) return 1;
-  if (/(^|[^0-9])(2|f2|p2|downstream|outlet)([^0-9]|$)/.test(descriptor)) return 2;
+  if (/(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(descriptor)) return 1;
+  if (/(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)/.test(descriptor)) return 2;
   return null;
 };
 
@@ -83,7 +83,9 @@ const valueForMetric = (metric: string, previous?: number) => {
   return randomAround(previous ?? 50, 5);
 };
 
-const summarizeDeltas = (rows: Array<{ device_id: string; metric: string; reading: number }>) => {
+const summarizeDeltas = (
+  rows: Array<{ device_id: string; metric: string; reading: number; device_type?: string }>
+) => {
   let flow1: number | null = null;
   let flow2: number | null = null;
   let pressure1: number | null = null;
@@ -92,15 +94,17 @@ const summarizeDeltas = (rows: Array<{ device_id: string; metric: string; readin
   rows.forEach((row) => {
     const metric = String(row.metric || "").toLowerCase();
     const id = String(row.device_id || "").toLowerCase();
+    const deviceType = String(row.device_type || "").toLowerCase();
     const reading = Number(row.reading);
     if (!Number.isFinite(reading)) return;
 
-    const isFlow = ["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric);
-    const isPressure = ["pressure_bar", "pressure"].includes(metric);
+    const isFlow =
+      ["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric) || deviceType.includes("flow");
+    const isPressure = ["pressure_bar", "pressure"].includes(metric) || deviceType.includes("pressure");
     const index =
-      /(^|[^0-9])(1|f1|p1|upstream|inlet)([^0-9]|$)/.test(id)
+      /(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(id)
         ? 1
-        : /(^|[^0-9])(2|f2|p2|downstream|outlet)([^0-9]|$)/.test(id)
+        : /(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)/.test(id)
         ? 2
         : null;
     if (!index) return;
@@ -244,6 +248,7 @@ const Simulation = () => {
           device_id,
           metric,
           reading: Number(reading),
+          device_type: devices.find((d) => d.id === device_id)?.type,
         }))
       );
       const response = await api.post("/gateway-telemetry/", {
@@ -469,9 +474,8 @@ const Simulation = () => {
                         : "text-sky-300"
                     }
                   >
-                    {log.level.toUpperCase()}
-                  </span>{" "}
-                  <span>{log.message}</span>
+                    {log.message}
+                  </span>
                 </div>
               ))
             )}
