@@ -1132,6 +1132,9 @@ class GatewayTelemetryIngestView(APIView):
         ml_job = None
         if ml_records:
             use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
+            force_sync_on_celery_error = _is_truthy(
+                os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
+            )
             if use_celery_ml:
                 try:
                     task = run_ml_breakage_inference.delay(
@@ -1143,7 +1146,39 @@ class GatewayTelemetryIngestView(APIView):
                     ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
                 except Exception as exc:
                     logger.warning("Failed to queue ML inference task for gateway=%s: %s", gateway_id, str(exc))
-                    ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
+                    if force_sync_on_celery_error:
+                        try:
+                            sync_result = _ml_ingest_sync(
+                                gateway_id=gateway_id,
+                                workspace_id=str(workspace.id),
+                                telemetry=ml_records,
+                                devices=list(known_devices.values()),
+                            )
+                            prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                            ml_job = {
+                                "queued": False,
+                                "mode": "sync_fallback",
+                                "queue_error": str(exc),
+                                "records": len(ml_records),
+                                "prediction_ready": bool(prediction),
+                                "prediction": prediction,
+                                "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                            }
+                        except requests.exceptions.RequestException as sync_exc:
+                            logger.warning(
+                                "Sync ML fallback failed after queue error for gateway=%s: %s",
+                                gateway_id,
+                                str(sync_exc),
+                            )
+                            ml_job = {
+                                "queued": False,
+                                "mode": "sync_fallback",
+                                "queue_error": str(exc),
+                                "error": str(sync_exc),
+                                "records": len(ml_records),
+                            }
+                    else:
+                        ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
             else:
                 try:
                     sync_result = _ml_ingest_sync(
