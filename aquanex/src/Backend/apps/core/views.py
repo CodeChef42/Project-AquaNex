@@ -42,15 +42,6 @@ def _safe_float(value, default=0.0):
         return default
 
 
-def _optional_numeric(value):
-    try:
-        if value is None or value == "":
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _optional_float(value):
     try:
         if value is None or value == "":
@@ -58,26 +49,6 @@ def _optional_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _metric_family(metric):
-    metric_key = str(metric or "").strip().lower()
-    flow_metrics = {"q_m3h", "flow_lpm", "flow"}
-    pressure_metrics = {"pressure_bar", "pressure"}
-    if metric_key in flow_metrics:
-        return "flow"
-    if metric_key in pressure_metrics:
-        return "pressure"
-    return None
-
-
-def _delta_anomaly_thresholds():
-    return {
-        "flow_abs": _safe_float(os.environ.get("ANOMALY_FLOW_DELTA_ABS"), 4.0),
-        "flow_pct": _safe_float(os.environ.get("ANOMALY_FLOW_DELTA_PCT"), 35.0),
-        "pressure_abs": _safe_float(os.environ.get("ANOMALY_PRESSURE_DELTA_ABS"), 0.8),
-        "pressure_pct": _safe_float(os.environ.get("ANOMALY_PRESSURE_DELTA_PCT"), 25.0),
-    }
 
 
 def _is_truthy(value):
@@ -100,51 +71,6 @@ def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     )
     response.raise_for_status()
     return response.json()
-
-
-def _detect_delta_anomaly(metric, previous_value, current_value):
-    family = _metric_family(metric)
-    prev = _optional_numeric(previous_value)
-    curr = _optional_numeric(current_value)
-    if family is None or prev is None or curr is None:
-        return {"is_anomaly": False}
-
-    delta = curr - prev
-    abs_delta = abs(delta)
-    pct_delta = (abs_delta / abs(prev) * 100.0) if prev not in (0, 0.0) else None
-    thresholds = _delta_anomaly_thresholds()
-
-    if family == "flow":
-        abs_threshold = thresholds["flow_abs"]
-        pct_threshold = thresholds["flow_pct"]
-    else:
-        abs_threshold = thresholds["pressure_abs"]
-        pct_threshold = thresholds["pressure_pct"]
-
-    abs_triggered = abs_delta >= abs_threshold
-    pct_triggered = (pct_delta is not None and pct_delta >= pct_threshold)
-    triggered = abs_triggered or pct_triggered
-
-    if not triggered:
-        return {"is_anomaly": False}
-
-    reasons = []
-    if abs_triggered:
-        reasons.append(f"abs_delta>={abs_threshold}")
-    if pct_triggered:
-        reasons.append(f"pct_delta>={pct_threshold}%")
-
-    return {
-        "is_anomaly": True,
-        "metric": str(metric or ""),
-        "family": family,
-        "previous": round(prev, 4),
-        "current": round(curr, 4),
-        "delta": round(delta, 4),
-        "abs_delta": round(abs_delta, 4),
-        "pct_delta": round(pct_delta, 2) if pct_delta is not None else None,
-        "reason": " and ".join(reasons),
-    }
 
 
 def _normalize_device(raw, fallback_mcu_id, index):
@@ -1080,7 +1006,6 @@ class GatewayTelemetryIngestView(APIView):
                 continue
 
             device = known_devices[device_id]
-            previous_reading = device.get("reading")
             if mcu_id and device.get("microcontroller_id") != mcu_id:
                 rejected.append({
                     "index": idx,
@@ -1108,12 +1033,6 @@ class GatewayTelemetryIngestView(APIView):
                         device["metric"] = chosen_key
                         device["reading"] = values[chosen_key]
 
-            anomaly = _detect_delta_anomaly(
-                metric=device.get("metric"),
-                previous_value=previous_reading,
-                current_value=device.get("reading"),
-            )
-
             if lat is not None:
                 device["lat"] = round(_safe_float(lat, device.get("lat", 0.0)), 7)
             if lng is not None:
@@ -1121,40 +1040,14 @@ class GatewayTelemetryIngestView(APIView):
 
             device["status"] = "online"
             device["last_seen"] = now_label
-            device["anomaly"] = bool(anomaly.get("is_anomaly"))
-            if anomaly.get("is_anomaly"):
-                device["anomaly_meta"] = {
-                    "family": anomaly.get("family"),
-                    "metric": anomaly.get("metric"),
-                    "previous": anomaly.get("previous"),
-                    "current": anomaly.get("current"),
-                    "delta": anomaly.get("delta"),
-                    "abs_delta": anomaly.get("abs_delta"),
-                    "pct_delta": anomaly.get("pct_delta"),
-                    "reason": anomaly.get("reason"),
-                    "ts": now_label,
-                }
-                anomalies.append({
-                    "device_id": device_id,
-                    "mcu_id": mcu_id or device.get("microcontroller_id"),
-                    **device["anomaly_meta"],
-                })
-            else:
-                device["anomaly_meta"] = None
+            # Rule-based per-device anomaly flags are disabled; ML service is source of truth.
+            device["anomaly"] = False
+            device["anomaly_meta"] = None
 
             resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
             resolved_lat = _optional_float(device.get("lat"))
             resolved_lng = _optional_float(device.get("lng"))
             readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
-            if anomaly.get("is_anomaly"):
-                readings_payload["__anomaly"] = {
-                    "family": anomaly.get("family"),
-                    "metric": anomaly.get("metric"),
-                    "delta": anomaly.get("delta"),
-                    "abs_delta": anomaly.get("abs_delta"),
-                    "pct_delta": anomaly.get("pct_delta"),
-                    "reason": anomaly.get("reason"),
-                }
             _persist_telemetry_row(
                 workspace=workspace,
                 gateway=gateway,
@@ -1220,6 +1113,20 @@ class GatewayTelemetryIngestView(APIView):
                 "queued": False,
                 "reason": "no_accepted_records",
             }
+
+        ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
+        if isinstance(ml_prediction, dict) and ml_prediction.get("is_anomaly") is True:
+            deltas = ml_prediction.get("deltas") or {}
+            anomalies.append({
+                "source": "ml",
+                "device_id": gateway_id,
+                "gateway_id": gateway_id,
+                "metric": "breakage_detection",
+                "delta": deltas.get("flow_delta"),
+                "reason": f"ml_confidence={ml_prediction.get('confidence')}",
+                "deltas": deltas,
+                "timestamp": ml_prediction.get("timestamp"),
+            })
 
         return Response({
             "success": True,
