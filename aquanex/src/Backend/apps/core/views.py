@@ -216,40 +216,42 @@ def _tb_find_gateway_device(token, gateway_id, protocol=None):
     if isinstance(fallback, dict) and fallback.get("id"):
         return fallback
 
-    # Protocol-aware scan: match entered ID against gateway identity attributes.
+    # Protocol-aware scan first, then lenient scan without protocol filter.
     keys = _tb_gateway_identifier_keys(protocol)
-    page = 0
-    while page < 20:
-        listing = _tb_request(
-            "GET",
-            "/api/tenant/deviceInfos",
-            token=token,
-            params={"pageSize": 100, "page": page},
-        )
-        rows = listing.get("data", []) if isinstance(listing, dict) else []
-        if not rows:
-            break
+    protocol_hint = str(protocol or "").strip().lower()
+    for strict_protocol in (True, False):
+        page = 0
+        while page < 20:
+            listing = _tb_request(
+                "GET",
+                "/api/tenant/deviceInfos",
+                token=token,
+                params={"pageSize": 100, "page": page},
+            )
+            rows = listing.get("data", []) if isinstance(listing, dict) else []
+            if not rows:
+                break
 
-        for row in rows:
-            device_id = _tb_entity_id(row)
-            if not device_id:
-                continue
-            attrs = _tb_get_attrs(token, str(device_id))
-            if not attrs:
-                continue
+            for row in rows:
+                device_id = _tb_entity_id(row)
+                if not device_id:
+                    continue
+                attrs = _tb_get_attrs(token, str(device_id))
+                if not attrs:
+                    continue
 
-            proto_attr = str(attrs.get("protocol") or attrs.get("transport_protocol") or "").strip().lower()
-            if protocol and proto_attr and proto_attr != str(protocol).strip().lower():
-                continue
+                proto_attr = str(attrs.get("protocol") or attrs.get("transport_protocol") or "").strip().lower()
+                if strict_protocol and protocol_hint and proto_attr and proto_attr != protocol_hint:
+                    continue
 
-            for key in keys:
-                value = attrs.get(key)
-                if str(value or "").strip() == gateway_id:
-                    return row
-        if bool(listing.get("hasNext")):
-            page += 1
-        else:
-            break
+                for key in keys:
+                    value = attrs.get(key)
+                    if str(value or "").strip() == gateway_id:
+                        return row
+            if bool(listing.get("hasNext")):
+                page += 1
+            else:
+                break
     return None
 
 

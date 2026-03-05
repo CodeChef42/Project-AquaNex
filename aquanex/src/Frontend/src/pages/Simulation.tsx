@@ -188,7 +188,7 @@ const Simulation = () => {
     const telemetry = buildTelemetryBatch();
     const anomalyMode = Boolean((telemetry[0] as any)?.__anomalyMode);
     if (lastModeRef.current !== (anomalyMode ? "anomaly" : "normal")) {
-      addLog("info", anomalyMode ? "Simulation mode: FORCED ANOMALY (15s window)" : "Simulation mode: NORMAL");
+      // addLog("info", anomalyMode ? "Simulation mode: FORCED ANOMALY (15s window)" : "Simulation mode: NORMAL");
       lastModeRef.current = anomalyMode ? "anomaly" : "normal";
     }
     setRecords((prev) => {
@@ -208,25 +208,38 @@ const Simulation = () => {
     });
     setIsSending(true);
     try {
-      addLog("info", `POST /gateway-telemetry/ (${telemetry.length} records)`);
+      // addLog("info", `POST /gateway-telemetry/ (${telemetry.length} records)`);
       const response = await api.post("/gateway-telemetry/", {
         gateway_id: gatewayId,
         telemetry: telemetry.map(({ __anomalyMode, ...row }: any) => row),
       });
-      const accepted = Number(response?.data?.accepted || 0);
-      const rejectedCount = Array.isArray(response?.data?.rejected)
-        ? response.data.rejected.length
-        : 0;
-      const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
+      // const accepted = Number(response?.data?.accepted || 0);
+      // const rejectedCount = Array.isArray(response?.data?.rejected)
+      //   ? response.data.rejected.length
+      //   : 0;
+      // const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
       const mlInference = response?.data?.ml_inference;
-      addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
-      if (mlInference?.queued) {
-        addLog("info", `ML inference queued (task: ${mlInference.task_id || "n/a"})`);
+      // addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
+      
+      const prediction = mlInference?.prediction;
+      if (prediction) {
+        const deltas = prediction.deltas || {};
+        const isAnomaly = prediction.is_anomaly;
+        const status = isAnomaly ? "ANOMALY" : "NORMAL";
+        const flowDelta = typeof deltas.flow_delta === 'number' ? deltas.flow_delta.toFixed(2) : 'N/A';
+        const pressureDelta = typeof deltas.pressure_delta === 'number' ? deltas.pressure_delta.toFixed(2) : 'N/A';
+        
+        const level = isAnomaly ? "error" : "success";
+        addLog(level, `[${status}] ΔFlow: ${flowDelta}, ΔPressure: ${pressureDelta}`);
+      } else if (mlInference?.queued) {
+        // addLog("info", `ML inference queued (task: ${mlInference.task_id || "n/a"})`);
       } else if (mlInference?.reason) {
-        addLog("info", `ML inference skipped: ${mlInference.reason}`);
+        // addLog("info", `ML inference skipped: ${mlInference.reason}`);
       } else if (mlInference?.error) {
         addLog("error", `ML inference queue failed: ${mlInference.error}`);
       }
+      
+      /*
       if (anomalies.length > 0) {
         addLog("error", `Anomalies detected: ${anomalies.length}`);
         anomalies.forEach((anomaly: any) => {
@@ -236,6 +249,7 @@ const Simulation = () => {
           );
         });
       }
+      */
       await fetchWorkspace();
     } catch (error: any) {
       const details =
