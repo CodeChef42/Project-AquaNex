@@ -1,5 +1,4 @@
 import { useState } from "react";
-import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 import { useNavigate } from "react-router-dom";
 import Logo from "@/components/Logo";
 
@@ -18,9 +17,9 @@ const Header = () => {
     navigate("/signin");
   };
 
-  const handleGetStarted = () => {
+  const handleSignUp = () => {
     setMobileOpen(false);
-    navigate("/signin");
+    navigate("/signup");
   };
 
   return (
@@ -48,9 +47,8 @@ const Header = () => {
           >
             Login
           </button>
-          <button type="button" onClick={handleGetStarted} className="btn-primary text-sm">
-            Get Started
-            <img src={rightArrowIcon} alt="Get started" className="h-5 w-5 ml-1" />
+          <button type="button" onClick={handleSignUp} className="btn-primary text-sm">
+            Sign Up
           </button>
         </div>
 
@@ -83,9 +81,8 @@ const Header = () => {
             >
               Login
             </button>
-            <button type="button" onClick={handleGetStarted} className="btn-primary text-sm">
-              Get Started
-              <img src={rightArrowIcon} alt="Get started" className="h-5 w-5 ml-1" />
+            <button type="button" onClick={handleSignUp} className="btn-primary text-sm">
+              Sign Up
             </button>
           </div>
         </div>
@@ -95,4 +92,3 @@ const Header = () => {
 };
 
 export default Header;
-
