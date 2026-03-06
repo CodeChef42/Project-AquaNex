@@ -1,4 +1,4 @@
-import { Search, Settings, User } from "lucide-react";
+import { Map, Search, Settings, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -7,12 +7,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Logo from "@/components/Logo";
+import GlobalMapView from "@/components/GlobalMapView";
 
 const GlobalHeader = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [mapOpen, setMapOpen] = useState(false);
 
   return (
     <header className="h-14 border-b border-border bg-background flex items-center justify-between px-4 shrink-0">
@@ -36,6 +39,10 @@ const GlobalHeader = () => {
             Workspaces
           </Button>
         )}
+        <Button variant="outline" onClick={() => setMapOpen(true)}>
+          <Map className="w-4 h-4 mr-2" />
+          Map View
+        </Button>
 
         {/* Profile Dropdown */}
         <DropdownMenu>
@@ -52,6 +59,7 @@ const GlobalHeader = () => {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      <GlobalMapView open={mapOpen} onOpenChange={setMapOpen} />
     </header>
   );
 };
