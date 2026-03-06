@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
@@ -8,15 +9,6 @@ import Breadcrumbs from "@/components/Breadcrumbs";
 import PipelineAlertCard from "@/components/PipelineAlertCard";
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-
-const alerts = [
-  { id: "831", severity: "high", time: "3m ago", location: "Zone 3, Pipe 845-D", type: "Pressure Drop", pipeLength: "150m", pipeType: "PVC" },
-  { id: "830", severity: "critical", time: "15m ago", location: "Zone 5, Pipe 902-A", type: "Flow Interruption", pipeLength: "200m", pipeType: "Steel" },
-  { id: "829", severity: "medium", time: "22m ago", location: "Zone 2, Pipe 674-C", type: "Minor Leak", pipeLength: "100m", pipeType: "HDPE" },
-  { id: "828", severity: "high", time: "35m ago", location: "Zone 4, Pipe 773-B", type: "Pressure Surge", pipeLength: "180m", pipeType: "PVC" },
-  { id: "827", severity: "critical", time: "41m ago", location: "Zone 1, Pipe 556-E", type: "Pipe Break", pipeLength: "250m", pipeType: "Steel" },
-  { id: "826", severity: "medium", time: "48m ago", location: "Zone 3, Pipe 821-D", type: "Sensor Anomaly", pipeLength: "120m", pipeType: "HDPE" },
-];
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
@@ -49,7 +41,34 @@ const FitMapToPoints = ({
 const PipelinesManagementPage = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
-  const [alertQueue] = useState(14);
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchIncidents = async () => {
+    try {
+      const res = await api.get("/incidents/");
+      setIncidents(res.data);
+    } catch (err) {
+      console.error("Failed to fetch incidents", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchIncidents();
+    const interval = setInterval(fetchIncidents, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleResolve = async (id: string) => {
+    try {
+      await api.post(`/incidents/${id}/resolve/`);
+      fetchIncidents();
+    } catch (err) {
+      console.error("Failed to resolve incident", err);
+    }
+  };
 
   const devices = Array.isArray(workspace?.devices) ? workspace.devices : [];
   const geolocatedDevices = devices.filter(
@@ -135,8 +154,24 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  const sortedAlerts = alerts.sort((a, b) => getSeverityPriority(b.severity) - getSeverityPriority(a.severity));
-  const topAlerts = sortedAlerts.slice(0, 5); // Top 3-5, but take 5 to be safe
+  const mappedAlerts = incidents.map((inc: any) => ({
+    id: inc.id,
+    severity: inc.severity || "medium",
+    time: new Date(inc.last_seen_at || inc.detected_at).toLocaleTimeString(),
+    location: `Gateway ${inc.gateway_id}`,
+    type: inc.incident_type,
+    pipeLength: "N/A",
+    pipeType: "N/A",
+    status: inc.status
+  }));
+
+  const sortedAlerts = mappedAlerts.sort((a: any, b: any) => {
+     if (a.status === 'recovering' && b.status !== 'recovering') return -1;
+     if (b.status === 'recovering' && a.status !== 'recovering') return 1;
+     return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+  });
+  
+  const topAlerts = sortedAlerts.slice(0, 5);
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -237,9 +272,15 @@ const PipelinesManagementPage = () => {
         <div className="lg:col-span-2 space-y-4">
           <h2 className="text-xl font-semibold text-foreground">Top Priority Alerts</h2>
 
-          {topAlerts.map((alert) => (
-            <PipelineAlertCard key={alert.id} alert={alert} />
-          ))}
+          {loading ? (
+             <p>Loading alerts...</p>
+          ) : topAlerts.length === 0 ? (
+             <p>No active alerts.</p>
+          ) : (
+            topAlerts.map((alert) => (
+              <PipelineAlertCard key={alert.id} alert={alert} onResolve={handleResolve} />
+            ))
+          )}
         </div>
 
         {/* Alert Queue Summary */}
@@ -249,7 +290,7 @@ const PipelinesManagementPage = () => {
           <Card>
             <CardContent className="pt-6 space-y-3">
               <div className="text-center">
-                <p className="text-3xl font-bold text-primary">{alertQueue}</p>
+                <p className="text-3xl font-bold text-primary">{incidents.length}</p>
                 <p className="text-sm text-muted-foreground">Total Alerts in Queue</p>
               </div>
               <Button

@@ -2,7 +2,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
-import numpy as np
+try:
+    import numpy as np
+except Exception:
+    np = None
 from pathlib import Path
 import json
 from datetime import datetime
@@ -10,6 +13,8 @@ import paho.mqtt.client as mqtt
 import threading
 import time
 import re
+import os
+import tempfile
 from typing import Any, Dict, List, Optional
 
 
@@ -70,8 +75,13 @@ class SensorData(BaseModel):
 class PredictionResponse(BaseModel):
     is_anomaly: bool
     confidence: float
+    event_type: str
+    anomaly_type: Optional[str] = None
+    severity: Optional[str] = None
     input_data: dict
     deltas: dict
+    rule: dict
+    ml: Optional[dict] = None
     timestamp: str
 
 
@@ -103,6 +113,121 @@ def calculate_deltas(flow_1, pressure_1, flow_2, pressure_2):
         'pressure_delta': pressure_delta,
         'flow_ratio': flow_ratio,
         'pressure_ratio': pressure_ratio
+    }
+
+
+RULE_THRESHOLDS = {
+    "breakage_disparity_ratio": float(os.environ.get("ML_BREAKAGE_DISPARITY_RATIO", "3.0")),
+    "leakage_disparity_ratio": float(os.environ.get("ML_LEAKAGE_DISPARITY_RATIO", "1.5")),
+    "breakage_relative_delta": float(os.environ.get("ML_BREAKAGE_RELATIVE_DELTA", "0.6")),
+    "leakage_relative_delta": float(os.environ.get("ML_LEAKAGE_RELATIVE_DELTA", "0.25")),
+    "breakage_flow_delta_abs": float(os.environ.get("ML_BREAKAGE_FLOW_DELTA_ABS", "50")),
+    "leakage_flow_delta_abs": float(os.environ.get("ML_LEAKAGE_FLOW_DELTA_ABS", "20")),
+    "breakage_pressure_delta_abs": float(os.environ.get("ML_BREAKAGE_PRESSURE_DELTA_ABS", "6")),
+    "leakage_pressure_delta_abs": float(os.environ.get("ML_LEAKAGE_PRESSURE_DELTA_ABS", "2")),
+}
+
+
+def _disparity_ratio(a: float, b: float) -> float:
+    top = max(abs(a), abs(b))
+    bottom = max(min(abs(a), abs(b)), 1e-9)
+    return float(top / bottom)
+
+
+def _classify_by_rules(snapshot: Dict[str, float], deltas: Dict[str, float]) -> Dict[str, Any]:
+    flow_1 = float(snapshot["flow_1"])
+    flow_2 = float(snapshot["flow_2"])
+    pressure_1 = float(snapshot["pressure_1"])
+    pressure_2 = float(snapshot["pressure_2"])
+
+    flow_delta = float(deltas.get("flow_delta") or 0.0)
+    pressure_delta = float(deltas.get("pressure_delta") or 0.0)
+
+    flow_disparity = _disparity_ratio(flow_1, flow_2)
+    pressure_disparity = _disparity_ratio(pressure_1, pressure_2)
+    flow_rel = flow_delta / max(max(abs(flow_1), abs(flow_2)), 1e-9)
+    pressure_rel = pressure_delta / max(max(abs(pressure_1), abs(pressure_2)), 1e-9)
+
+    reasons: List[str] = []
+    thresholds = RULE_THRESHOLDS.copy()
+    metrics = {
+        "flow_disparity": flow_disparity,
+        "pressure_disparity": pressure_disparity,
+        "flow_relative_delta": flow_rel,
+        "pressure_relative_delta": pressure_rel,
+    }
+
+    breakage = (
+        flow_disparity >= thresholds["breakage_disparity_ratio"]
+        or pressure_disparity >= thresholds["breakage_disparity_ratio"]
+        or flow_rel >= thresholds["breakage_relative_delta"]
+        or pressure_rel >= thresholds["breakage_relative_delta"]
+        or flow_delta >= thresholds["breakage_flow_delta_abs"]
+        or pressure_delta >= thresholds["breakage_pressure_delta_abs"]
+    )
+    leakage = (
+        flow_disparity >= thresholds["leakage_disparity_ratio"]
+        or pressure_disparity >= thresholds["leakage_disparity_ratio"]
+        or flow_rel >= thresholds["leakage_relative_delta"]
+        or pressure_rel >= thresholds["leakage_relative_delta"]
+        or flow_delta >= thresholds["leakage_flow_delta_abs"]
+        or pressure_delta >= thresholds["leakage_pressure_delta_abs"]
+    )
+
+    if breakage:
+        if flow_delta >= thresholds["breakage_flow_delta_abs"]:
+            reasons.append("flow_delta_abs")
+        if pressure_delta >= thresholds["breakage_pressure_delta_abs"]:
+            reasons.append("pressure_delta_abs")
+        if flow_disparity >= thresholds["breakage_disparity_ratio"]:
+            reasons.append("flow_disparity_ratio")
+        if pressure_disparity >= thresholds["breakage_disparity_ratio"]:
+            reasons.append("pressure_disparity_ratio")
+        if flow_rel >= thresholds["breakage_relative_delta"]:
+            reasons.append("flow_relative_delta")
+        if pressure_rel >= thresholds["breakage_relative_delta"]:
+            reasons.append("pressure_relative_delta")
+        return {
+            "event_type": "anomaly",
+            "anomaly_type": "breakage",
+            "severity": "high",
+            "confidence": 0.95,
+            "reasons": reasons,
+            "thresholds": thresholds,
+            "metrics": metrics,
+        }
+
+    if leakage:
+        if flow_delta >= thresholds["leakage_flow_delta_abs"]:
+            reasons.append("flow_delta_abs")
+        if pressure_delta >= thresholds["leakage_pressure_delta_abs"]:
+            reasons.append("pressure_delta_abs")
+        if flow_disparity >= thresholds["leakage_disparity_ratio"]:
+            reasons.append("flow_disparity_ratio")
+        if pressure_disparity >= thresholds["leakage_disparity_ratio"]:
+            reasons.append("pressure_disparity_ratio")
+        if flow_rel >= thresholds["leakage_relative_delta"]:
+            reasons.append("flow_relative_delta")
+        if pressure_rel >= thresholds["leakage_relative_delta"]:
+            reasons.append("pressure_relative_delta")
+        return {
+            "event_type": "anomaly",
+            "anomaly_type": "leakage",
+            "severity": "medium",
+            "confidence": 0.8,
+            "reasons": reasons,
+            "thresholds": thresholds,
+            "metrics": metrics,
+        }
+
+    return {
+        "event_type": "normal",
+        "anomaly_type": None,
+        "severity": None,
+        "confidence": 0.2,
+        "reasons": [],
+        "thresholds": thresholds,
+        "metrics": metrics,
     }
 
 
@@ -147,29 +272,53 @@ def _infer_sensor_index(*parts):
 
 
 def _predict_from_snapshot(snapshot):
-    if model is None:
-        raise RuntimeError("Model not loaded")
-
     deltas = calculate_deltas(
         snapshot["flow_1"],
         snapshot["pressure_1"],
         snapshot["flow_2"],
         snapshot["pressure_2"],
     )
-    features = np.array([[
-        deltas["flow_delta"],
-        deltas["pressure_delta"],
-        deltas["flow_ratio"],
-        deltas["pressure_ratio"],
-    ]])
-    prediction = model.predict(features)[0]
-    probability = model.predict_proba(features)[0]
+    rule_result = _classify_by_rules(snapshot, deltas)
+
+    ml_payload = None
+    ml_is_anomaly = None
+    ml_confidence = None
+    if model is not None and np is not None:
+        features = np.array([[
+            deltas["flow_delta"],
+            deltas["pressure_delta"],
+            deltas["flow_ratio"],
+            deltas["pressure_ratio"],
+        ]])
+        prediction = model.predict(features)[0]
+        probability = model.predict_proba(features)[0]
+        ml_is_anomaly = bool(prediction)
+        ml_confidence = float(probability[int(prediction)])
+        ml_payload = {
+            "is_anomaly": ml_is_anomaly,
+            "confidence": ml_confidence,
+        }
+
+    is_anomaly = rule_result["event_type"] == "anomaly"
+    confidence = float(rule_result["confidence"])
+    if not is_anomaly and ml_confidence is not None:
+        is_anomaly = bool(ml_is_anomaly)
+        confidence = float(ml_confidence)
 
     return {
-        "is_anomaly": bool(prediction),
-        "confidence": float(probability[int(prediction)]),
+        "is_anomaly": bool(is_anomaly),
+        "confidence": confidence,
+        "event_type": rule_result["event_type"],
+        "anomaly_type": rule_result["anomaly_type"],
+        "severity": rule_result["severity"],
         "input_data": snapshot,
         "deltas": deltas,
+        "rule": {
+            "reasons": rule_result["reasons"],
+            "thresholds": rule_result["thresholds"],
+            "metrics": rule_result["metrics"],
+        },
+        "ml": ml_payload,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -191,51 +340,29 @@ def run_prediction():
     
     last_prediction_time = current_time
     
-    # Calculate deltas
-    deltas = calculate_deltas(
-        latest_sensor_data['flow_1'],
-        latest_sensor_data['pressure_1'],
-        latest_sensor_data['flow_2'],
-        latest_sensor_data['pressure_2']
-    )
-    
-    # Run prediction using deltas
-    if model is not None:
-        try:
-            # Features: flow_delta, pressure_delta, flow_ratio, pressure_ratio
-            features = np.array([[
-                deltas['flow_delta'],
-                deltas['pressure_delta'],
-                deltas['flow_ratio'],
-                deltas['pressure_ratio']
-            ]])
-            
-            prediction = model.predict(features)[0]
-            probability = model.predict_proba(features)[0]
-            
-            latest_prediction = {
-                'is_anomaly': bool(prediction),
-                'confidence': float(probability[int(prediction)]),
-                'input_data': latest_sensor_data.copy(),
-                'deltas': deltas,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            status = "ANOMALY DETECTED" if prediction else "Normal"
-            print(f"\nPrediction: {status} | Confidence: {probability[int(prediction)]:.2%}")
-            print(f"   Upstream   - Flow: {latest_sensor_data['flow_1']:.2f}, Pressure: {latest_sensor_data['pressure_1']:.2f}")
-            print(f"   Downstream - Flow: {latest_sensor_data['flow_2']:.2f}, Pressure: {latest_sensor_data['pressure_2']:.2f}")
-            print(f"   Delta      - Flow: {deltas['flow_delta']:.2f}, Pressure: {deltas['pressure_delta']:.2f}")
-            print(f"   Ratio      - Flow: {deltas['flow_ratio']:.2f}, Pressure: {deltas['pressure_ratio']:.2f}")
-            
-            # Reset buffer after prediction
-            latest_sensor_data['flow_1'] = None
-            latest_sensor_data['pressure_1'] = None
-            latest_sensor_data['flow_2'] = None
-            latest_sensor_data['pressure_2'] = None
-            
-        except Exception as e:
-            print(f"Prediction error: {e}")
+    try:
+        snapshot = {
+            "flow_1": float(latest_sensor_data["flow_1"]),
+            "pressure_1": float(latest_sensor_data["pressure_1"]),
+            "flow_2": float(latest_sensor_data["flow_2"]),
+            "pressure_2": float(latest_sensor_data["pressure_2"]),
+        }
+        latest_prediction = _predict_from_snapshot(snapshot)
+        label = latest_prediction.get("anomaly_type") or latest_prediction.get("event_type")
+        conf = latest_prediction.get("confidence")
+        deltas = latest_prediction.get("deltas") or {}
+        print(f"\nPrediction: {str(label).upper()} | Confidence: {float(conf):.2%}")
+        print(f"   Upstream   - Flow: {snapshot['flow_1']:.2f}, Pressure: {snapshot['pressure_1']:.2f}")
+        print(f"   Downstream - Flow: {snapshot['flow_2']:.2f}, Pressure: {snapshot['pressure_2']:.2f}")
+        print(f"   Delta      - Flow: {float(deltas.get('flow_delta') or 0):.2f}, Pressure: {float(deltas.get('pressure_delta') or 0):.2f}")
+        print(f"   Ratio      - Flow: {float(deltas.get('flow_ratio') or 0):.2f}, Pressure: {float(deltas.get('pressure_ratio') or 0):.2f}")
+    except Exception as e:
+        print(f"Prediction error: {e}")
+    finally:
+        latest_sensor_data['flow_1'] = None
+        latest_sensor_data['pressure_1'] = None
+        latest_sensor_data['flow_2'] = None
+        latest_sensor_data['pressure_2'] = None
 
 
 
@@ -317,11 +444,49 @@ def stop_mqtt():
 async def startup_event():
     global model
     model_path = Path(__file__).parent.parent / "ML_models" / "models" / "breakage_detection_model.pkl"
+    loaded = False
     try:
         model = joblib.load(model_path)
+        loaded = True
         print(f"Model loaded from {model_path}")
     except Exception as e:
-        print(f"Failed to load model: {e}")
+        print(f"Failed to load local model: {e}")
+
+    if not loaded and os.getenv("MODEL_BUCKET") and os.getenv("AWS_S3_ENDPOINT_URL"):
+        try:
+            import boto3
+
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url=os.getenv("AWS_S3_ENDPOINT_URL"),
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            )
+            bucket = os.getenv("MODEL_BUCKET")
+            candidates = [
+                os.getenv("MODEL_KEY") or "",
+                "models/breakage_detection_model.pkl",
+                "models/breakage_detection.pkl",
+                "models/breakage_detection_model.pkl",
+            ]
+            candidates = [c for c in candidates if c]
+            last_error = None
+            for key in candidates:
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+                        s3_client.download_file(bucket, key, tmp.name)
+                        model = joblib.load(tmp.name)
+                    os.unlink(tmp.name)
+                    loaded = True
+                    print(f"Model loaded from bucket={bucket} key={key}")
+                    break
+                except Exception as inner:
+                    last_error = inner
+                    continue
+            if not loaded and last_error:
+                raise last_error
+        except Exception as e:
+            print(f"Failed to load model from object storage: {e}")
     
     # Start MQTT in a separate thread
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
@@ -377,9 +542,6 @@ async def get_live_data():
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_breakage(data: SensorData):
     """Manual prediction endpoint (for testing without MQTT)"""
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-    
     try:
         result = _predict_from_snapshot({
             "flow_1": data.flow_1,
@@ -394,9 +556,6 @@ async def predict_breakage(data: SensorData):
 
 @app.post("/telemetry/ingest")
 async def ingest_telemetry(data: TelemetryIngestRequest):
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
     gateway_id = str(data.gateway_id or "").strip()
     if not gateway_id:
         raise HTTPException(status_code=400, detail="gateway_id is required")
@@ -481,46 +640,6 @@ async def ingest_telemetry(data: TelemetryIngestRequest):
     }
 
 
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
-
-# Add to top (after imports)
-import boto3
-import joblib
-import tempfile
-import os
-from functools import lru_cache
-
-s3_client = boto3.client(
-    's3',
-    endpoint_url=os.getenv('AWS_S3_ENDPOINT_URL'),
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
-)
-
-@lru_cache(maxsize=6)
-def load_model(model_name: str):
-    bucket = os.getenv('MODEL_BUCKET')
-    key = f"models/{model_name}.pkl"
-    with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp:
-        s3_client.download_file(bucket, key, tmp.name)
-        model = joblib.load(tmp.name)
-        os.unlink(tmp.name)
-        print(f"✅ Loaded {model_name} from R2")
-        return model
-
-# Update your /telemetry/ingest endpoint
-@app.post("/telemetry/ingest")
-async def ingest_telemetry(data: list[Telemetry], model_name: str = "breakage_detection"):
-    model = load_model(model_name)
-    results = []
-    for item in data:
-        # Your XGBoost prediction logic here
-        features = [[item.pressure_bar, item.flow_lps]]  # adjust features
-        prediction = model.predict(features)[0]
-        print(f"ANOMALY DETECTED: {item.device_id} score={prediction}")
-        results.append({"device_id": item.device_id, "anomaly": bool(prediction)})
-    return {"results": results}

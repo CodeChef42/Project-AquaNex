@@ -14,17 +14,20 @@ interface Alert {
   type: string;
   pipeLength: string;
   pipeType: string;
+  status?: string;
 }
 
 interface PipelineAlertCardProps {
   alert: Alert;
+  onResolve?: (id: string) => void;
 }
 
-const PipelineAlertCard = ({ alert }: PipelineAlertCardProps) => {
+const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
   const [showMap, setShowMap] = useState(false);
   const [showAllocate, setShowAllocate] = useState(false);
 
   const getSeverityColor = (severity: string) => {
+    if (alert.status === 'recovering') return "default";
     switch (severity) {
       case "critical":
         return "destructive";
@@ -87,24 +90,50 @@ const PipelineAlertCard = ({ alert }: PipelineAlertCardProps) => {
               </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              onClick={() => setShowMap(true)}
-            >
-              Map / Navigate
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              onClick={() => setShowAllocate(true)}
-            >
-              Allocate Resources
-            </Button>
-          </div>
+          {alert.status === 'recovering' ? (
+            <div className="flex flex-col gap-2">
+              <div className="p-2 bg-green-50 border border-green-200 rounded-md text-xs text-green-700">
+                Normal data flow detected. Is the issue resolved?
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setShowMap(true)}
+                >
+                  Map
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => onResolve && onResolve(alert.id)}
+                >
+                  Confirm Fix
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => setShowMap(true)}
+              >
+                Map / Navigate
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => setShowAllocate(true)}
+              >
+                Allocate Resources
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

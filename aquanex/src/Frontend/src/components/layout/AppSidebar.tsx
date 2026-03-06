@@ -14,13 +14,16 @@ import { NavLink } from "@/components/NavLink";
 import {
   Sidebar,
   SidebarContent,
+  SidebarHeader,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
+  SidebarSeparator,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
+  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -54,16 +57,28 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar>
+    <Sidebar collapsible="icon">
+      <SidebarHeader className="p-3">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar/60 px-2 py-1.5">
+          <div className="min-w-0">
+            {open && <div className="text-xs font-semibold tracking-wide text-sidebar-foreground">Navigation</div>}
+          </div>
+          <SidebarTrigger className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" />
+        </div>
+      </SidebarHeader>
+      <SidebarSeparator />
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Main Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <NavLink to={item.url}>
+                  <SidebarMenuButton asChild tooltip={item.title} variant="outline">
+                    <NavLink
+                      to={item.url}
+                      className="bg-transparent"
+                      activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
+                    >
                       <item.icon />
                       {open && <span>{item.title}</span>}
                     </NavLink>
@@ -85,6 +100,7 @@ export function AppSidebar() {
           {open && <span>Logout</span>}
         </Button>
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
   );
 }

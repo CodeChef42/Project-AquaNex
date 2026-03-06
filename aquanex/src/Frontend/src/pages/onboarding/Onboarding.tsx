@@ -494,28 +494,38 @@ const Onboarding = () => {
  const calculateArea = (coords: number[][]): number => {
   if (coords.length < 3) return 0;
 
-  // coords are [[lng, lat], ...]
-  // approximate meters using equirectangular projection around polygon centroid
-  const lats = coords.map(([, lat]) => lat);
-  const lngs = coords.map(([lng]) => lng);
-  const lat0 = (Math.min(...lats) + Math.max(...lats)) / 2;
-  const lng0 = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+  const polygon =
+    coords.length >= 2 &&
+    coords[0][0] === coords[coords.length - 1][0] &&
+    coords[0][1] === coords[coords.length - 1][1]
+      ? coords.slice(0, -1)
+      : coords;
 
-  const R = 6371000; // Earth radius in meters
+  if (polygon.length < 3) return 0;
 
-  const projected = coords.map(([lng, lat]) => {
-    const x = ((lng - lng0) * Math.PI / 180) * R * Math.cos(lat0 * Math.PI / 180);
-    const y = ((lat - lat0) * Math.PI / 180) * R;
-    return [x, y];
-  });
+  const R = 6378137;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
 
-  const areaRaw = projected.reduce((sum, [x1, y1], i, arr) => {
-    const [x2, y2] = arr[(i + 1) % arr.length];
-    return sum + (x1 * y2 - x2 * y1);
-  }, 0);
+  let sum = 0;
+  for (let i = 0; i < polygon.length; i++) {
+    const [lng1, lat1] = polygon[i];
+    const [lng2, lat2] = polygon[(i + 1) % polygon.length];
+    const phi1 = toRad(lat1);
+    const phi2 = toRad(lat2);
+    const lam1 = toRad(lng1);
+    const lam2 = toRad(lng2);
+    sum += (lam2 - lam1) * (2 + Math.sin(phi1) + Math.sin(phi2));
+  }
 
-  return Math.abs(areaRaw) / 2; // m²
+  return Math.abs((sum * R * R) / 2);
 };
+
+  const formatArea = (areaM2: number) => {
+    const area = Number.isFinite(areaM2) ? Math.max(0, areaM2) : 0;
+    if (area >= 1_000_000) return `${(area / 1_000_000).toFixed(2)} km²`;
+    if (area >= 10_000) return `${(area / 10_000).toFixed(2)} ha`;
+    return `${Math.round(area).toLocaleString()} m²`;
+  };
 
 
   const handleFinish = async () => {
@@ -1266,7 +1276,7 @@ const Onboarding = () => {
           <div className="p-4 rounded-2xl bg-blue-50 border border-blue-100 space-y-3">
             <p className="text-sm font-medium">
               {finalLayoutPolygon.length
-                ? `Mapped area: ${(finalLayoutArea / 1000).toFixed(1)}k m²`
+                ? `Mapped area: ${formatArea(finalLayoutArea)}`
                 : "Draw an area on the map to estimate its size."}
             </p>
             <input
@@ -1478,7 +1488,7 @@ const Onboarding = () => {
 
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  Final area: {(finalLayoutArea / 1000).toFixed(2)}k m²
+                  Final area: {formatArea(finalLayoutArea)}
                 </p>
                 <label className="text-xs font-medium text-muted-foreground">
                   Final coordinates (lng, lat)
@@ -1887,7 +1897,7 @@ const Onboarding = () => {
               {
                 label: "Layout Area",
                 value: data.layout.polygon.length
-                  ? `${(data.layout.area_m2 / 1000).toFixed(1)}k m²`
+                  ? formatArea(data.layout.area_m2)
                   : "Not mapped",
               },
               {

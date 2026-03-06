@@ -181,6 +181,9 @@ const Simulation = () => {
   const simulationStartMsRef = useRef<number | null>(null);
   const autoStartArmedRef = useRef(false);
 
+  // New state for UI visualization of phase
+  const [currentPhase, setCurrentPhase] = useState<"Normal" | "Leak" | "Breakage">("Normal");
+
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo<WorkspaceDevice[]>(
     () => (Array.isArray(workspace?.devices) ? (workspace?.devices as WorkspaceDevice[]) : []),
@@ -244,7 +247,14 @@ const Simulation = () => {
     }
 
     const elapsedMs = Date.now() - simulationStartMsRef.current;
-    const highDeltaMode = elapsedMs >= 20000;
+    
+    // Cycle: 0-20s Normal -> 20-35s Leak -> 35-50s Breakage -> 50+ Normal
+    let phase: "Normal" | "Leak" | "Breakage" = "Normal";
+    if (elapsedMs >= 20000 && elapsedMs < 35000) {
+      phase = "Leak";
+    } else if (elapsedMs >= 35000 && elapsedMs < 50000) {
+      phase = "Breakage";
+    }
 
     return activeDevices.map((device) => {
       const metric = inferMetric(device);
@@ -253,11 +263,34 @@ const Simulation = () => {
       const sensorIndex = inferSensorIndex(device);
 
       let reading = valueForMetric(metric, prev);
-      if (highDeltaMode && (group === "flow" || group === "pressure") && sensorIndex) {
-        if (group === "flow") {
-          reading = sensorIndex === 1 ? randomAround(85, 0.6) : randomAround(35, 0.6);
+
+      // Apply phase-specific logic for Pipeline Flow/Pressure
+      if ((group === "flow" || group === "pressure") && sensorIndex) {
+        if (phase === "Leak") {
+          // Leak: Medium Disparity (Flow diff ~15-20, Pressure diff ~1.0)
+          if (group === "flow") {
+            // Normal ~50, Leak: Upstream ~65, Downstream ~45 (Diff ~20)
+            reading = sensorIndex === 1 ? randomAround(65, 2) : randomAround(45, 2);
+          } else {
+            // Normal ~4 bar, Leak: Upstream ~4.0, Downstream ~3.0 (Diff ~1.0)
+            reading = sensorIndex === 1 ? randomAround(4.0, 0.1) : randomAround(3.0, 0.1);
+          }
+        } else if (phase === "Breakage") {
+          // Breakage: High Disparity (Flow diff > 50, Pressure diff > 3.0)
+          if (group === "flow") {
+            // Normal ~50, Breakage: Upstream ~85, Downstream ~15 (Diff ~70)
+            reading = sensorIndex === 1 ? randomAround(85, 3) : randomAround(15, 3);
+          } else {
+            // Normal ~4 bar, Breakage: Upstream ~4.5, Downstream ~0.5 (Diff ~4.0)
+            reading = sensorIndex === 1 ? randomAround(4.5, 0.2) : randomAround(0.5, 0.1);
+          }
         } else {
-          reading = sensorIndex === 1 ? randomAround(16, 0.2) : randomAround(6, 0.2);
+          // Normal: Low Disparity (Flow diff < 5, Pressure diff < 0.2)
+          if (group === "flow") {
+            reading = randomAround(50, 2); // Both around 50
+          } else {
+            reading = randomAround(4.0, 0.1); // Both around 4.0
+          }
         }
       }
 
@@ -275,6 +308,10 @@ const Simulation = () => {
     });
   };
 
+  const updatePhase = (newPhase: "Normal" | "Leak" | "Breakage") => {
+    setCurrentPhase(newPhase);
+  };
+
   const pushOnce = async () => {
     if (!gatewayId) {
       addLog("error", "No gateway is saved in workspace. Complete onboarding first.");
@@ -283,6 +320,17 @@ const Simulation = () => {
     if (activeDevices.length === 0) {
       addLog("error", "No enabled devices to simulate.");
       return;
+    }
+
+    // We can't update state directly inside buildTelemetryBatch if called from render cycle or frequent interval
+    // So we move the logic calculation here or accept the state update during the interval tick
+    
+    // For simplicity, let's duplicate the time check here to update UI state safely
+    if (simulationStartMsRef.current) {
+        const elapsedMs = Date.now() - simulationStartMsRef.current;
+        if (elapsedMs >= 20000 && elapsedMs < 35000) updatePhase("Leak");
+        else if (elapsedMs >= 35000 && elapsedMs < 50000) updatePhase("Breakage");
+        else updatePhase("Normal");
     }
 
     const telemetry = buildTelemetryBatch();
@@ -425,6 +473,14 @@ const Simulation = () => {
     { id: "water", label: "Water Quality" },
   ];
 
+  const getPhaseColor = () => {
+    switch (currentPhase) {
+      case "Leak": return "warning";
+      case "Breakage": return "destructive";
+      default: return "secondary";
+    }
+  };
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -449,6 +505,9 @@ const Simulation = () => {
             <Badge variant="secondary">Devices: {devices.length}</Badge>
             <Badge variant="secondary">Enabled: {activeDevices.length}</Badge>
             <Badge variant={isRunning ? "default" : "secondary"}>{isRunning ? "Streaming" : "Stopped"}</Badge>
+            {isRunning && (
+                <Badge variant={getPhaseColor() as any}>Phase: {currentPhase}</Badge>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

@@ -1,4 +1,4 @@
-import { LogOut, Search, Settings, User } from "lucide-react";
+import { Search, Settings, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -8,20 +8,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
-import { toast } from "sonner";
 import Logo from "@/components/Logo";
 
 const GlobalHeader = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
   const location = useLocation();
-
-  const handleLogout = () => {
-    logout();
-    toast.success("Successfully logged out");
-    navigate("/");
-  };
 
   return (
     <header className="h-14 border-b border-border bg-background flex items-center justify-between px-4 shrink-0">
@@ -57,10 +48,6 @@ const GlobalHeader = () => {
             <DropdownMenuItem onClick={() => navigate("/settings")}>
               <Settings className="w-4 h-4 mr-2" />
               Settings
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleLogout}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -5,12 +5,19 @@ import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
+import { LogOut } from "lucide-react";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
 const Workspaces = () => {
   const navigate = useNavigate();
-  const { workspaces, workspace, fetchWorkspaces, selectWorkspace } = useAuth();
+  const { workspaces, workspace, fetchWorkspaces, selectWorkspace, logout } = useAuth();
+  const formatArea = (areaM2: number) => {
+    const area = Number.isFinite(areaM2) ? Math.max(0, areaM2) : 0;
+    if (area >= 1_000_000) return `${(area / 1_000_000).toFixed(2)} km²`;
+    if (area >= 10_000) return `${(area / 10_000).toFixed(2)} ha`;
+    return `${Math.round(area).toLocaleString()} m²`;
+  };
 
   useEffect(() => {
     fetchWorkspaces();
@@ -43,6 +50,11 @@ const Workspaces = () => {
     navigate("/home");
   };
 
+  const handleLogout = () => {
+    logout();
+    navigate("/");
+  };
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -52,7 +64,13 @@ const Workspaces = () => {
             Monitor all irrigation spaces and switch workspace context.
           </p>
         </div>
-        <Button onClick={() => navigate("/onboarding?new=1")}>Create New Workspace</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleLogout}>
+            <LogOut className="h-4 w-4 mr-2" />
+            Logout
+          </Button>
+          <Button onClick={() => navigate("/onboarding?new=1")}>Create New Workspace</Button>
+        </div>
       </div>
 
       <Card>
@@ -94,7 +112,7 @@ const Workspaces = () => {
               <CardContent className="space-y-2 text-sm">
                 <p className="text-muted-foreground">Organization: {item.company_name || "—"}</p>
                 <p className="text-muted-foreground">
-                  Area: {item.layout_area_m2 ? `${(item.layout_area_m2 / 1000).toFixed(2)}k m²` : "Not mapped"}
+                  Area: {item.layout_area_m2 ? formatArea(item.layout_area_m2) : "Not mapped"}
                 </p>
                 <p className="text-muted-foreground">Modules: {item.modules?.length || 0}</p>
                 <div className="pt-2">
