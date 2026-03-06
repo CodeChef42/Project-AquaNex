@@ -986,7 +986,7 @@ class OnboardingView(APIView):
             workspace = Workspace.objects.create(
                 owner=user,
                 workspace_name=data.get('workspaceName', '') or "New Workspace",
-                company_name=data.get('companyName', '') or (fallback_workspace.company_name if fallback_workspace else ''),
+                company_name=data.get('companyName', '') or '',
                 company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
                 location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
                 team_size=data.get('teamSize', ''),

@@ -260,6 +260,17 @@ const Onboarding = () => {
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
+  const [detectedLayoutPlace, setDetectedLayoutPlace] = useState("");
+  const [detectedLayoutCoords, setDetectedLayoutCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [weatherStatus, setWeatherStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [weatherError, setWeatherError] = useState("");
+  const [weeklyForecast, setWeeklyForecast] = useState<{
+    time: string[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    precipitation_sum: number[];
+    windspeed_10m_max: number[];
+  } | null>(null);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
   const convexHull = (points: number[][]): number[][] => {
@@ -302,6 +313,120 @@ const Onboarding = () => {
     if (enabled.length < 3) return [];
     return convexHull(enabled);
   };
+
+  const centroidFromPolygon = (polygon: number[][]): { lat: number; lng: number } | null => {
+    const points = Array.isArray(polygon) ? polygon : [];
+    if (points.length < 3) return null;
+    const sums = points.reduce(
+      (acc, [lng, lat]) => {
+        const lngNum = Number(lng);
+        const latNum = Number(lat);
+        if (!Number.isFinite(lngNum) || !Number.isFinite(latNum)) return acc;
+        acc.lng += lngNum;
+        acc.lat += latNum;
+        acc.count += 1;
+        return acc;
+      },
+      { lat: 0, lng: 0, count: 0 }
+    );
+    if (sums.count < 3) return null;
+    return { lat: sums.lat / sums.count, lng: sums.lng / sums.count };
+  };
+
+  useEffect(() => {
+    if (!layoutConfirmed) {
+      setDetectedLayoutCoords(null);
+      setDetectedLayoutPlace("");
+      setWeatherStatus("idle");
+      setWeatherError("");
+      setWeeklyForecast(null);
+      return;
+    }
+
+    const polygon = data.layout.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) {
+      setDetectedLayoutCoords(null);
+      setDetectedLayoutPlace("");
+      setWeatherStatus("idle");
+      setWeatherError("");
+      setWeeklyForecast(null);
+      return;
+    }
+
+    const centroid = centroidFromPolygon(polygon);
+    if (!centroid) return;
+
+    const controller = new AbortController();
+    setDetectedLayoutCoords(centroid);
+    setWeatherStatus("loading");
+    setWeatherError("");
+
+    const lat = centroid.lat;
+    const lng = centroid.lng;
+
+    (async () => {
+      try {
+        const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
+          String(lat)
+        )}&lon=${encodeURIComponent(String(lng))}`;
+        const reverseResp = await fetch(reverseUrl, { signal: controller.signal });
+        const reverseJson: any = await reverseResp.json();
+
+        const address = reverseJson?.address || {};
+        const locality =
+          address.city ||
+          address.town ||
+          address.village ||
+          address.hamlet ||
+          address.suburb ||
+          address.state ||
+          "";
+        const country = address.country || "";
+        const label = [locality, country].filter(Boolean).join(", ");
+        const fallbackLabel = String(reverseJson?.display_name || "")
+          .split(",")
+          .slice(0, 2)
+          .join(",")
+          .trim();
+        setDetectedLayoutPlace(label || fallbackLabel);
+
+        const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(
+          String(lat)
+        )}&longitude=${encodeURIComponent(
+          String(lng)
+        )}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max&timezone=auto&forecast_days=7`;
+        const forecastResp = await fetch(forecastUrl, { signal: controller.signal });
+        const forecastJson: any = await forecastResp.json();
+
+        const daily = forecastJson?.daily || {};
+        const time = Array.isArray(daily?.time) ? daily.time : [];
+        const temperature_2m_max = Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max : [];
+        const temperature_2m_min = Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min : [];
+        const precipitation_sum = Array.isArray(daily?.precipitation_sum) ? daily.precipitation_sum : [];
+        const windspeed_10m_max = Array.isArray(daily?.windspeed_10m_max) ? daily.windspeed_10m_max : [];
+
+        if (!time.length) {
+          throw new Error("Weather forecast unavailable for this location.");
+        }
+
+        setWeeklyForecast({
+          time,
+          temperature_2m_max,
+          temperature_2m_min,
+          precipitation_sum,
+          windspeed_10m_max,
+        });
+        setWeatherStatus("ready");
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        setWeatherStatus("error");
+        setWeeklyForecast(null);
+        setWeatherError(e?.message || "Failed to load weather forecast.");
+      }
+    })();
+
+    return () => controller.abort();
+  }, [data.layout.polygon, layoutConfirmed]);
   const parseManualCoords = (raw: string): number[][] => {
     const matches = raw.match(/-?\d+(?:\.\d+)?/g) || [];
     if (matches.length < 6 || matches.length % 2 !== 0) return [];
@@ -1830,6 +1955,74 @@ const Onboarding = () => {
             <p className="text-muted-foreground mt-1">
               Enter crop/plant counts and irrigation systems to improve demand modeling.
             </p>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border p-4 bg-muted/20">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">One-week weather forecast</h3>
+              <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                Based on your confirmed layout
+              </span>
+            </div>
+
+            {!layoutConfirmed && (
+              <p className="text-xs text-muted-foreground">
+                Confirm your layout boundary first to auto-detect location and load weather.
+              </p>
+            )}
+
+            {layoutConfirmed && (
+              <>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <div>
+                    <span className="font-medium">Detected location:</span>{" "}
+                    <span>{detectedLayoutPlace || "Detecting..."}</span>
+                  </div>
+                  {detectedLayoutCoords && (
+                    <div className="font-mono">
+                      {detectedLayoutCoords.lat.toFixed(5)}, {detectedLayoutCoords.lng.toFixed(5)}
+                    </div>
+                  )}
+                </div>
+
+                {weatherStatus === "loading" && (
+                  <p className="text-xs text-muted-foreground">Loading forecast...</p>
+                )}
+
+                {weatherStatus === "error" && (
+                  <p className="text-xs text-destructive">{weatherError || "Failed to load forecast."}</p>
+                )}
+
+                {weatherStatus === "ready" && weeklyForecast && (
+                  <div className="rounded-xl border border-border overflow-hidden bg-background">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="text-left p-2">Day</th>
+                          <th className="text-left p-2">Min °C</th>
+                          <th className="text-left p-2">Max °C</th>
+                          <th className="text-left p-2">Precip (mm)</th>
+                          <th className="text-left p-2">Wind max (km/h)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {weeklyForecast.time.map((day, idx) => (
+                          <tr key={day} className="border-t border-border">
+                            <td className="p-2 font-mono">
+                              {new Date(day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                            </td>
+                            <td className="p-2">{Number(weeklyForecast.temperature_2m_min[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.temperature_2m_max[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.precipitation_sum[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.windspeed_10m_max[idx] ?? 0).toFixed(1)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="space-y-3">

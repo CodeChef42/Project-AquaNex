@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
 import { useAuth } from "./contexts/AuthContext";
+import { SimulationProvider } from "./contexts/SimulationContext";
 import MainLayout from "./components/layout/MainLayout";
 
 const LandingPage             = lazy(() => import("./pages/LandingPage"));
@@ -63,64 +64,66 @@ const ModuleRoute = ({ module }: { module: string }) => {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>}>
-            <Routes>
-              {/* Public routes */}
-              <Route path="/"           element={<LandingPage />} />
-              <Route path="/signin"     element={<SignIn />} />
-              <Route path="/signup"     element={<SignUp />} />
-              <Route path="/onboarding" element={<Onboarding />} />
+      <SimulationProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>}>
+              <Routes>
+                {/* Public routes */}
+                <Route path="/"           element={<LandingPage />} />
+                <Route path="/signin"     element={<SignIn />} />
+                <Route path="/signup"     element={<SignUp />} />
+                <Route path="/onboarding" element={<Onboarding />} />
 
-              {/* Protected routes */}
-              <Route element={<ProtectedRoute />}>
-                <Route path="/home"     element={<Home />} />
-                <Route path="/workspaces" element={<Workspaces />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/simulation" element={<Simulation />} />
+                {/* Protected routes */}
+                <Route element={<ProtectedRoute />}>
+                  <Route path="/home"     element={<Home />} />
+                  <Route path="/workspaces" element={<Workspaces />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/simulation" element={<Simulation />} />
 
-                <Route element={<ModuleRoute module="pipeline_management" />}>
-                  <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
-                  <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
-                  <Route path="/pipeline/alerts"               element={<AlertList />} />
-                  <Route path="/pipeline/resources/:incidentId" element={<PipelineResources />} />
+                  <Route element={<ModuleRoute module="pipeline_management" />}>
+                    <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
+                    <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
+                    <Route path="/pipeline/alerts"               element={<AlertList />} />
+                    <Route path="/pipeline/resources/:incidentId" element={<PipelineResources />} />
+                  </Route>
+
+                  <Route element={<ModuleRoute module="soil_salinity" />}>
+                    <Route path="/soil-salinity"                 element={<SoilSalinity />} />
+                    <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
+                  </Route>
+
+                  <Route element={<ModuleRoute module="incident_analytics" />}>
+                    <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
+                  </Route>
+
+                  <Route element={<ModuleRoute module="water_quality" />}>
+                    <Route path="/water-quality"                 element={<WaterQuality />} />
+                  </Route>
+
+                  <Route element={<ModuleRoute module="demand_forecasting" />}>
+                    <Route path="/demand-forecasting"            element={<DemandForecasting />} />
+                  </Route>
+
+                  <Route element={<ModuleRoute module="history_log" />}>
+                    <Route path="/history"                       element={<HistoryLog />} />
+                  </Route>
                 </Route>
 
-                <Route element={<ModuleRoute module="soil_salinity" />}>
-                  <Route path="/soil-salinity"                 element={<SoilSalinity />} />
-                  <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
-                </Route>
+                {/* Redirects */}
+                <Route path="/dashboard"         element={<Navigate to="/home" replace />} />
+                <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
 
-                <Route element={<ModuleRoute module="incident_analytics" />}>
-                  <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
-                </Route>
-
-                <Route element={<ModuleRoute module="water_quality" />}>
-                  <Route path="/water-quality"                 element={<WaterQuality />} />
-                </Route>
-
-                <Route element={<ModuleRoute module="demand_forecasting" />}>
-                  <Route path="/demand-forecasting"            element={<DemandForecasting />} />
-                </Route>
-
-                <Route element={<ModuleRoute module="history_log" />}>
-                  <Route path="/history"                       element={<HistoryLog />} />
-                </Route>
-              </Route>
-
-              {/* Redirects */}
-              <Route path="/dashboard"         element={<Navigate to="/home" replace />} />
-              <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
-
-              {/* 404 */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </BrowserRouter>
-      </TooltipProvider>
+                {/* 404 */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </BrowserRouter>
+        </TooltipProvider>
+      </SimulationProvider>
     </AuthProvider>
   </QueryClientProvider>
 );
