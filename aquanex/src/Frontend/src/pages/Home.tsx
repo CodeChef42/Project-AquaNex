@@ -33,6 +33,8 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { user, workspace, fetchWorkspace } = useAuth();
   const [recentIssues, setRecentIssues] = useState<any[]>([]);
+  const [totalAlerts, setTotalAlerts] = useState(0);
+  const [totalRepairHours, setTotalRepairHours] = useState(0);
   
   const userName = user?.full_name || user?.username || "User";
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
@@ -50,6 +52,22 @@ const Dashboard = () => {
         const response = await api.get("/incidents/");
         const payload = response.data;
         const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.results) ? payload.results : [];
+        
+        // Total Alerts
+        setTotalAlerts(rows.length);
+
+        // Calculate Total Repair Hours
+        // Assuming 'repair_time_hours' or estimating based on status/duration
+        // For now, we simulate this calculation based on severity weights if actual data is missing
+        const hours = rows.reduce((acc: number, inc: any) => {
+            const duration = inc.repair_duration_hours || (
+                inc.severity === 'critical' ? 8 : 
+                inc.severity === 'high' ? 4 : 
+                inc.severity === 'medium' ? 2 : 1
+            );
+            return acc + duration;
+        }, 0);
+        setTotalRepairHours(Math.round(hours));
 
         const mapped = rows
           .slice()
@@ -116,12 +134,12 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="border-destructive/20 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/pipeline")}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Active Incidents</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Alerts</CardTitle>
             <AlertTriangle className="w-5 h-5 text-destructive" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-destructive">14</div>
-            <p className="text-xs text-muted-foreground mt-1">Critical/High priority alerts</p>
+            <div className="text-3xl font-bold text-destructive">{totalAlerts}</div>
+            <p className="text-xs text-muted-foreground mt-1">Pending incidents in database</p>
             <Button variant="link" className="px-0 mt-2 text-destructive hover:text-destructive/80">
               View Pipeline Management →
             </Button>
@@ -130,14 +148,14 @@ const Dashboard = () => {
 
         <Card className="border-warning/20 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/soil-salinity")}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Zones Needing Action</CardTitle>
-            <Droplet className="w-5 h-5 text-warning" />
+            <CardTitle className="text-sm font-medium">Est. Repair Hours</CardTitle>
+            <Clock className="w-5 h-5 text-warning" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-warning">8</div>
-            <p className="text-xs text-muted-foreground mt-1">High salinity zones</p>
+            <div className="text-3xl font-bold text-warning">{totalRepairHours}h</div>
+            <p className="text-xs text-muted-foreground mt-1">Total estimated resolution time</p>
             <Button variant="link" className="px-0 mt-2 text-warning hover:text-warning/80">
-              View Soil Salinity →
+              View Analytics Engine →
             </Button>
           </CardContent>
         </Card>
