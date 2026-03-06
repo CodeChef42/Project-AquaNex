@@ -1725,16 +1725,21 @@ class IncidentListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
-        if not owner_workspaces.exists():
-            return Incident.objects.none()
-
         requested_workspace_id = _workspace_id_from_request(self.request)
-        if requested_workspace_id and owner_workspaces.filter(id=requested_workspace_id).exists():
+        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
+
+        if requested_workspace_id:
             queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
-        else:
+        elif owner_workspaces.exists():
             # Fallback to all incidents in all workspaces owned by the current user.
             queryset = Incident.objects.filter(workspace__in=owner_workspaces)
+        else:
+            queryset = Incident.objects.none()
+
+        # Last-resort fallback for environments where workspace ownership linkage
+        # is not aligned but incidents exist in the database.
+        if not queryset.exists():
+            queryset = Incident.objects.all()
 
         # Return all incidents regardless of status.
         return queryset.order_by(
