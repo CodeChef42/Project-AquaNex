@@ -33,10 +33,10 @@ import { Button } from "@/components/ui/button";
 const allItems = [
   { title: "Home", url: "/home", icon: LayoutDashboard, module: null },
   { title: "Pipeline Management", url: "/pipeline", icon: Pipeline, module: "pipeline_management" },
-  { title: "Soil Salinity", url: "/soil", icon: Droplet, module: "soil_salinity" },
-  { title: "Water Quality", url: "/water", icon: TestTube, module: "water_quality" },
-  { title: "Demand Forecasting", url: "/demand", icon: LineChart, module: "demand_forecasting" },
-  { title: "Incident Analytics", url: "/analytics", icon: TrendingUp, module: "incident_analytics" },
+  { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet, module: "soil_salinity" },
+  { title: "Water Quality", url: "/water-quality", icon: TestTube, module: "water_quality" },
+  { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart, module: "demand_forecasting" },
+  { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
   { title: "History Log", url: "/history", icon: History, module: "history_log" },
   { title: "Simulation", url: "/simulation", icon: TerminalSquare, module: null },
   { title: "Settings", url: "/settings", icon: Settings, module: null }, // always visible

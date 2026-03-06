@@ -47,9 +47,15 @@ const PipelinesManagementPage = () => {
   const fetchIncidents = async () => {
     try {
       const res = await api.get("/incidents/");
-      setIncidents(res.data);
+      if (Array.isArray(res.data)) {
+        setIncidents(res.data);
+      } else {
+        console.error("Incidents response is not an array:", res.data);
+        setIncidents([]);
+      }
     } catch (err) {
       console.error("Failed to fetch incidents", err);
+      setIncidents([]); // Ensure it's not undefined
     } finally {
       setLoading(false);
     }
@@ -154,16 +160,28 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  const mappedAlerts = incidents.map((inc: any) => ({
-    id: inc.id,
-    severity: inc.severity || "medium",
-    time: new Date(inc.last_seen_at || inc.detected_at).toLocaleTimeString(),
-    location: `Gateway ${inc.gateway_id}`,
-    type: inc.incident_type,
-    pipeLength: "N/A",
-    pipeType: "N/A",
-    status: inc.status
-  }));
+  const mappedAlerts = (Array.isArray(incidents) ? incidents : []).map((inc: any) => {
+    const rawTime = inc.last_seen_at || inc.detected_at;
+    let timeStr = "N/A";
+    try {
+        if (rawTime) {
+            timeStr = new Date(rawTime).toLocaleTimeString();
+        }
+    } catch (e) {
+        timeStr = "Invalid Time";
+    }
+
+    return {
+        id: inc.id,
+        severity: inc.severity || "medium",
+        time: timeStr,
+        location: `Gateway ${inc.gateway_id}`,
+        type: inc.incident_type,
+        pipeLength: "N/A",
+        pipeType: "N/A",
+        status: inc.status
+    };
+  });
 
   const sortedAlerts = mappedAlerts.sort((a: any, b: any) => {
      if (a.status === 'recovering' && b.status !== 'recovering') return -1;

@@ -255,11 +255,13 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_BROKER_CONNECTION_MAX_RETRIES = 0
+CELERY_BROKER_CONNECTION_MAX_RETRIES = None # Retry forever
+CELERY_WORKER_CANCEL_LONG_RUNNING_TASKS_ON_CONNECTION_LOSS = False
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'visibility_timeout': 3600,
-    'socket_timeout': 30,
-    'socket_connect_timeout': 30,
+    'socket_timeout': 60,
+    'socket_connect_timeout': 60,
+    'socket_keepalive': True,
     'retry_on_timeout': True,
     'health_check_interval': 30,
 }
