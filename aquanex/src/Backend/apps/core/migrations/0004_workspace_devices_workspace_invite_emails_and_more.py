@@ -5,6 +5,16 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def _safe_rename_table(apps, schema_editor, old_name, new_name):
+    """Safely rename a table only if it exists."""
+    with schema_editor.connection.cursor() as cursor:
+        # Check if the old table exists
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{old_name}'")
+        if cursor.fetchone():
+            # Table exists, so rename it
+            cursor.execute(f"ALTER TABLE {old_name} RENAME TO {new_name}")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -52,8 +62,9 @@ class Migration(migrations.Migration):
             name='threshold_soil_moisture',
             field=models.JSONField(blank=True, default=list),
         ),
-        migrations.AlterModelTable(
-            name='pipespecification',
-            table='pipe_specs',
+        # Handle table rename safely - only if table exists
+        migrations.RunPython(
+            code=lambda apps, schema_editor: _safe_rename_table(apps, schema_editor, 'pipe_specifications', 'pipe_specs'),
+            reverse_code=lambda apps, schema_editor: _safe_rename_table(apps, schema_editor, 'pipe_specs', 'pipe_specifications'),
         ),
     ]

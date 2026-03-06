@@ -1050,6 +1050,28 @@ class OnboardingView(APIView):
         for email in data.get('inviteEmails', []):
             WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
 
+        # Auto-create soil zone if soil_salinity module is enabled and layout polygon exists
+        modules = data.get('modules', workspace.modules)
+        if 'soil_salinity' in modules and workspace.layout_polygon and len(workspace.layout_polygon) >= 3:
+            from apps.soil.models import SoilZone
+            # Convert workspace layout polygon to GeoJSON format
+            # Layout is [[lng, lat], ...] -> GeoJSON Polygon
+            boundary = {
+                'type': 'Polygon',
+                'coordinates': [workspace.layout_polygon]
+            }
+            area_ha = (workspace.layout_area_m2 or 0) / 10000  # Convert m² to ha
+            SoilZone.objects.get_or_create(
+                workspace=workspace,
+                name='Main Zone',
+                defaults={
+                    'boundary': boundary,
+                    'area_ha': area_ha,
+                    'soil_texture': 'loam',
+                    'ec_threshold': 4.0,
+                }
+            )
+
         gateway_id = data.get('gatewayId', '').strip()
         if gateway_id:
             Gateway.objects.get_or_create(id=gateway_id, defaults={'workspace': workspace})
