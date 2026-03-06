@@ -21,9 +21,6 @@ from typing import Any, Dict, List, Optional
 
 app = FastAPI(title="AquaNex ML Service", version="1.0.0")
 
-from soil_intelligence import router as soil_router
-app.include_router(soil_router)
-
 
 
 app.add_middleware(

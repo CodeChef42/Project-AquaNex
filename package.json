@@ -1,7 +1,5 @@
 {
   "dependencies": {
-    "celery": "^0.0.0",
-    "leaflet-draw": "^1.0.4",
-    "react-leaflet-draw": "^0.21.0"
+    "celery": "^0.0.0"
   }
 }

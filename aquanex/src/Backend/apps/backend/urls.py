@@ -23,5 +23,4 @@ urlpatterns = [
     path('healthz', lambda request: JsonResponse({'status': 'ok'})),
     path('admin/', admin.site.urls),
     path('api/', include('apps.core.urls')),
-    path('api/soil/', include('apps.soil.urls')),
 ]
