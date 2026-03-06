@@ -14,8 +14,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const ACTIONABLE_ALERT_STATUSES = new Set(["open", "recovering", "active", "investigating"]);
-
 const AlertList = () => {
   const navigate = useNavigate();
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
@@ -79,10 +77,9 @@ const AlertList = () => {
         type: String(inc.incident_type || "anomaly"),
         location: String(inc.location || `Gateway ${inc.gateway_id || "unknown"}`),
         time: toTime(inc.last_seen_at || inc.created_at || inc.detected_at),
-        status: String(inc.status || "open").toLowerCase(),
+        status: String(inc.status || "open").trim().toLowerCase(),
         prediction: inc.details?.prediction || null,
       }))
-      .filter((inc: any) => ACTIONABLE_ALERT_STATUSES.has(inc.status))
       .sort((a: any, b: any) => {
         if (a.status === "recovering" && b.status !== "recovering") return -1;
         if (b.status === "recovering" && a.status !== "recovering") return 1;
@@ -140,7 +137,7 @@ const AlertList = () => {
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading alerts...</p>
           ) : alerts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No active incidents.</p>
+            <p className="text-sm text-muted-foreground">No incidents available.</p>
           ) : (
           <Table>
             <TableHeader>

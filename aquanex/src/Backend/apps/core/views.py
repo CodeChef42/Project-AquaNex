@@ -1725,16 +1725,21 @@ class IncidentListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        workspace = _resolve_user_workspace(self.request)
-        if not workspace:
+        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
+        if not owner_workspaces.exists():
             return Incident.objects.none()
-        
-        # Return currently actionable incidents.
-        # Includes legacy status values for backward compatibility.
-        return Incident.objects.filter(
-            workspace=workspace, 
-            status__in=["open", "recovering", "active", "investigating"]
-        ).order_by('-last_seen_at')
+
+        requested_workspace_id = _workspace_id_from_request(self.request)
+        if requested_workspace_id and owner_workspaces.filter(id=requested_workspace_id).exists():
+            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
+        else:
+            # Fallback to all incidents in all workspaces owned by the current user.
+            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
+
+        # Return all incidents regardless of status.
+        return queryset.order_by(
+            "-last_seen_at", "-detected_at", "-created_at"
+        )
 
 
 class IncidentResolveView(APIView):

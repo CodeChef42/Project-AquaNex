@@ -11,7 +11,6 @@ import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
-const ACTIONABLE_ALERT_STATUSES = new Set(["open", "recovering", "active", "investigating"]);
 
 const FitMapToPoints = ({
   points,
@@ -201,7 +200,7 @@ const PipelinesManagementPage = () => {
         type: inc.incident_type,
         pipeLength: "N/A",
         pipeType: "N/A",
-        status: String(inc.status || "").toLowerCase() || "open",
+        status: String(inc.status || "").trim().toLowerCase() || "open",
         pressure: inc.details?.pressure ? `${inc.details.pressure} bar` : undefined,
         flow: inc.details?.flow ? `${inc.details.flow} m³/h` : undefined,
     };
@@ -214,7 +213,7 @@ const PipelinesManagementPage = () => {
   });
 
   const topAlerts = useMemo(
-    () => sortedAlerts.filter((a: any) => ACTIONABLE_ALERT_STATUSES.has(a.status)).slice(0, 3),
+    () => sortedAlerts.slice(0, 3),
     [sortedAlerts]
   );
 
