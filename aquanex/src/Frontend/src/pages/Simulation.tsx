@@ -39,6 +39,10 @@ type TelemetryRecord = {
   values: Record<string, number>;
 };
 
+const SIM_RUNNING_KEY = "aquanex_sim_running";
+const SIM_STARTED_AT_KEY = "aquanex_sim_started_at";
+const SIM_INTERVAL_SEC_KEY = "aquanex_sim_interval_sec";
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const randomAround = (base: number, span: number) => Number((base + (Math.random() * 2 - 1) * span).toFixed(3));
 
@@ -434,7 +438,13 @@ const Simulation = () => {
     const safeInterval = clamp(Number(intervalSec || 8), 5, 10);
     setIntervalSec(safeInterval);
     if (timerRef.current) window.clearInterval(timerRef.current);
-    simulationStartMsRef.current = Date.now();
+    const existingStartedAt = Number(localStorage.getItem(SIM_STARTED_AT_KEY));
+    simulationStartMsRef.current =
+      Number.isFinite(existingStartedAt) && existingStartedAt > 0 ? existingStartedAt : Date.now();
+    localStorage.setItem(SIM_RUNNING_KEY, "true");
+    localStorage.setItem(SIM_STARTED_AT_KEY, String(simulationStartMsRef.current));
+    localStorage.setItem(SIM_INTERVAL_SEC_KEY, String(safeInterval));
+    autoStartArmedRef.current = true;
     setIsRunning(true);
     addLog("info", "Telemetry started.");
     pushOnce();
@@ -447,8 +457,29 @@ const Simulation = () => {
       timerRef.current = null;
     }
     setIsRunning(false);
+    localStorage.setItem(SIM_RUNNING_KEY, "false");
+    localStorage.removeItem(SIM_STARTED_AT_KEY);
     addLog("info", "Streaming stopped.");
   };
+
+  useEffect(() => {
+    const persistedRunning = localStorage.getItem(SIM_RUNNING_KEY) === "true";
+    if (!persistedRunning) return;
+    if (!gatewayId || activeDevices.length === 0) return;
+    if (timerRef.current) return;
+    const storedInterval = clamp(Number(localStorage.getItem(SIM_INTERVAL_SEC_KEY) || intervalSec), 5, 10);
+    const storedStartedAt = Number(localStorage.getItem(SIM_STARTED_AT_KEY));
+    simulationStartMsRef.current =
+      Number.isFinite(storedStartedAt) && storedStartedAt > 0 ? storedStartedAt : Date.now();
+    localStorage.setItem(SIM_STARTED_AT_KEY, String(simulationStartMsRef.current));
+    setIntervalSec(storedInterval);
+    autoStartArmedRef.current = true;
+    setIsRunning(true);
+    addLog("info", "Telemetry resumed.");
+    pushOnce();
+    timerRef.current = window.setInterval(pushOnce, storedInterval * 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatewayId, activeDevices.length]);
 
   useEffect(() => {
     if (autoStartArmedRef.current) return;

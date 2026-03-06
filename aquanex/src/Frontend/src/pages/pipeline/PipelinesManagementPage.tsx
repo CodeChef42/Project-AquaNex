@@ -47,10 +47,13 @@ const PipelinesManagementPage = () => {
   const fetchIncidents = async () => {
     try {
       const res = await api.get("/incidents/");
-      if (Array.isArray(res.data)) {
-        setIncidents(res.data);
+      const payload = res.data;
+      if (Array.isArray(payload)) {
+        setIncidents(payload);
+      } else if (Array.isArray(payload?.results)) {
+        setIncidents(payload.results);
       } else {
-        console.error("Incidents response is not an array:", res.data);
+        console.error("Incidents response is not an array:", payload);
         setIncidents([]);
       }
     } catch (err) {

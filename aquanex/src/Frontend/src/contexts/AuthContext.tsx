@@ -61,6 +61,10 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const SIM_RUNNING_KEY = "aquanex_sim_running";
+const SIM_STARTED_AT_KEY = "aquanex_sim_started_at";
+const SIM_INTERVAL_SEC_KEY = "aquanex_sim_interval_sec";
+const SIM_LAST_PUSH_AT_KEY = "aquanex_sim_last_push_at";
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -70,6 +74,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.getItem('selected_workspace_id')
   );
   const [loading, setLoading] = useState(true);
+
+  const enableSimulationSession = () => {
+    localStorage.setItem(SIM_RUNNING_KEY, "true");
+    if (!localStorage.getItem(SIM_STARTED_AT_KEY)) {
+      localStorage.setItem(SIM_STARTED_AT_KEY, String(Date.now()));
+    }
+    if (!localStorage.getItem(SIM_INTERVAL_SEC_KEY)) {
+      localStorage.setItem(SIM_INTERVAL_SEC_KEY, "8");
+    }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem('access_token');
@@ -84,6 +98,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const response = await api.get('/auth/profile/');
       setUser(response.data);
+      enableSimulationSession();
       await fetchWorkspaces();
     } catch (error) {
       localStorage.removeItem('access_token');
@@ -120,7 +135,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const selectWorkspace = async (workspaceId: string) => {
     localStorage.setItem('selected_workspace_id', workspaceId);
     setSelectedWorkspaceId(workspaceId);
-    await fetchWorkspaces();
+    const localMatch = workspaces.find((w) => w.id === workspaceId);
+    if (localMatch) {
+      setWorkspace(localMatch);
+    }
+    fetchWorkspaces();
   };
 
   const login = async (username: string, password: string) => {
@@ -128,6 +147,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('access_token', response.data.access);
     localStorage.setItem('refresh_token', response.data.refresh);
     setUser(response.data.user);
+    enableSimulationSession();
     await fetchWorkspaces();
   };
 
@@ -141,6 +161,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('access_token', response.data.access);
     localStorage.setItem('refresh_token', response.data.refresh);
     setUser(response.data.user);
+    enableSimulationSession();
     return response.data.secret_key; // ← return the key to SignUp.tsx
   };
 
@@ -148,6 +169,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('selected_workspace_id');
+    localStorage.removeItem(SIM_RUNNING_KEY);
+    localStorage.removeItem(SIM_STARTED_AT_KEY);
+    localStorage.removeItem(SIM_INTERVAL_SEC_KEY);
+    localStorage.removeItem(SIM_LAST_PUSH_AT_KEY);
     setUser(null);
     setWorkspace(null);
     setWorkspaces([]);

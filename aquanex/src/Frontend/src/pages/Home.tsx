@@ -3,10 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../contexts/AuthContext";
-import { CircleMarker, MapContainer, Polygon, Popup, TileLayer } from "react-leaflet";
+import { CircleMarker, MapContainer, Polygon, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 const alertData = [
@@ -28,6 +28,26 @@ const recentIssues = [
   { id: 5, title: "Maintenance Required on Pipe ID-123", timestamp: "12 hours ago", severity: "Low", link: "/pipeline" },
 ];
 
+const HOME_FALLBACK_CENTER: [number, number] = [25.2048, 55.2708];
+
+const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length === 0) {
+      map.setView(HOME_FALLBACK_CENTER, 13);
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], 15);
+      return;
+    }
+    map.fitBounds(points, { padding: [40, 40], maxZoom: 16 });
+  }, [map, points]);
+
+  return null;
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, workspace, fetchWorkspace } = useAuth();
@@ -36,10 +56,6 @@ const Dashboard = () => {
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
     ? workspace.layout_polygon
     : [];
-  const layoutCenter =
-    layoutPolygon.length > 0
-      ? [layoutPolygon[0][1], layoutPolygon[0][0]]
-      : [25.2048, 55.2708];
   const workspaceDevices = Array.isArray(workspace?.devices) ? workspace.devices : [];
   const geolocatedDevices = workspaceDevices.filter(
     (device) =>
@@ -48,10 +64,13 @@ const Dashboard = () => {
       typeof device?.lng === "number" &&
       Number.isFinite(device.lng)
   );
-  const mapCenter =
-    geolocatedDevices.length > 0
-      ? [geolocatedDevices[0].lat as number, geolocatedDevices[0].lng as number]
-      : layoutCenter;
+  const mapFocusPoints = useMemo<[number, number][]>(() => {
+    const layoutPoints = layoutPolygon
+      .map(([lng, lat]) => [lat, lng] as [number, number])
+      .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const devicePoints = geolocatedDevices.map((device) => [device.lat as number, device.lng as number] as [number, number]);
+    return [...layoutPoints, ...devicePoints];
+  }, [geolocatedDevices, layoutPolygon]);
 
   useEffect(() => {
     fetchWorkspace();
@@ -124,14 +143,15 @@ const Dashboard = () => {
           <CardContent className="space-y-3">
             <div className="rounded-xl border overflow-hidden">
               <MapContainer
-                center={mapCenter as [number, number]}
-                zoom={16}
-                style={{ height: "280px", width: "100%" }}
+                center={HOME_FALLBACK_CENTER}
+                zoom={13}
+                style={{ height: "460px", width: "100%" }}
               >
                 <TileLayer
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                   attribution="Tiles &copy; Esri"
                 />
+                <FitMapToPoints points={mapFocusPoints} />
                 <Polygon
                   positions={layoutPolygon.map(([lng, lat]) => [lat, lng])}
                   pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}

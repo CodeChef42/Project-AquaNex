@@ -1,13 +1,38 @@
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapContainer, Polygon, TileLayer } from "react-leaflet";
+import { MapContainer, Marker, Polygon, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogOut } from "lucide-react";
+import { divIcon } from "leaflet";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+const workspacePinIcon = divIcon({
+  html: '<div style="font-size:20px;line-height:20px;">📍</div>',
+  className: "",
+  iconSize: [20, 20],
+  iconAnchor: [10, 20],
+});
+
+const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length === 0) {
+      map.setView(DUBAI_CENTER, 10);
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], 14);
+      return;
+    }
+    map.fitBounds(points, { padding: [42, 42], maxZoom: 15 });
+  }, [map, points]);
+
+  return null;
+};
 
 const Workspaces = () => {
   const navigate = useNavigate();
@@ -40,13 +65,28 @@ const Workspaces = () => {
     [workspaces]
   );
 
-  const mapCenter = useMemo<[number, number]>(() => {
-    if (polygons.length === 0) return DUBAI_CENTER;
-    return polygons[0].positions[0] || DUBAI_CENTER;
+  const mapPoints = useMemo<[number, number][]>(() => {
+    return polygons.flatMap((item) => item.positions);
   }, [polygons]);
 
-  const handleOpenWorkspace = async (workspaceId: string) => {
-    await selectWorkspace(workspaceId);
+  const mapPins = useMemo(
+    () =>
+      polygons
+        .map((item) => {
+          const firstPoint = item.positions[0];
+          if (!firstPoint) return null;
+          return {
+            id: item.id,
+            name: item.name,
+            position: firstPoint,
+          };
+        })
+        .filter((pin): pin is { id: string; name: string; position: [number, number] } => Boolean(pin)),
+    [polygons]
+  );
+
+  const handleOpenWorkspace = (workspaceId: string) => {
+    selectWorkspace(workspaceId);
     navigate("/home");
   };
 
@@ -79,11 +119,12 @@ const Workspaces = () => {
         </CardHeader>
         <CardContent>
           <div className="rounded-xl border border-border overflow-hidden">
-            <MapContainer center={mapCenter} zoom={10} style={{ height: "420px", width: "100%" }}>
+            <MapContainer center={DUBAI_CENTER} zoom={10} style={{ height: "500px", width: "100%" }}>
               <TileLayer
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 attribution="Tiles &copy; Esri"
               />
+              <FitMapToPoints points={mapPoints} />
               {polygons.map((item) => (
                 <Polygon
                   key={item.id}
@@ -94,6 +135,11 @@ const Workspaces = () => {
                     fillOpacity: workspace?.id === item.id ? 0.25 : 0.15,
                   }}
                 />
+              ))}
+              {mapPins.map((pin) => (
+                <Marker key={pin.id} position={pin.position} icon={workspacePinIcon}>
+                  <Popup>{pin.name}</Popup>
+                </Marker>
               ))}
             </MapContainer>
           </div>
