@@ -9,7 +9,7 @@ import Logo from "@/components/Logo";
 const articles = [
   {
     title: "Sustainable Water Management in Arid Regions",
-    link: "https://www.unwater.org/publications/sustainable-water-management-arid-regions"
+    link: "https://www.unwater.org/water-facts/water-quality-and-wastewater"
   },
   {
     title: "Smart Irrigation Best Practices",

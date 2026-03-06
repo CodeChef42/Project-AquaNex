@@ -196,9 +196,7 @@ const WaterQualityMonitoring = () => {
               <Droplet className="w-5 h-5 text-teal-600" />
               Irrigation Space Layout
             </CardTitle>
-            <CardDescription>
-              Workspace boundary preview (free pan/zoom; only initial fit).
-            </CardDescription>
+            <CardDescription>Map View</CardDescription>
           </CardHeader>
           <CardContent>
             {layoutLatLng.length >= 3 ? (

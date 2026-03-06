@@ -259,6 +259,16 @@ const Onboarding = () => {
   const createNewWorkspace = searchParams.get("new") === "1";
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
+  const hasDemandForecastingModule = data.modules.includes("demand_forecasting");
+  const visibleSteps = useMemo(
+    () =>
+      hasDemandForecastingModule
+        ? STEPS
+        : STEPS.filter((stepDef) => stepDef.id !== 6),
+    [hasDemandForecastingModule]
+  );
+  const visibleStepIds = useMemo(() => visibleSteps.map((stepDef) => stepDef.id), [visibleSteps]);
+  const lastVisibleStepId = visibleStepIds[visibleStepIds.length - 1] || 7;
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
   const [detectedLayoutPlace, setDetectedLayoutPlace] = useState("");
   const [detectedLayoutCoords, setDetectedLayoutCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -273,6 +283,18 @@ const Onboarding = () => {
   } | null>(null);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
+
+  const goToNextVisibleStep = useCallback((currentStep: number) => {
+    const idx = visibleStepIds.indexOf(currentStep);
+    if (idx === -1) return visibleStepIds[0] || 1;
+    return visibleStepIds[Math.min(visibleStepIds.length - 1, idx + 1)];
+  }, [visibleStepIds]);
+
+  const goToPreviousVisibleStep = useCallback((currentStep: number) => {
+    const idx = visibleStepIds.indexOf(currentStep);
+    if (idx <= 0) return visibleStepIds[0] || 1;
+    return visibleStepIds[idx - 1];
+  }, [visibleStepIds]);
   const convexHull = (points: number[][]): number[][] => {
     const uniq = Array.from(
       new Set(points.map(([lng, lat]) => `${lng.toFixed(7)},${lat.toFixed(7)}`))
@@ -1054,6 +1076,12 @@ const Onboarding = () => {
   }, [workspace, createNewWorkspace, skipCompanyIdentity]);
 
   useEffect(() => {
+    if (step === 6 && !hasDemandForecastingModule) {
+      setStep(7);
+    }
+  }, [step, hasDemandForecastingModule]);
+
+  useEffect(() => {
     if (!layoutTaskId) return;
 
     let isCancelled = false;
@@ -1812,7 +1840,7 @@ const Onboarding = () => {
             </p>
             <button
               type="button"
-              onClick={() => setStep(6)}
+              onClick={() => setStep(goToNextVisibleStep(5))}
               className="mt-2 px-4 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted transition-colors"
             >
               Skip for now
@@ -2209,7 +2237,7 @@ const Onboarding = () => {
     <div className="min-h-screen bg-gradient-to-br from-cyan-50 via-blue-50 to-teal-50 py-10 px-4">
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
-          {STEPS.map((s, index) => {
+          {visibleSteps.map((s, index) => {
             const Icon = s.icon;
             const isActive = s.id === step;
             const isDone = s.id < step;
@@ -2237,7 +2265,7 @@ const Onboarding = () => {
                     {s.label}
                   </span>
                 </div>
-                {index < STEPS.length - 1 && (
+                {index < visibleSteps.length - 1 && (
                   <div
                     className={`flex-1 h-0.5 mx-2 mb-4 transition-all ${
                       isDone ? "bg-green-500" : "bg-border"
@@ -2253,11 +2281,11 @@ const Onboarding = () => {
           {renderStep()}
         </div>
 
-        {step < 7 && (
+        {step < lastVisibleStepId && (
           <div className="flex justify-between">
             <button
               type="button"
-              onClick={() => setStep((s) => Math.max(1, s - 1))}
+              onClick={() => setStep((s) => goToPreviousVisibleStep(s))}
               disabled={step === 1}
               className="flex items-center gap-2 px-6 py-3 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -2265,7 +2293,7 @@ const Onboarding = () => {
             </button>
             <button
               type="button"
-              onClick={() => setStep((s) => Math.min(7, s + 1))}
+              onClick={() => setStep((s) => goToNextVisibleStep(s))}
               disabled={!canProceed()}
               className="flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >

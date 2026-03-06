@@ -3,30 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
-import { useEffect, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import api from "@/lib/api";
 import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-
-const alertData = [
-  { day: "Mon", count: 12 },
-  { day: "Tue", count: 19 },
-  { day: "Wed", count: 15 },
-  { day: "Thu", count: 22 },
-  { day: "Fri", count: 18 },
-  { day: "Sat", count: 14 },
-  { day: "Sun", count: 16 },
-];
-
-// Mock data for live issues feed - replace with API call later
-const recentIssues = [
-  { id: 1, title: "Pipeline Leak Detected in Zone A", timestamp: "2 hours ago", severity: "High", link: "/pipeline/incident/1" },
-  { id: 2, title: "Water Quality Alert - pH Levels", timestamp: "4 hours ago", severity: "Medium", link: "/water-quality" },
-  { id: 3, title: "Soil Salinity Exceeded Threshold", timestamp: "6 hours ago", severity: "Low", link: "/soil-salinity" },
-  { id: 4, title: "Incident in Demand Forecasting", timestamp: "8 hours ago", severity: "Medium", link: "/incident-analytics" },
-  { id: 5, title: "Maintenance Required on Pipe ID-123", timestamp: "12 hours ago", severity: "Low", link: "/pipeline" },
-];
 
 const HOME_FALLBACK_CENTER: [number, number] = [25.2048, 55.2708];
 
@@ -51,6 +32,7 @@ const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, workspace, fetchWorkspace } = useAuth();
+  const [recentIssues, setRecentIssues] = useState<any[]>([]);
   
   const userName = user?.full_name || user?.username || "User";
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
@@ -63,9 +45,59 @@ const Dashboard = () => {
   }, [layoutPolygon]);
 
   useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        const response = await api.get("/incidents/");
+        const payload = response.data;
+        const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.results) ? payload.results : [];
+
+        const mapped = rows
+          .slice()
+          .sort((a: any, b: any) => {
+            const tA = new Date(a.last_seen_at || a.detected_at || a.created_at || 0).getTime();
+            const tB = new Date(b.last_seen_at || b.detected_at || b.created_at || 0).getTime();
+            return tB - tA;
+          })
+          .slice(0, 8)
+          .map((inc: any, idx: number) => {
+            const rawTs = inc.last_seen_at || inc.detected_at || inc.created_at;
+            const ts = rawTs ? new Date(rawTs) : null;
+            const severity = String(inc.severity || "medium").toLowerCase();
+            return {
+              key: `${inc.id || idx}-${inc.gateway_id || "gw"}-${inc.incident_type || "incident"}`,
+              title: `Alert: ${String(inc.incident_type || "incident").replace(/_/g, " ")}`,
+              timestamp: ts && !Number.isNaN(ts.getTime())
+                ? ts.toLocaleString("en-US", {
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Just now",
+              severity:
+                severity === "critical"
+                  ? "High"
+                  : severity === "high"
+                  ? "High"
+                  : severity === "low"
+                  ? "Low"
+                  : "Medium",
+              link: "/pipeline/alerts",
+            };
+          });
+
+        setRecentIssues(mapped);
+      } catch (error) {
+        console.error("Failed to fetch incidents for home feed", error);
+        setRecentIssues([]);
+      }
+    };
+
     fetchWorkspace();
+    fetchIncidents();
     const timer = window.setInterval(() => {
       fetchWorkspace();
+      fetchIncidents();
     }, 8000);
     return () => window.clearInterval(timer);
   }, [fetchWorkspace]);
@@ -171,44 +203,17 @@ const Dashboard = () => {
         </Card>
       )}
 
-      {/* Platform-Wide Alerts Chart */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Platform-Wide Alerts (Last 7 Days)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={alertData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" />
-              <YAxis stroke="hsl(var(--muted-foreground))" />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: "hsl(var(--card))", 
-                  border: "1px solid hsl(var(--border))",
-                  borderRadius: "var(--radius)"
-                }}
-              />
-              <Line 
-                type="monotone" 
-                dataKey="count" 
-                stroke="hsl(var(--primary))" 
-                strokeWidth={2}
-                dot={{ fill: "hsl(var(--primary))", r: 4 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-
       {/* Live Issues Feed */}
       <Card>
         <CardHeader>
           <CardTitle>Live Issues Feed</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {recentIssues.map((issue) => (
-            <div key={issue.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+          {recentIssues.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No live alerts at the moment.</p>
+          ) : (
+          recentIssues.map((issue) => (
+            <div key={issue.key} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
               <div className="flex-1">
                 <h4 className="font-medium">{issue.title}</h4>
                 <div className="flex items-center gap-2 mt-1">
@@ -223,7 +228,7 @@ const Dashboard = () => {
                 View Details
               </Button>
             </div>
-          ))}
+          )))}
         </CardContent>
       </Card>
     </div>

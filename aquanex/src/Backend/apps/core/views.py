@@ -1776,18 +1776,13 @@ class IncidentSeedView(APIView):
             return Response({"error": "No workspace"}, status=400)
 
         raw_count = request.data.get("count", 240)
-        raw_months = request.data.get("months_back", 12)
+        regenerate = _is_truthy(request.data.get("regenerate", True))
         try:
             count = int(raw_count)
         except (TypeError, ValueError):
             count = 240
-        try:
-            months_back = int(raw_months)
-        except (TypeError, ValueError):
-            months_back = 12
 
         count = max(20, min(count, 2000))
-        months_back = max(1, min(months_back, 36))
 
         incident_types = [
             "pipeline_leak",
@@ -1800,33 +1795,54 @@ class IncidentSeedView(APIView):
         severities = ["low", "medium", "high", "critical"]
         now_ts = timezone.now()
         base_gateway = str(workspace.gateway_id or "GW-SEED")
-        total_days = max(30, months_back * 30)
+
+        if regenerate:
+            Incident.objects.filter(workspace=workspace, details__source="seed").delete()
+
+        # Spread incidents across each day of previous week (Mon-Sun).
+        weekday_index = now_ts.weekday()  # Monday=0
+        start_of_this_week = (now_ts - timedelta(days=weekday_index)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_of_prev_week = start_of_this_week - timedelta(days=7)
 
         rows = []
         for idx in range(count):
-            days_ago = random.randint(0, total_days - 1)
-            hours_ago = random.randint(0, 23)
-            minutes_ago = random.randint(0, 59)
-            detected_at = now_ts - timedelta(days=days_ago, hours=hours_ago, minutes=minutes_ago)
+            day_bucket = idx % 7
+            detected_at = start_of_prev_week + timedelta(
+                days=day_bucket,
+                hours=random.randint(0, 23),
+                minutes=random.randint(0, 59),
+                seconds=random.randint(0, 59),
+            )
             incident_type = random.choice(incident_types)
             severity = random.choice(severities)
             gateway_id = f"{base_gateway}-ALERT-{idx + 1:04d}"
             fingerprint = _incident_fingerprint(gateway_id, f"{incident_type}-{idx + 1}")
+            is_resolved_seed = idx % 6 == 0
+            resolved_at = None
+            status = "open"
+            last_seen_at = detected_at
+            if is_resolved_seed:
+                status = "resolved"
+                resolution_minutes = random.randint(45, 360)
+                resolved_at = detected_at + timedelta(minutes=resolution_minutes)
+                last_seen_at = resolved_at
             rows.append(
                 Incident(
                     workspace=workspace,
                     gateway_id=gateway_id,
                     incident_type=incident_type,
                     severity=severity,
-                    status="open",  # open is treated as ongoing alert
+                    status=status,
                     detected_at=detected_at,
-                    last_seen_at=detected_at,
+                    last_seen_at=last_seen_at,
+                    resolved_at=resolved_at,
                     fingerprint=fingerprint,
                     details={
                         "source": "seed",
-                        "status_label": "ongoing",
+                        "status_label": "resolved" if is_resolved_seed else "ongoing",
                         "alert": True,
                         "message": "Synthetic seeded incident for analytics visualization",
+                        "bucket": "previous_week",
                     },
                 )
             )

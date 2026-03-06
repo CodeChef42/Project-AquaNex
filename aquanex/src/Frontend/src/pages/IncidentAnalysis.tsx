@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BarChart3, CalendarDays, RefreshCcw } from "lucide-react";
+import { BarChart3, CalendarDays, RefreshCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,6 +24,7 @@ type IncidentRow = {
   status?: string;
   detected_at?: string;
   last_seen_at?: string;
+  resolved_at?: string;
   created_at?: string;
 };
 
@@ -41,12 +42,25 @@ const isOngoing = (status: string) => {
   return value !== "resolved" && value !== "closed";
 };
 
+const toCaseLabel = (incidentType: string) => {
+  const key = String(incidentType || "").trim().toLowerCase();
+  const map: Record<string, string> = {
+    pipeline_leak: "Small Pipeline Break Repair",
+    pressure_drop: "Pressure Joint Leakage",
+    flow_interruption: "Valve Flow Restriction Fix",
+    sensor_anomaly: "Sensor Coupling Replacement",
+    water_quality_alert: "Dosing Line Calibration",
+    salinity_spike: "Filter Media Flush and Top-up",
+  };
+  return map[key] || key.replace(/_/g, " ");
+};
+
 const IncidentAnalysis = () => {
   const [incidents, setIncidents] = useState<IncidentRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [seeding, setSeeding] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [rangeMode, setRangeMode] = useState<RangeMode>("weekly");
-  const autoSeedRef = useRef(false);
+  const initializedRef = useRef(false);
 
   const fetchIncidents = async () => {
     try {
@@ -62,29 +76,24 @@ const IncidentAnalysis = () => {
     }
   };
 
-  const seedIncidents = async (count = 300, silent = false) => {
+  const refreshData = async (silent = false) => {
     try {
-      if (!silent) setSeeding(true);
-      await api.post("/incidents/seed/", { count, months_back: 12 });
+      if (!silent) setRefreshing(true);
+      // Regenerate previous-week spread so chart always has meaningful data.
+      await api.post("/incidents/seed/", { count: 280, regenerate: true });
       await fetchIncidents();
     } catch (err) {
-      console.error("Failed to seed incidents", err);
+      console.error("Failed to refresh incidents", err);
     } finally {
-      setSeeding(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
-    fetchIncidents();
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+    refreshData(true);
   }, []);
-
-  useEffect(() => {
-    if (loading) return;
-    if (autoSeedRef.current) return;
-    if (incidents.length >= 120) return;
-    autoSeedRef.current = true;
-    seedIncidents(320, true);
-  }, [loading, incidents.length]);
 
   const normalized = useMemo(() => {
     return incidents
@@ -149,6 +158,77 @@ const IncidentAnalysis = () => {
       }));
   }, [normalized]);
 
+  const resolvedCases = useMemo(() => {
+    const materialBase: Record<string, number> = {
+      pipeline_leak: 26,
+      pressure_drop: 18,
+      flow_interruption: 34,
+      sensor_anomaly: 14,
+      water_quality_alert: 20,
+      salinity_spike: 28,
+      default: 16,
+    };
+    const baseHoursByType: Record<string, number> = {
+      pipeline_leak: 2.2,
+      pressure_drop: 1.5,
+      flow_interruption: 2.8,
+      sensor_anomaly: 1.2,
+      water_quality_alert: 1.8,
+      salinity_spike: 2.4,
+      default: 1.6,
+    };
+    const severityMultiplier: Record<string, number> = {
+      low: 1.0,
+      medium: 1.2,
+      high: 1.5,
+      critical: 1.9,
+    };
+    const laborRatePerHour = 35;
+    const inspectionFee = 12;
+
+    return normalized
+      .filter(({ row }) => !isOngoing(String(row.status || "")))
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 10)
+      .map(({ row, date }, idx) => {
+        const incidentType = String(row.incident_type || "default").toLowerCase();
+        const severity = String(row.severity || "medium").toLowerCase();
+        const sev = severityMultiplier[severity] || 1.2;
+        const baseMaterial = materialBase[incidentType] ?? materialBase.default;
+        const baseHours = baseHoursByType[incidentType] ?? baseHoursByType.default;
+        const detected = row.detected_at ? new Date(row.detected_at) : null;
+        const resolved = row.resolved_at ? new Date(row.resolved_at) : null;
+        let resolutionHours = baseHours * sev;
+        if (
+          detected &&
+          resolved &&
+          !Number.isNaN(detected.getTime()) &&
+          !Number.isNaN(resolved.getTime()) &&
+          resolved.getTime() > detected.getTime()
+        ) {
+          resolutionHours = (resolved.getTime() - detected.getTime()) / (1000 * 60 * 60);
+        }
+        resolutionHours = Math.max(0.5, Math.min(8, resolutionHours));
+
+        const materialCost = Math.round(baseMaterial * sev);
+        const laborCost = Math.round(resolutionHours * laborRatePerHour);
+        const totalCost = materialCost + laborCost + inspectionFee;
+
+        return {
+          id: `${row.id}-${idx}`,
+          caseName: toCaseLabel(incidentType),
+          resolvedAt: date.toLocaleDateString("en-US", {
+            month: "short",
+            day: "2-digit",
+          }),
+          resolutionTime: `${resolutionHours.toFixed(1)} h`,
+          materialCost: `AED ${materialCost}`,
+          laborCost: `AED ${laborCost}`,
+          totalCost: `AED ${totalCost}`,
+        };
+      });
+  }, [normalized]);
+
   return (
     <div className="p-8 space-y-6">
       <PageHeader
@@ -158,13 +238,9 @@ const IncidentAnalysis = () => {
       />
 
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" onClick={fetchIncidents}>
+        <Button variant="outline" onClick={() => refreshData(false)} disabled={refreshing}>
           <RefreshCcw className="w-4 h-4 mr-2" />
-          Refresh
-        </Button>
-        <Button onClick={() => seedIncidents(300)} disabled={seeding}>
-          <AlertTriangle className="w-4 h-4 mr-2" />
-          {seeding ? "Populating..." : "Populate Incidents"}
+          {refreshing ? "Refreshing..." : "Refresh"}
         </Button>
       </div>
 
@@ -263,6 +339,44 @@ const IncidentAnalysis = () => {
                     <TableCell>
                       <Badge variant={row.status === "ONGOING" ? "warning" : "success"}>{row.status}</Badge>
                     </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Resolved Alerts - Time and Cost</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {resolvedCases.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No resolved alerts available yet. Click Refresh to regenerate sample resolved cases.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Case</TableHead>
+                  <TableHead>Resolved On</TableHead>
+                  <TableHead>Resolution Time</TableHead>
+                  <TableHead>Material Cost</TableHead>
+                  <TableHead>Labor Cost</TableHead>
+                  <TableHead>Total Cost</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {resolvedCases.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell>{row.caseName}</TableCell>
+                    <TableCell>{row.resolvedAt}</TableCell>
+                    <TableCell>{row.resolutionTime}</TableCell>
+                    <TableCell>{row.materialCost}</TableCell>
+                    <TableCell>{row.laborCost}</TableCell>
+                    <TableCell className="font-semibold">{row.totalCost}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

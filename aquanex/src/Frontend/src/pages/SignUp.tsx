@@ -109,7 +109,7 @@ const SignUp = () => {
               className="w-full"
               onClick={handleContinue}
             >
-              I've saved my key — Continue
+              Continue
             </Button>
           </div>
         </div>
