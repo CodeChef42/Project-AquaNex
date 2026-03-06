@@ -1,14 +1,12 @@
-import { useState, useMemo } from "react";
-import { ChevronDown, ChevronUp, TrendingUp, MapPin } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, BarChart3, CalendarDays, RefreshCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { MapContainer, TileLayer, Polygon, CircleMarker, Popup, useMap } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
-import { useAuth } from "@/contexts/AuthContext";
+import api from "@/lib/api";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Table,
   TableBody,
@@ -18,433 +16,258 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
-
-// Helper to fit map bounds once
-const FitMapToPointsOnce = ({ points }: { points: [number, number][] }) => {
-  const map = useMap();
-  const [fitted, setFitted] = useState(false);
-
-  if (points.length > 2 && !fitted) {
-    const bounds = L.latLngBounds(points);
-    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
-    setFitted(true);
-  }
-  return null;
+type IncidentRow = {
+  id: string;
+  gateway_id?: string;
+  incident_type?: string;
+  severity?: string;
+  status?: string;
+  detected_at?: string;
+  last_seen_at?: string;
+  created_at?: string;
 };
 
-const timeSeriesData = [
-  { month: "Jan", leaks: 45, salinity: 23, quality: 12 },
-  { month: "Feb", leaks: 52, salinity: 28, quality: 15 },
-  { month: "Mar", leaks: 38, salinity: 31, quality: 18 },
-  { month: "Apr", leaks: 48, salinity: 27, quality: 14 },
-  { month: "May", leaks: 41, salinity: 35, quality: 20 },
-  { month: "Jun", leaks: 35, salinity: 29, quality: 16 },
-];
+type RangeMode = "weekly" | "monthly" | "yearly";
 
-const costData = [
-  { name: "Water Loss", value: 2400000, color: "hsl(var(--primary))" },
-  { name: "Materials", value: 1800000, color: "hsl(var(--secondary))" },
-  { name: "Labor", value: 950000, color: "hsl(var(--warning))" },
-];
+const parseIncidentDate = (incident: IncidentRow): Date | null => {
+  const raw = incident.last_seen_at || incident.detected_at || incident.created_at;
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
 
-const systemicIssues = [
-  { component: "Pipe Type X - Zone 3", frequency: 47, avgCost: "42k", totalCost: "1.99M", severity: "critical" },
-  { component: "Sensor Model A - Zone 5", frequency: 38, avgCost: "8k", totalCost: "312k", severity: "high" },
-  { component: "Valve System B - Zone 2", frequency: 29, avgCost: "15k", totalCost: "435k", severity: "high" },
-  { component: "Irrigation Line C - Zone 4", frequency: 24, avgCost: "22k", totalCost: "528k", severity: "medium" },
-  { component: "Filter Unit D - Zone 1", frequency: 19, avgCost: "6k", totalCost: "114k", severity: "medium" },
-  { component: "Pump Station E - Zone 6", frequency: 15, avgCost: "35k", totalCost: "525k", severity: "high" },
-];
-
-const incidents = [
-  { timestamp: "2024-11-15 14:23", type: "Pipeline Break", zone: "Zone 3", severity: "critical", cost: "AED 156k", status: "Resolved" },
-  { timestamp: "2024-11-15 11:47", type: "Salinity Spike", zone: "Zone 5", severity: "high", cost: "AED 42k", status: "In Progress" },
-  { timestamp: "2024-11-15 09:12", type: "Quality Violation", zone: "Zone 2", severity: "medium", cost: "AED 18k", status: "Resolved" },
-  { timestamp: "2024-11-14 18:34", type: "Sensor Failure", zone: "Zone 4", severity: "low", cost: "AED 8k", status: "Resolved" },
-  { timestamp: "2024-11-14 15:22", type: "Pipeline Leak", zone: "Zone 1", severity: "high", cost: "AED 89k", status: "Resolved" },
-  { timestamp: "2024-11-14 12:08", type: "Salinity Event", zone: "Zone 6", severity: "medium", cost: "AED 31k", status: "Resolved" },
-  { timestamp: "2024-11-14 08:45", type: "Pressure Anomaly", zone: "Zone 3", severity: "high", cost: "AED 67k", status: "Resolved" },
-  { timestamp: "2024-11-13 16:19", type: "Flow Interruption", zone: "Zone 5", severity: "critical", cost: "AED 198k", status: "Resolved" },
-];
+const isOngoing = (status: string) => {
+  const value = String(status || "").trim().toLowerCase();
+  return value !== "resolved" && value !== "closed";
+};
 
 const IncidentAnalysis = () => {
-  const { workspace } = useAuth();
-  const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
+  const [incidents, setIncidents] = useState<IncidentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
+  const [rangeMode, setRangeMode] = useState<RangeMode>("weekly");
+  const autoSeedRef = useRef(false);
 
-  const layoutPolygon = useMemo(() => {
-    if (!workspace?.layout_polygon || workspace.layout_polygon.length < 3) return [];
-    return workspace.layout_polygon.map((p: any) => [p[1], p[0]] as [number, number]);
-  }, [workspace]);
-
-  // Mock heatmap points (scattered within Dubai roughly or relative to layout)
-  // For now, we'll just put some random points near the layout center if available, else Dubai center
-  const heatmapPoints = useMemo(() => {
-    const center = layoutPolygon.length > 0 
-        ? layoutPolygon[0] 
-        : DUBAI_CENTER;
-    
-    return [
-        { lat: center[0] + 0.001, lng: center[1] + 0.001, intensity: 0.8 },
-        { lat: center[0] - 0.002, lng: center[1] + 0.002, intensity: 0.5 },
-        { lat: center[0] + 0.003, lng: center[1] - 0.001, intensity: 0.9 },
-    ];
-  }, [layoutPolygon]);
-
-  const toggleCard = (index: number) => {
-    const newExpanded = new Set(expandedCards);
-    if (newExpanded.has(index)) {
-      newExpanded.delete(index);
-    } else {
-      newExpanded.add(index);
+  const fetchIncidents = async () => {
+    try {
+      const res = await api.get("/incidents/");
+      const payload = res.data;
+      const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.results) ? payload.results : [];
+      setIncidents(rows);
+    } catch (err) {
+      console.error("Failed to fetch incidents", err);
+      setIncidents([]);
+    } finally {
+      setLoading(false);
     }
-    setExpandedCards(newExpanded);
   };
 
-  const kpiCards = [
-    { 
-      title: "Total Incidents This Quarter", 
-      value: "342", 
-      change: "+12%",
-      trend: "up",
-      details: {
-        leak: { count: 156, change: "+8%" },
-        salinity: { count: 124, change: "+15%" },
-        quality: { count: 62, change: "+18%" }
-      }
-    },
-    { 
-      title: "Estimated Water Loss", 
-      value: "AED 2.4M", 
-      change: "–8%",
-      trend: "down",
-      details: {
-        zone1: { amount: "AED 420k", change: "–12%" },
-        zone2: { amount: "AED 380k", change: "–5%" },
-        zone3: { amount: "AED 640k", change: "+2%" }
-      }
-    },
-    { 
-      title: "Material Replacement Cost", 
-      value: "AED 1.8M", 
-      change: "+5%",
-      trend: "up",
-      details: {
-        pipes: { amount: "AED 980k", change: "+8%" },
-        valves: { amount: "AED 540k", change: "+2%" },
-        sensors: { amount: "AED 280k", change: "+4%" }
-      }
-    },
-    { 
-      title: "Labor Hours Spent", 
-      value: "4,567 hours", 
-      change: "–3%",
-      trend: "down",
-      details: {
-        repairs: { hours: 2340, change: "–5%" },
-        inspection: { hours: 1567, change: "–2%" },
-        maintenance: { hours: 660, change: "+1%" }
-      }
-    },
-  ];
+  const seedIncidents = async (count = 300, silent = false) => {
+    try {
+      if (!silent) setSeeding(true);
+      await api.post("/incidents/seed/", { count, months_back: 12 });
+      await fetchIncidents();
+    } catch (err) {
+      console.error("Failed to seed incidents", err);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchIncidents();
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    if (autoSeedRef.current) return;
+    if (incidents.length >= 120) return;
+    autoSeedRef.current = true;
+    seedIncidents(320, true);
+  }, [loading, incidents.length]);
+
+  const normalized = useMemo(() => {
+    return incidents
+      .map((row) => ({ row, date: parseIncidentDate(row) }))
+      .filter((item) => item.date !== null) as Array<{ row: IncidentRow; date: Date }>;
+  }, [incidents]);
+
+  const reportedIssues = incidents.length;
+  const ongoingAlerts = incidents.filter((i) => isOngoing(String(i.status || ""))).length;
+  const criticalAlerts = incidents.filter((i) => ["critical", "high"].includes(String(i.severity || "").toLowerCase())).length;
+
+  const chartData = useMemo(() => {
+    const now = new Date();
+
+    if (rangeMode === "weekly") {
+      const weekLabels = ["W1", "W2", "W3", "W4", "W5"];
+      const counts = [0, 0, 0, 0, 0];
+      normalized.forEach(({ date }) => {
+        if (date.getFullYear() !== now.getFullYear() || date.getMonth() !== now.getMonth()) return;
+        const idx = Math.min(4, Math.floor((date.getDate() - 1) / 7));
+        counts[idx] += 1;
+      });
+      return weekLabels.map((label, idx) => ({ label, issues: counts[idx] }));
+    }
+
+    if (rangeMode === "monthly") {
+      const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const counts = new Array(12).fill(0);
+      normalized.forEach(({ date }) => {
+        if (date.getFullYear() !== now.getFullYear()) return;
+        counts[date.getMonth()] += 1;
+      });
+      return labels.map((label, idx) => ({ label, issues: counts[idx] }));
+    }
+
+    const years = [now.getFullYear() - 4, now.getFullYear() - 3, now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear()];
+    const byYear: Record<number, number> = Object.fromEntries(years.map((y) => [y, 0]));
+    normalized.forEach(({ date }) => {
+      const y = date.getFullYear();
+      if (y in byYear) byYear[y] += 1;
+    });
+    return years.map((y) => ({ label: String(y), issues: byYear[y] || 0 }));
+  }, [normalized, rangeMode]);
+
+  const recentRows = useMemo(() => {
+    return [...normalized]
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 14)
+      .map(({ row, date }) => ({
+        id: row.id,
+        timestamp: date.toLocaleString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        incidentType: String(row.incident_type || "anomaly").replace(/_/g, " "),
+        severity: String(row.severity || "medium").toLowerCase(),
+        status: isOngoing(String(row.status || "")) ? "ONGOING" : "RESOLVED",
+        gateway: String(row.gateway_id || "N/A"),
+      }));
+  }, [normalized]);
 
   return (
     <div className="p-8 space-y-6">
-      <PageHeader 
+      <PageHeader
         title="INCIDENT ANALYTICS ENGINE"
-        subtitle="Cross-module operational and financial intelligence"
+        subtitle="Operational alerts and issue trends"
         breadcrumbs={[{ label: "Home", path: "/home" }, { label: "Incident Analytics" }]}
       />
 
-      {/* Expandable KPI Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpiCards.map((kpi, index) => (
-          <Card key={index} className="overflow-hidden">
-            <CardHeader 
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => toggleCard(index)}
-            >
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium">{kpi.title}</CardTitle>
-                {expandedCards.has(index) ? (
-                  <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div>
-                <div className="text-2xl font-bold text-foreground">{kpi.value}</div>
-                <div className={`text-sm ${kpi.trend === 'down' ? 'text-success' : 'text-destructive'}`}>
-                  {kpi.change}
-                </div>
-              </div>
-              
-              {expandedCards.has(index) && (
-                <div className="pt-3 border-t space-y-2">
-                  <p className="text-xs font-semibold text-muted-foreground">Breakdown</p>
-                  {Object.entries(kpi.details).map(([key, value]: [string, any]) => (
-                    <div key={key} className="flex justify-between text-xs">
-                      <span className="capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
-                      <div className="text-right">
-                        <span className="font-medium">{value.count || value.amount || value.hours}</span>
-                        <span className={`ml-2 ${value.change.startsWith('–') ? 'text-success' : 'text-destructive'}`}>
-                          {value.change}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="outline" onClick={fetchIncidents}>
+          <RefreshCcw className="w-4 h-4 mr-2" />
+          Refresh
+        </Button>
+        <Button onClick={() => seedIncidents(300)} disabled={seeding}>
+          <AlertTriangle className="w-4 h-4 mr-2" />
+          {seeding ? "Populating..." : "Populate Incidents"}
+        </Button>
       </div>
 
-      {/* Central Analytics Tabs */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Analytics Dashboard</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="timeline" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="timeline">Anomalies Over Time</TabsTrigger>
-              <TabsTrigger value="cost">Cost Impact</TabsTrigger>
-              <TabsTrigger value="map">Hotspot Map</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="timeline" className="mt-6">
-              <ResponsiveContainer width="100%" height={350}>
-                <LineChart data={timeSeriesData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))", 
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "var(--radius)"
-                    }}
-                  />
-                  <Line type="monotone" dataKey="leaks" stroke="hsl(var(--destructive))" strokeWidth={2} name="Pipeline Breaks" />
-                  <Line type="monotone" dataKey="salinity" stroke="hsl(var(--warning))" strokeWidth={2} name="Salinity" />
-                  <Line type="monotone" dataKey="quality" stroke="hsl(var(--info))" strokeWidth={2} name="Quality" />
-                </LineChart>
-              </ResponsiveContainer>
-            </TabsContent>
-
-            <TabsContent value="cost" className="mt-6">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="flex items-center justify-center">
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={costData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                        outerRadius={100}
-                        fill="#8884d8"
-                        dataKey="value"
-                      >
-                        {costData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip 
-                        formatter={(value: number) => `AED ${(value / 1000000).toFixed(2)}M`}
-                        contentStyle={{ 
-                          backgroundColor: "hsl(var(--card))", 
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "var(--radius)"
-                        }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="space-y-3">
-                  <h4 className="font-semibold">Top 5 Cost-Driving Zones</h4>
-                  <div className="space-y-2">
-                    {[
-                      { zone: "Zone 3", cost: "AED 1.99M" },
-                      { zone: "Zone 5", cost: "AED 1.12M" },
-                      { zone: "Zone 2", cost: "AED 890k" },
-                      { zone: "Zone 4", cost: "AED 745k" },
-                      { zone: "Zone 1", cost: "AED 625k" },
-                    ].map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                        <span className="font-medium">{item.zone}</span>
-                        <span className="text-primary font-bold">{item.cost}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="map" className="mt-6">
-              <div className="rounded-xl border border-border overflow-hidden h-[500px]">
-                {layoutPolygon.length < 3 ? (
-                  <div className="flex items-center justify-center h-full bg-muted/20 text-muted-foreground">
-                    No layout polygon available.
-                  </div>
-                ) : (
-                  <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "100%", width: "100%" }}>
-                    <TileLayer
-                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                      attribution="Tiles © Esri"
-                    />
-                    <FitMapToPointsOnce points={layoutPolygon} />
-                    <Polygon
-                      positions={layoutPolygon}
-                      pathOptions={{ color: "#10b981", weight: 2, fillOpacity: 0.15 }}
-                    />
-                    {heatmapPoints.map((pt, i) => (
-                        <CircleMarker
-                            key={i}
-                            center={[pt.lat, pt.lng]}
-                            radius={20 * pt.intensity}
-                            pathOptions={{ 
-                                color: pt.intensity > 0.7 ? '#ef4444' : '#f59e0b', 
-                                fillColor: pt.intensity > 0.7 ? '#ef4444' : '#f59e0b',
-                                fillOpacity: 0.6 
-                            }}
-                        >
-                            <Popup>Incident Hotspot (Intensity: {(pt.intensity * 100).toFixed(0)}%)</Popup>
-                        </CircleMarker>
-                    ))}
-                  </MapContainer>
-                )}
-              </div>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
-
-      {/* Systemic Issue Ranking */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Systemic Issue Ranking</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Component / Zone</TableHead>
-                <TableHead>Incident Frequency</TableHead>
-                <TableHead>Avg Cost Per Incident</TableHead>
-                <TableHead>Total Cost Impact</TableHead>
-                <TableHead>Severity</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {systemicIssues.map((issue, idx) => (
-                <TableRow key={idx}>
-                  <TableCell className="font-medium">{issue.component}</TableCell>
-                  <TableCell>{issue.frequency}</TableCell>
-                  <TableCell>AED {issue.avgCost}</TableCell>
-                  <TableCell className="font-semibold text-primary">AED {issue.totalCost}</TableCell>
-                  <TableCell>
-                    <Badge variant={
-                      issue.severity === 'critical' ? 'destructive' :
-                      issue.severity === 'high' ? 'alert' : 'warning'
-                    }>
-                      {issue.severity.toUpperCase()}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Cross-Module Correlation */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3 mb-2">
-              <TrendingUp className="w-5 h-5 text-destructive" />
-              <h4 className="font-semibold">Pipeline → Water Loss</h4>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Pipeline failures account for 68% of total water loss this quarter
-            </p>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Issues Reported</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{reportedIssues}</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3 mb-2">
-              <TrendingUp className="w-5 h-5 text-warning" />
-              <h4 className="font-semibold">Salinity → Crop Risk</h4>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              High salinity events correlated with 42% reduction in crop yield projections
-            </p>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Alerts (Ongoing)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-warning">{ongoingAlerts}</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3 mb-2">
-              <TrendingUp className="w-5 h-5 text-info" />
-              <h4 className="font-semibold">Quality → Treatment Cost</h4>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Poor water quality increases treatment costs by average of AED 34k per incident
-            </p>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">High/Critical Alerts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-destructive">{criticalAlerts}</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Detailed Incident Log */}
       <Card>
-        <CardHeader>
-          <CardTitle>Detailed Incident Log</CardTitle>
+        <CardHeader className="space-y-4">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-5 h-5" />
+            <CardTitle>Alerts Trend</CardTitle>
+          </div>
+          <Tabs value={rangeMode} onValueChange={(val) => setRangeMode(val as RangeMode)}>
+            <TabsList>
+              <TabsTrigger value="weekly">
+                <CalendarDays className="w-4 h-4 mr-1" />
+                Weekly
+              </TabsTrigger>
+              <TabsTrigger value="monthly">Monthly</TabsTrigger>
+              <TabsTrigger value="yearly">Yearly</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>Incident Type</TableHead>
-                <TableHead>Zone</TableHead>
-                <TableHead>Severity</TableHead>
-                <TableHead>Estimated Cost</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {incidents.map((incident, idx) => (
-                <TableRow key={idx}>
-                  <TableCell className="font-mono text-xs">{incident.timestamp}</TableCell>
-                  <TableCell>{incident.type}</TableCell>
-                  <TableCell>{incident.zone}</TableCell>
-                  <TableCell>
-                    <Badge variant={
-                      incident.severity === 'critical' ? 'destructive' :
-                      incident.severity === 'high' ? 'alert' :
-                      incident.severity === 'medium' ? 'warning' : 'secondary'
-                    }>
-                      {incident.severity.toUpperCase()}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-semibold">{incident.cost}</TableCell>
-                  <TableCell>
-                    <Badge variant={incident.status === 'Resolved' ? 'success' : 'warning'}>
-                      {incident.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <button className="text-sm text-primary hover:underline">View Details</button>
-                  </TableCell>
+          <ResponsiveContainer width="100%" height={340}>
+            <BarChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" />
+              <YAxis stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(var(--card))",
+                  border: "1px solid hsl(var(--border))",
+                  borderRadius: "var(--radius)",
+                }}
+              />
+              <Bar dataKey="issues" name="Issues" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Issues</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading incidents...</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Timestamp</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Gateway</TableHead>
+                  <TableHead>Severity</TableHead>
+                  <TableHead>Status</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {recentRows.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="font-mono text-xs">{row.timestamp}</TableCell>
+                    <TableCell className="capitalize">{row.incidentType}</TableCell>
+                    <TableCell>{row.gateway}</TableCell>
+                    <TableCell>
+                      <Badge variant={row.severity === "critical" ? "destructive" : row.severity === "high" ? "alert" : "secondary"}>
+                        {row.severity.toUpperCase()}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={row.status === "ONGOING" ? "warning" : "success"}>{row.status}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

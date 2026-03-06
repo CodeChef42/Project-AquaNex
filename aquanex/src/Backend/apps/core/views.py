@@ -15,7 +15,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -1765,3 +1765,80 @@ class IncidentResolveView(APIView):
         incident.save()
         
         return Response({"status": "resolved"})
+
+
+class IncidentSeedView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
+        if not workspace:
+            return Response({"error": "No workspace"}, status=400)
+
+        raw_count = request.data.get("count", 240)
+        raw_months = request.data.get("months_back", 12)
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 240
+        try:
+            months_back = int(raw_months)
+        except (TypeError, ValueError):
+            months_back = 12
+
+        count = max(20, min(count, 2000))
+        months_back = max(1, min(months_back, 36))
+
+        incident_types = [
+            "pipeline_leak",
+            "pressure_drop",
+            "flow_interruption",
+            "sensor_anomaly",
+            "water_quality_alert",
+            "salinity_spike",
+        ]
+        severities = ["low", "medium", "high", "critical"]
+        now_ts = timezone.now()
+        base_gateway = str(workspace.gateway_id or "GW-SEED")
+        total_days = max(30, months_back * 30)
+
+        rows = []
+        for idx in range(count):
+            days_ago = random.randint(0, total_days - 1)
+            hours_ago = random.randint(0, 23)
+            minutes_ago = random.randint(0, 59)
+            detected_at = now_ts - timedelta(days=days_ago, hours=hours_ago, minutes=minutes_ago)
+            incident_type = random.choice(incident_types)
+            severity = random.choice(severities)
+            gateway_id = f"{base_gateway}-ALERT-{idx + 1:04d}"
+            fingerprint = _incident_fingerprint(gateway_id, f"{incident_type}-{idx + 1}")
+            rows.append(
+                Incident(
+                    workspace=workspace,
+                    gateway_id=gateway_id,
+                    incident_type=incident_type,
+                    severity=severity,
+                    status="open",  # open is treated as ongoing alert
+                    detected_at=detected_at,
+                    last_seen_at=detected_at,
+                    fingerprint=fingerprint,
+                    details={
+                        "source": "seed",
+                        "status_label": "ongoing",
+                        "alert": True,
+                        "message": "Synthetic seeded incident for analytics visualization",
+                    },
+                )
+            )
+
+        Incident.objects.bulk_create(rows, batch_size=500)
+        total = Incident.objects.filter(workspace=workspace).count()
+        return Response(
+            {
+                "success": True,
+                "seeded": len(rows),
+                "workspace_id": str(workspace.id),
+                "total_incidents": total,
+            },
+            status=201,
+        )

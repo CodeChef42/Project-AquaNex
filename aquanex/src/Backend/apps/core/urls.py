@@ -16,6 +16,7 @@ from .views import (
     WorkspaceListView,
     IncidentListView,
     IncidentResolveView,
+    IncidentSeedView,
 )
 
 def health(request):
@@ -25,6 +26,7 @@ urlpatterns = [
     path("health/", health),
     path("incidents/", IncidentListView.as_view(), name="incidents-list"),
     path("incidents/<str:pk>/resolve/", IncidentResolveView.as_view(), name="incident-resolve"),
+    path("incidents/seed/", IncidentSeedView.as_view(), name="incident-seed"),
     path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/login/", LoginView.as_view(), name="login"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
