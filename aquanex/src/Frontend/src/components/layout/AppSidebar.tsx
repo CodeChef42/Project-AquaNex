@@ -33,10 +33,10 @@ import { Button } from "@/components/ui/button";
 const allItems = [
   { title: "Home", url: "/home", icon: LayoutDashboard, module: null },
   { title: "Pipeline Management", url: "/pipeline", icon: Pipeline, module: "pipeline_management" },
-  { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet, module: "soil_salinity" },
-  { title: "Water Quality", url: "/water-quality", icon: TestTube, module: "water_quality" },
-  { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart, module: "demand_forecasting" },
-  { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
+  { title: "Soil Salinity", url: "/soil", icon: Droplet, module: "soil_salinity" },
+  { title: "Water Quality", url: "/water", icon: TestTube, module: "water_quality" },
+  { title: "Demand Forecasting", url: "/demand", icon: LineChart, module: "demand_forecasting" },
+  { title: "Incident Analytics", url: "/analytics", icon: TrendingUp, module: "incident_analytics" },
   { title: "History Log", url: "/history", icon: History, module: "history_log" },
   { title: "Simulation", url: "/simulation", icon: TerminalSquare, module: null },
   { title: "Settings", url: "/settings", icon: Settings, module: null }, // always visible
@@ -55,6 +55,17 @@ export function AppSidebar() {
     logout();
     navigate("/");
   };
+
+  // Logout button should only appear on the Workspaces page (handled there), 
+  // OR we keep it here but only visible if we are NOT on workspaces page?
+  // The user said: "add logout button to top right just on the workspaces page no other pages. other pages its in the bottom of sidebar."
+  // So "other pages its in the bottom of sidebar" means we should KEEP it here for non-workspaces pages?
+  // Re-reading: "workspaces doesnt have sidebar which is perfect, but add logout button to top right just on the workspaces page no other pages. other pages its in the bottom of sidebar."
+  // This implies:
+  // 1. Workspaces page: No sidebar, Logout at top right.
+  // 2. Other pages: Sidebar exists, Logout at bottom of sidebar.
+  
+  // So I should NOT have removed it from here. I should restore it.
 
   return (
     <Sidebar collapsible="icon">

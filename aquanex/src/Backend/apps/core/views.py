@@ -1464,7 +1464,9 @@ class GatewayTelemetryIngestView(APIView):
         ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
         incident_summary = None
         if isinstance(ml_prediction, dict):
+            # Pass prediction to record incident OR resolve existing ones
             incident_summary = _record_incident_from_prediction(workspace, gateway_id, ml_prediction)
+            
             if ml_prediction.get("is_anomaly") is True:
                 deltas = ml_prediction.get("deltas") or {}
                 anomalies.append({
