@@ -177,6 +177,8 @@ class Workspace(models.Model):
     threshold_ph            = models.JSONField(default=list, blank=True)
     threshold_pressure      = models.JSONField(default=list, blank=True)
     notifications           = models.JSONField(default=list, blank=True)
+    demand_forecasting_plants = models.JSONField(default=list, blank=True)
+    demand_forecasting_systems = models.JSONField(default=list, blank=True)
     
     # ✅ LAYOUT MAPPING FIELDS (NEW)
     layout_polygon          = models.JSONField(default=list, blank=True)  # [[lng,lat], [lng,lat], ...]

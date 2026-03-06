@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Wrench, Clock } from "lucide-react";
 import PipelinesMapView from "./PipelinesMapView";
-import ResourceAllocationModal from "./ResourceAllocationModal";
+import { useNavigate } from "react-router-dom";
 
 interface Alert {
   id: string;
@@ -24,7 +24,7 @@ interface PipelineAlertCardProps {
 
 const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
   const [showMap, setShowMap] = useState(false);
-  const [showAllocate, setShowAllocate] = useState(false);
+  const navigate = useNavigate();
 
   const getSeverityColor = (severity: string) => {
     if (alert.status === 'recovering') return "default";
@@ -105,6 +105,14 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
                   Map
                 </Button>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => navigate(`/pipeline/resources/${alert.id}`, { state: { alert } })}
+                >
+                  Resources
+                </Button>
+                <Button
                   variant="default"
                   size="sm"
                   className="flex-1 bg-green-600 hover:bg-green-700 text-white"
@@ -128,9 +136,9 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
                 variant="outline"
                 size="sm"
                 className="flex-1"
-                onClick={() => setShowAllocate(true)}
+                onClick={() => navigate(`/pipeline/resources/${alert.id}`, { state: { alert } })}
               >
-                Allocate Resources
+                Resources
               </Button>
             </div>
           )}
@@ -141,12 +149,6 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
         open={showMap}
         onOpenChange={setShowMap}
         location={alert.location}
-      />
-
-      <ResourceAllocationModal
-        open={showAllocate}
-        onOpenChange={setShowAllocate}
-        alertId={alert.id}
       />
     </>
   );

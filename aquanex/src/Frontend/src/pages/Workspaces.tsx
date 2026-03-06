@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { MapContainer, Marker, Polygon, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -10,25 +10,29 @@ import { divIcon } from "leaflet";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 const workspacePinIcon = divIcon({
-  html: '<div style="font-size:20px;line-height:20px;">📍</div>',
+  html: '<div style="font-size:30px;line-height:30px;">📍</div>',
   className: "",
-  iconSize: [20, 20],
-  iconAnchor: [10, 20],
+  iconSize: [30, 30],
+  iconAnchor: [15, 30],
 });
 
 const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
   const map = useMap();
+  const hasInitializedRef = useRef(false);
 
   useEffect(() => {
+    if (hasInitializedRef.current) return;
     if (points.length === 0) {
       map.setView(DUBAI_CENTER, 10);
       return;
     }
     if (points.length === 1) {
       map.setView(points[0], 14);
+      hasInitializedRef.current = true;
       return;
     }
     map.fitBounds(points, { padding: [42, 42], maxZoom: 15 });
+    hasInitializedRef.current = true;
   }, [map, points]);
 
   return null;
@@ -73,12 +77,23 @@ const Workspaces = () => {
     () =>
       polygons
         .map((item) => {
-          const firstPoint = item.positions[0];
-          if (!firstPoint) return null;
+          if (item.positions.length === 0) return null;
+          const sums = item.positions.reduce(
+            (acc, [lat, lng]) => {
+              acc.lat += lat;
+              acc.lng += lng;
+              return acc;
+            },
+            { lat: 0, lng: 0 }
+          );
+          const center: [number, number] = [
+            sums.lat / item.positions.length,
+            sums.lng / item.positions.length,
+          ];
           return {
             id: item.id,
             name: item.name,
-            position: firstPoint,
+            position: center,
           };
         })
         .filter((pin): pin is { id: string; name: string; position: [number, number] } => Boolean(pin)),

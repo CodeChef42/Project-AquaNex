@@ -43,6 +43,8 @@ interface Workspace {
   layout_area_m2?: number;
   layout_notes?: string;
   layout_status?: string;
+  demand_forecasting_plants?: Array<{ name: string; quantity: number }>;
+  demand_forecasting_systems?: Array<{ name: string; quantity: number }>;
 }
 
 interface AuthContextType {

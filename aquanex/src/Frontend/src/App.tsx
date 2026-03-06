@@ -13,6 +13,7 @@ const Home                    = lazy(() => import("./pages/Home"));
 const PipelinesManagementPage = lazy(() => import("./pages/pipeline/PipelinesManagementPage"));
 const IncidentDetail          = lazy(() => import("./pages/pipeline/IncidentDetail"));
 const AlertList               = lazy(() => import("./pages/pipeline/AlertList"));
+const PipelineResources       = lazy(() => import("./pages/pipeline/PipelineResources"));
 const SoilSalinity            = lazy(() => import("./pages/SoilSalinity"));
 const ZoneDetail              = lazy(() => import("./pages/soil/ZoneDetail"));
 const IncidentAnalysis        = lazy(() => import("./pages/IncidentAnalysis"));
@@ -85,6 +86,7 @@ const App = () => (
                   <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
                   <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
                   <Route path="/pipeline/alerts"               element={<AlertList />} />
+                  <Route path="/pipeline/resources/:incidentId" element={<PipelineResources />} />
                 </Route>
 
                 <Route element={<ModuleRoute module="soil_salinity" />}>

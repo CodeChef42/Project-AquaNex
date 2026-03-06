@@ -10,7 +10,7 @@ import {
   LayoutGrid,
   MapPin,
   Cpu,
-  Bell,
+  Sprout,
   CheckCircle,
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
@@ -72,12 +72,10 @@ interface OnboardingData {
   devices: GatewayDevice[];
   gatewayId: string;
   gatewayProtocol: string;
-  thresholds: {
-    soilMoisture: [number, number];
-    ph: [number, number];
-    pressure: [number, number];
+  demandForecasting: {
+    plants: { name: string; quantity: number | "" }[];
+    waterSystems: { name: string; quantity: number | "" }[];
   };
-  notifications: string[];
 }
 
 type LayoutTaskState = "idle" | "processing" | "ready" | "failed";
@@ -159,7 +157,7 @@ const STEPS = [
   { id: 3, label: "Modules", icon: LayoutGrid },
   { id: 4, label: "Layout", icon: MapPin },
   { id: 5, label: "Gateway", icon: Cpu },
-  { id: 6, label: "Alerts", icon: Bell },
+  { id: 6, label: "Demand", icon: Sprout },
   { id: 7, label: "Ready", icon: CheckCircle },
 ];
 
@@ -226,12 +224,10 @@ const INITIAL: OnboardingData = {
   devices: [],
   gatewayId: "",
   gatewayProtocol: "mqtt",
-  thresholds: {
-    soilMoisture: [20, 80],
-    ph: [6, 8],
-    pressure: [2, 6],
+  demandForecasting: {
+    plants: [{ name: "", quantity: "" }],
+    waterSystems: [{ name: "", quantity: "" }],
   },
-  notifications: ["in-app"],
 };
 
 const Onboarding = () => {
@@ -435,18 +431,83 @@ const Onboarding = () => {
         : [...data.modules, id],
     });
 
-  const toggleNotif = (type: string) =>
+  const updatePlantRow = (index: number, fields: Partial<{ name: string; quantity: number | "" }>) => {
+    const nextRows = data.demandForecasting.plants.map((row, i) =>
+      i === index ? { ...row, ...fields } : row
+    );
     update({
-      notifications: data.notifications.includes(type)
-        ? data.notifications.filter((n) => n !== type)
-        : [...data.notifications, type],
+      demandForecasting: {
+        ...data.demandForecasting,
+        plants: nextRows,
+      },
     });
+  };
+
+  const updateWaterSystemRow = (index: number, fields: Partial<{ name: string; quantity: number | "" }>) => {
+    const nextRows = data.demandForecasting.waterSystems.map((row, i) =>
+      i === index ? { ...row, ...fields } : row
+    );
+    update({
+      demandForecasting: {
+        ...data.demandForecasting,
+        waterSystems: nextRows,
+      },
+    });
+  };
+
+  const addPlantRow = () => {
+    update({
+      demandForecasting: {
+        ...data.demandForecasting,
+        plants: [...data.demandForecasting.plants, { name: "", quantity: "" }],
+      },
+    });
+  };
+
+  const addWaterSystemRow = () => {
+    update({
+      demandForecasting: {
+        ...data.demandForecasting,
+        waterSystems: [...data.demandForecasting.waterSystems, { name: "", quantity: "" }],
+      },
+    });
+  };
+
+  const removePlantRow = (index: number) => {
+    const remaining = data.demandForecasting.plants.filter((_, i) => i !== index);
+    update({
+      demandForecasting: {
+        ...data.demandForecasting,
+        plants: remaining.length ? remaining : [{ name: "", quantity: "" }],
+      },
+    });
+  };
+
+  const removeWaterSystemRow = (index: number) => {
+    const remaining = data.demandForecasting.waterSystems.filter((_, i) => i !== index);
+    update({
+      demandForecasting: {
+        ...data.demandForecasting,
+        waterSystems: remaining.length ? remaining : [{ name: "", quantity: "" }],
+      },
+    });
+  };
 
   const addEmail = () => {
     if (emailInput && !data.inviteEmails.includes(emailInput)) {
       update({ inviteEmails: [...data.inviteEmails, emailInput] });
       setEmailInput("");
     }
+  };
+
+  const buildDemandForecastingPayload = () => {
+    const plants = data.demandForecasting.plants
+      .filter((item) => item.name.trim() !== "" && Number(item.quantity) > 0)
+      .map((item) => ({ name: item.name.trim(), quantity: Number(item.quantity) }));
+    const waterSystems = data.demandForecasting.waterSystems
+      .filter((item) => item.name.trim() !== "" && Number(item.quantity) > 0)
+      .map((item) => ({ name: item.name.trim(), quantity: Number(item.quantity) }));
+    return { plants, waterSystems };
   };
 
   const canProceed = () => {
@@ -460,6 +521,10 @@ const Onboarding = () => {
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
     if (step === 5) return true;
+    if (step === 6) {
+      const demandPayload = buildDemandForecastingPayload();
+      return demandPayload.plants.length > 0 || demandPayload.waterSystems.length > 0;
+    }
     return true;
   };
 
@@ -482,8 +547,7 @@ const Onboarding = () => {
       layout_notes: data.layout.notes,
       gatewayId: data.gatewayId,
       gatewayProtocol: data.gatewayProtocol,
-      thresholds: data.thresholds,
-      notifications: data.notifications,
+      demandForecasting: buildDemandForecastingPayload(),
     });
     const newId = String(bootstrap?.data?.workspace_id || "");
     if (!newId) return null;
@@ -549,8 +613,7 @@ const Onboarding = () => {
         layout_notes: data.layout.notes,
         gatewayId: data.gatewayId,
         gatewayProtocol: data.gatewayProtocol,
-        thresholds: data.thresholds,
-        notifications: data.notifications,
+        demandForecasting: buildDemandForecastingPayload(),
       });
       if (res.status >= 200 && res.status < 300) {
         await fetchWorkspace();
@@ -1759,106 +1822,102 @@ const Onboarding = () => {
         </div>
       );
 
-    // ─── Step 6 ───
     if (step === 6)
       return (
-        <div className="space-y-6">
+        <div className="space-y-8">
           <div>
-            <h2 className="text-2xl font-bold">Configure alert thresholds</h2>
+            <h2 className="text-2xl font-bold">Demand forecasting setup</h2>
             <p className="text-muted-foreground mt-1">
-              AquaNex notifies you when sensor values go outside these ranges.
+              Enter crop/plant counts and irrigation systems to improve demand modeling.
             </p>
           </div>
-          {[
-            {
-              key: "soilMoisture",
-              label: "Soil Moisture",
-              unit: "%",
-              min: 0,
-              max: 100,
-            },
-            { key: "ph", label: "pH Level", unit: "pH", min: 0, max: 14 },
-            {
-              key: "pressure",
-              label: "Water Pressure",
-              unit: "bar",
-              min: 0,
-              max: 10,
-            },
-          ].map(({ key, label, unit, min, max }) => {
-            const vals = data.thresholds[key as keyof typeof data.thresholds];
-            return (
-              <div
-                key={key}
-                className="p-5 rounded-2xl border border-border space-y-3"
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Plants / Crops</h3>
+              <button
+                type="button"
+                onClick={addPlantRow}
+                className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors"
               >
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">{label}</span>
-                  <span className="text-sm text-primary font-medium">
-                    {vals[0]} – {vals[1]} {unit}
-                  </span>
+                Add row
+              </button>
+            </div>
+            <div className="space-y-2">
+              {data.demandForecasting.plants.map((row, index) => (
+                <div key={`plant-${index}`} className="grid grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Plant/Crop type"
+                    value={row.name}
+                    onChange={(e) => updatePlantRow(index, { name: e.target.value })}
+                    className="col-span-7 px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Quantity"
+                    value={row.quantity}
+                    onChange={(e) =>
+                      updatePlantRow(index, {
+                        quantity: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="col-span-3 px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePlantRow(index)}
+                    className="col-span-2 px-2 py-2 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors"
+                  >
+                    Remove
+                  </button>
                 </div>
-                <div className="flex gap-4">
-                  <div className="flex-1 space-y-1">
-                    <label className="text-xs text-muted-foreground">Min</label>
-                    <input
-                      type="range"
-                      min={min}
-                      max={max}
-                      value={vals[0]}
-                      onChange={(e) =>
-                        update({
-                          thresholds: {
-                            ...data.thresholds,
-                            [key]: [Number(e.target.value), vals[1]],
-                          },
-                        })
-                      }
-                      className="w-full accent-primary"
-                    />
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <label className="text-xs text-muted-foreground">Max</label>
-                    <input
-                      type="range"
-                      min={min}
-                      max={max}
-                      value={vals[1]}
-                      onChange={(e) =>
-                        update({
-                          thresholds: {
-                            ...data.thresholds,
-                            [key]: [vals[0], Number(e.target.value)],
-                          },
-                        })
-                      }
-                      className="w-full accent-primary"
-                    />
-                  </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Water Systems</h3>
+              <button
+                type="button"
+                onClick={addWaterSystemRow}
+                className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors"
+              >
+                Add row
+              </button>
+            </div>
+            <div className="space-y-2">
+              {data.demandForecasting.waterSystems.map((row, index) => (
+                <div key={`water-${index}`} className="grid grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    placeholder="System name (e.g. Sprinkler, Drip Tube)"
+                    value={row.name}
+                    onChange={(e) => updateWaterSystemRow(index, { name: e.target.value })}
+                    className="col-span-7 px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Quantity"
+                    value={row.quantity}
+                    onChange={(e) =>
+                      updateWaterSystemRow(index, {
+                        quantity: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="col-span-3 px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeWaterSystemRow(index)}
+                    className="col-span-2 px-2 py-2 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors"
+                  >
+                    Remove
+                  </button>
                 </div>
-              </div>
-            );
-          })}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Notification Channels</label>
-            <div className="flex gap-3">
-              {[
-                { id: "in-app", label: "In-App" },
-                { id: "email", label: "Email" },
-                { id: "sms", label: "SMS" },
-              ].map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => toggleNotif(id)}
-                  className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
-                    data.notifications.includes(id)
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  {label}
-                </button>
               ))}
             </div>
           </div>
@@ -1909,6 +1968,14 @@ const Onboarding = () => {
               {
                 label: "Gateway",
                 value: data.gatewayId || "Not connected",
+              },
+              {
+                label: "Plant Entries",
+                value: `${buildDemandForecastingPayload().plants.length}`,
+              },
+              {
+                label: "System Entries",
+                value: `${buildDemandForecastingPayload().waterSystems.length}`,
               },
             ].map(({ label, value }) => (
               <div
@@ -1996,7 +2063,7 @@ const Onboarding = () => {
               disabled={!canProceed()}
               className="flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {step === 6 ? "Finish Setup" : "Next Step"}{" "}
+              Next Step{" "}
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>

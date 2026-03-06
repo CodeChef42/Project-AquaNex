@@ -186,7 +186,7 @@ const Simulation = () => {
   const autoStartArmedRef = useRef(false);
 
   // New state for UI visualization of phase
-  const [currentPhase, setCurrentPhase] = useState<"Normal" | "Leak" | "Breakage">("Normal");
+  const [currentPhase, setCurrentPhase] = useState<"Normal" | "Leak" | "EscalatedLeak" | "Breakage">("Normal");
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo<WorkspaceDevice[]>(
@@ -252,48 +252,66 @@ const Simulation = () => {
 
     const elapsedMs = Date.now() - simulationStartMsRef.current;
     
-    // Cycle: 0-20s Normal -> 20-35s Leak -> 35-50s Breakage -> 50+ Normal
-    let phase: "Normal" | "Leak" | "Breakage" = "Normal";
-    if (elapsedMs >= 20000 && elapsedMs < 35000) {
+    let phase: "Normal" | "Leak" | "EscalatedLeak" | "Breakage" = "Normal";
+    if (elapsedMs >= 20000 && elapsedMs < 40000) {
       phase = "Leak";
-    } else if (elapsedMs >= 35000 && elapsedMs < 50000) {
+    } else if (elapsedMs >= 40000 && elapsedMs < 60000) {
+      phase = "EscalatedLeak";
+    } else if (elapsedMs >= 60000 && elapsedMs < 80000) {
       phase = "Breakage";
     }
+
+    const flowFallbackIndexById = new Map<string, number>();
+    const pressureFallbackIndexById = new Map<string, number>();
+    const flowCandidates = activeDevices
+      .filter((d) => metricGroup(inferMetric(d), d.type, d.id) === "flow")
+      .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")));
+    const pressureCandidates = activeDevices
+      .filter((d) => metricGroup(inferMetric(d), d.type, d.id) === "pressure")
+      .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")));
+    flowCandidates.forEach((d, idx) => flowFallbackIndexById.set(String(d.id || ""), idx % 2 === 0 ? 1 : 2));
+    pressureCandidates.forEach((d, idx) => pressureFallbackIndexById.set(String(d.id || ""), idx % 2 === 0 ? 1 : 2));
 
     return activeDevices.map((device) => {
       const metric = inferMetric(device);
       const prev = latestValuesRef.current[device.id];
       const group = metricGroup(metric, device.type, device.id);
       const sensorIndex = inferSensorIndex(device);
+      const effectiveSensorIndex =
+        sensorIndex ??
+        (group === "flow"
+          ? flowFallbackIndexById.get(String(device.id || "")) ?? null
+          : group === "pressure"
+          ? pressureFallbackIndexById.get(String(device.id || "")) ?? null
+          : null);
 
       let reading = valueForMetric(metric, prev);
 
       // Apply phase-specific logic for Pipeline Flow/Pressure
-      if ((group === "flow" || group === "pressure") && sensorIndex) {
+      if ((group === "flow" || group === "pressure") && effectiveSensorIndex) {
         if (phase === "Leak") {
-          // Leak: Medium Disparity (Flow diff ~15-20, Pressure diff ~1.0)
           if (group === "flow") {
-            // Normal ~50, Leak: Upstream ~65, Downstream ~45 (Diff ~20)
-            reading = sensorIndex === 1 ? randomAround(65, 2) : randomAround(45, 2);
+            reading = effectiveSensorIndex === 1 ? randomAround(65, 2) : randomAround(45, 2);
           } else {
-            // Normal ~4 bar, Leak: Upstream ~4.0, Downstream ~3.0 (Diff ~1.0)
-            reading = sensorIndex === 1 ? randomAround(4.0, 0.1) : randomAround(3.0, 0.1);
+            reading = effectiveSensorIndex === 1 ? randomAround(4.0, 0.1) : randomAround(3.0, 0.1);
+          }
+        } else if (phase === "EscalatedLeak") {
+          if (group === "flow") {
+            reading = effectiveSensorIndex === 1 ? randomAround(75, 2.5) : randomAround(30, 2.5);
+          } else {
+            reading = effectiveSensorIndex === 1 ? randomAround(4.3, 0.15) : randomAround(1.8, 0.15);
           }
         } else if (phase === "Breakage") {
-          // Breakage: High Disparity (Flow diff > 50, Pressure diff > 3.0)
           if (group === "flow") {
-            // Normal ~50, Breakage: Upstream ~85, Downstream ~15 (Diff ~70)
-            reading = sensorIndex === 1 ? randomAround(85, 3) : randomAround(15, 3);
+            reading = effectiveSensorIndex === 1 ? randomAround(85, 3) : randomAround(15, 3);
           } else {
-            // Normal ~4 bar, Breakage: Upstream ~4.5, Downstream ~0.5 (Diff ~4.0)
-            reading = sensorIndex === 1 ? randomAround(4.5, 0.2) : randomAround(0.5, 0.1);
+            reading = effectiveSensorIndex === 1 ? randomAround(4.5, 0.2) : randomAround(0.5, 0.1);
           }
         } else {
-          // Normal: Low Disparity (Flow diff < 5, Pressure diff < 0.2)
           if (group === "flow") {
-            reading = randomAround(50, 2); // Both around 50
+            reading = randomAround(50, 2);
           } else {
-            reading = randomAround(4.0, 0.1); // Both around 4.0
+            reading = randomAround(4.0, 0.1);
           }
         }
       }
@@ -312,7 +330,7 @@ const Simulation = () => {
     });
   };
 
-  const updatePhase = (newPhase: "Normal" | "Leak" | "Breakage") => {
+  const updatePhase = (newPhase: "Normal" | "Leak" | "EscalatedLeak" | "Breakage") => {
     setCurrentPhase(newPhase);
   };
 
@@ -326,14 +344,11 @@ const Simulation = () => {
       return;
     }
 
-    // We can't update state directly inside buildTelemetryBatch if called from render cycle or frequent interval
-    // So we move the logic calculation here or accept the state update during the interval tick
-    
-    // For simplicity, let's duplicate the time check here to update UI state safely
     if (simulationStartMsRef.current) {
         const elapsedMs = Date.now() - simulationStartMsRef.current;
-        if (elapsedMs >= 20000 && elapsedMs < 35000) updatePhase("Leak");
-        else if (elapsedMs >= 35000 && elapsedMs < 50000) updatePhase("Breakage");
+        if (elapsedMs >= 20000 && elapsedMs < 40000) updatePhase("Leak");
+        else if (elapsedMs >= 40000 && elapsedMs < 60000) updatePhase("EscalatedLeak");
+        else if (elapsedMs >= 60000 && elapsedMs < 80000) updatePhase("Breakage");
         else updatePhase("Normal");
     }
 
@@ -507,6 +522,7 @@ const Simulation = () => {
   const getPhaseColor = () => {
     switch (currentPhase) {
       case "Leak": return "warning";
+      case "EscalatedLeak": return "alert";
       case "Breakage": return "destructive";
       default: return "secondary";
     }

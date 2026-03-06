@@ -63,35 +63,63 @@ const MainLayout = ({ children }: MainLayoutProps) => {
         localStorage.setItem("aquanex_sim_started_at", String(startedAt));
       }
       const elapsedMs = now - startedAt;
-      let phase: "Normal" | "Leak" | "Breakage" = "Normal";
-      if (elapsedMs >= 20000 && elapsedMs < 35000) phase = "Leak";
-      else if (elapsedMs >= 35000 && elapsedMs < 50000) phase = "Breakage";
+      let phase: "Normal" | "Leak" | "EscalatedLeak" | "Breakage" = "Normal";
+      if (elapsedMs >= 20000 && elapsedMs < 40000) phase = "Leak";
+      else if (elapsedMs >= 40000 && elapsedMs < 60000) phase = "EscalatedLeak";
+      else if (elapsedMs >= 60000 && elapsedMs < 80000) phase = "Breakage";
+
+      const flowFallbackIndexById = new Map<string, number>();
+      const pressureFallbackIndexById = new Map<string, number>();
+      const flowCandidates = devices
+        .filter((d: any) => metricGroup(inferMetric(d), d?.type || "") === "flow")
+        .sort((a: any, b: any) => String(a?.id || "").localeCompare(String(b?.id || "")));
+      const pressureCandidates = devices
+        .filter((d: any) => metricGroup(inferMetric(d), d?.type || "") === "pressure")
+        .sort((a: any, b: any) => String(a?.id || "").localeCompare(String(b?.id || "")));
+      flowCandidates.forEach((d: any, idx: number) => flowFallbackIndexById.set(String(d?.id || ""), idx % 2 === 0 ? 1 : 2));
+      pressureCandidates.forEach((d: any, idx: number) => pressureFallbackIndexById.set(String(d?.id || ""), idx % 2 === 0 ? 1 : 2));
 
       const ts = new Date().toISOString();
       const telemetry = devices.map((device: any) => {
         const metric = inferMetric(device);
         const group = metricGroup(metric, device?.type || "");
         const sensorIndex = inferSensorIndex(device);
+        const effectiveSensorIndex =
+          sensorIndex ??
+          (group === "flow"
+            ? flowFallbackIndexById.get(String(device?.id || "")) ?? null
+            : group === "pressure"
+            ? pressureFallbackIndexById.get(String(device?.id || "")) ?? null
+            : null);
         const prev = latestValuesRef.current[device.id];
         let reading = prev ?? randomAround(50, 2);
 
-        if ((group === "flow" || group === "pressure") && sensorIndex) {
+        if ((group === "flow" || group === "pressure") && effectiveSensorIndex) {
           if (phase === "Leak") {
             reading =
               group === "flow"
-                ? sensorIndex === 1
+                ? effectiveSensorIndex === 1
                   ? randomAround(65, 2)
                   : randomAround(45, 2)
-                : sensorIndex === 1
+                : effectiveSensorIndex === 1
                 ? randomAround(4.0, 0.1)
                 : randomAround(3.0, 0.1);
+          } else if (phase === "EscalatedLeak") {
+            reading =
+              group === "flow"
+                ? effectiveSensorIndex === 1
+                  ? randomAround(75, 2.5)
+                  : randomAround(30, 2.5)
+                : effectiveSensorIndex === 1
+                ? randomAround(4.3, 0.15)
+                : randomAround(1.8, 0.15);
           } else if (phase === "Breakage") {
             reading =
               group === "flow"
-                ? sensorIndex === 1
+                ? effectiveSensorIndex === 1
                   ? randomAround(85, 3)
                   : randomAround(15, 3)
-                : sensorIndex === 1
+                : effectiveSensorIndex === 1
                 ? randomAround(4.5, 0.2)
                 : randomAround(0.5, 0.1);
           } else {

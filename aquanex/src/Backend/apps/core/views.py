@@ -998,6 +998,8 @@ class OnboardingView(APIView):
                 threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
                 threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
                 notifications=data.get('notifications', []),
+                demand_forecasting_plants=data.get('demandForecasting', {}).get('plants', []),
+                demand_forecasting_systems=data.get('demandForecasting', {}).get('waterSystems', []),
                 layout_polygon=data.get('layout_polygon', []),
                 layout_area_m2=float(data.get('layout_area_m2', 0)),
                 layout_notes=data.get('layout_notes', ''),
@@ -1020,6 +1022,8 @@ class OnboardingView(APIView):
             workspace.threshold_ph = data.get('thresholds', {}).get('ph', workspace.threshold_ph)
             workspace.threshold_pressure = data.get('thresholds', {}).get('pressure', workspace.threshold_pressure)
             workspace.notifications = data.get('notifications', workspace.notifications)
+            workspace.demand_forecasting_plants = data.get('demandForecasting', {}).get('plants', workspace.demand_forecasting_plants)
+            workspace.demand_forecasting_systems = data.get('demandForecasting', {}).get('waterSystems', workspace.demand_forecasting_systems)
             workspace.layout_polygon = data.get('layout_polygon', workspace.layout_polygon)
             workspace.layout_area_m2 = float(data.get('layout_area_m2', workspace.layout_area_m2))
             workspace.layout_notes = data.get('layout_notes', workspace.layout_notes)
@@ -1736,4 +1740,3 @@ class IncidentResolveView(APIView):
         incident.save()
         
         return Response({"status": "resolved"})
-
