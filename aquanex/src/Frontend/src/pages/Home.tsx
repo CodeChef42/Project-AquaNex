@@ -160,14 +160,14 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        <Card className="border-primary/20 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/anomaly-analysis")}>
+        <Card className="border-primary/20 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/incident-analytics")}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Quarterly Water Loss</CardTitle>
+            <CardTitle className="text-sm font-medium">Incident Trend</CardTitle>
             <TrendingDown className="w-5 h-5 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-primary">AED 2.4M</div>
-            <p className="text-xs text-success mt-1">↓ 8% from last quarter</p>
+            <div className="text-3xl font-bold text-primary">18%</div>
+            <p className="text-xs text-success mt-1">↓ Incident volume vs last quarter</p>
             <Button variant="link" className="px-0 mt-2 text-primary hover:text-primary/80">
               View Incident Analytics →
             </Button>
