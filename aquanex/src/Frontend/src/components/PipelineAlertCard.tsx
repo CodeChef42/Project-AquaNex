@@ -100,14 +100,6 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
                   variant="outline"
                   size="sm"
                   className="flex-1"
-                  onClick={() => setShowMap(true)}
-                >
-                  Map
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1"
                   onClick={() => navigate(`/pipeline/resources/${alert.id}`, { state: { alert } })}
                 >
                   Resources
@@ -124,14 +116,6 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
             </div>
           ) : (
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={() => setShowMap(true)}
-              >
-                Map / Navigate
-              </Button>
               <Button
                 variant="outline"
                 size="sm"
