@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../contexts/AuthContext";
-import { CircleMarker, MapContainer, Polygon, Popup, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 const alertData = [
@@ -56,21 +56,11 @@ const Dashboard = () => {
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
     ? workspace.layout_polygon
     : [];
-  const workspaceDevices = Array.isArray(workspace?.devices) ? workspace.devices : [];
-  const geolocatedDevices = workspaceDevices.filter(
-    (device) =>
-      typeof device?.lat === "number" &&
-      Number.isFinite(device.lat) &&
-      typeof device?.lng === "number" &&
-      Number.isFinite(device.lng)
-  );
   const mapFocusPoints = useMemo<[number, number][]>(() => {
-    const layoutPoints = layoutPolygon
+    return layoutPolygon
       .map(([lng, lat]) => [lat, lng] as [number, number])
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
-    const devicePoints = geolocatedDevices.map((device) => [device.lat as number, device.lng as number] as [number, number]);
-    return [...layoutPoints, ...devicePoints];
-  }, [geolocatedDevices, layoutPolygon]);
+  }, [layoutPolygon]);
 
   useEffect(() => {
     fetchWorkspace();
@@ -156,47 +146,10 @@ const Dashboard = () => {
                   positions={layoutPolygon.map(([lng, lat]) => [lat, lng])}
                   pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
                 />
-                {geolocatedDevices.map((device) => (
-                  <CircleMarker
-                    key={device.id}
-                    center={[device.lat as number, device.lng as number]}
-                    radius={6}
-                    pathOptions={{
-                      color: device.anomaly
-                        ? "#dc2626"
-                        : device.type === "pressure_sensor"
-                        ? "#f59e0b"
-                        : "#ef4444",
-                      fillOpacity: 0.9,
-                    }}
-                  >
-                    <Popup>
-                      <div className="text-xs space-y-1">
-                        <p className="font-semibold">{device.id}</p>
-                        <p>{device.type}</p>
-                        <p>
-                          {device.metric}: {String(device.reading)}
-                        </p>
-                        {device.anomaly && (
-                          <p className="text-red-600 font-semibold">
-                            Anomaly: {device.anomaly_meta?.reason || "delta spike"}
-                          </p>
-                        )}
-                        <p className="text-muted-foreground">{device.last_seen}</p>
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                ))}
               </MapContainer>
             </div>
             <p className="text-xs text-muted-foreground">
               Area: {workspace?.layout_area_m2 ? `${(workspace.layout_area_m2 / 1000).toFixed(2)}k m²` : "—"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Devices on map: {geolocatedDevices.length}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Active anomalies: {geolocatedDevices.filter((d) => d.anomaly).length}
             </p>
             {workspace?.layout_notes && (
               <p className="text-xs text-muted-foreground">

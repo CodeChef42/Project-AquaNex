@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
 
 const AlertList = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [incidents, setIncidents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -87,6 +88,18 @@ const AlertList = () => {
       });
   }, [incidents]);
 
+  const searchAlertId = (searchParams.get("alertId") || "").trim().replace(/^#/, "");
+  const visibleAlerts = useMemo(() => {
+    if (!searchAlertId) return alerts;
+    const needle = searchAlertId.toLowerCase();
+    return alerts.filter((alert) => String(alert.id).toLowerCase().includes(needle));
+  }, [alerts, searchAlertId]);
+
+  useEffect(() => {
+    if (!searchAlertId || visibleAlerts.length === 0) return;
+    setExpandedRow(String(visibleAlerts[0].id));
+  }, [searchAlertId, visibleAlerts]);
+
   const handleResolve = async (id: string) => {
     try {
       await api.post(`/incidents/${id}/resolve/`);
@@ -131,12 +144,12 @@ const AlertList = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Active Alerts ({alerts.length})</CardTitle>
+          <CardTitle>Active Alerts ({visibleAlerts.length})</CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading alerts...</p>
-          ) : alerts.length === 0 ? (
+          ) : visibleAlerts.length === 0 ? (
             <p className="text-sm text-muted-foreground">No incidents available.</p>
           ) : (
           <Table>
@@ -151,7 +164,7 @@ const AlertList = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {alerts.map((alert) => (
+              {visibleAlerts.map((alert) => (
                 <Fragment key={alert.id}>
                   <TableRow 
                     className="cursor-pointer hover:bg-muted/50"
