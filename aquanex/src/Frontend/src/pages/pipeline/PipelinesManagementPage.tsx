@@ -160,56 +160,24 @@ const PipelinesManagementPage = () => {
         <p className="text-muted-foreground">Monitor and manage pipeline alerts and resources</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Top Alerts */}
-        <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-xl font-semibold text-foreground">Top Priority Alerts</h2>
-
-          {topAlerts.map((alert) => (
-            <PipelineAlertCard key={alert.id} alert={alert} />
-          ))}
-        </div>
-
-        {/* Alert Queue Summary */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-foreground">Alert Queue</h2>
-
-          <Card>
-            <CardContent className="pt-6 space-y-3">
-              <div className="text-center">
-                <p className="text-3xl font-bold text-primary">{alertQueue}</p>
-                <p className="text-sm text-muted-foreground">Total Alerts in Queue</p>
-              </div>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => navigate("/pipeline/alerts")}
-              >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                View Full Alert List
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
+      {/* Map first and prominent */}
       <Card>
         <CardHeader>
           <CardTitle>Pipeline Map</CardTitle>
         </CardHeader>
         <CardContent>
-          {geolocatedDevices.length === 0 ? (
+          {geolocatedDevices.length === 0 && layoutPolygon.length < 3 ? (
             <p className="text-sm text-muted-foreground">
-              No geolocated pipeline devices found. Add lat/lng to devices in gateway inventory.
+              No geolocated pipeline devices or layout found. Add lat/lng to devices or upload a layout.
             </p>
           ) : (
             <div className="rounded-xl border border-border overflow-hidden">
-              <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "380px", width: "100%" }}>
+              <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
                 <TileLayer
                   url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                  attribution="Tiles &copy; Esri"
+                  attribution="Tiles © Esri"
                 />
-                <FitMapToPoints points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
+                <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
                 {layoutPolygon.length > 2 && (
                   <Polygon
                     positions={layoutPolygon.map((point: any) => [point[1], point[0]])}
@@ -228,7 +196,9 @@ const PipelinesManagementPage = () => {
                       <div className="text-xs space-y-1">
                         <p className="font-semibold">{device.id}</p>
                         <p>{device.type}</p>
-                        <p>{device.metric}: {String(device.reading)}</p>
+                        <p>
+                          {device.metric}: {String(device.reading)}
+                        </p>
                       </div>
                     </Popup>
                   );
@@ -261,6 +231,39 @@ const PipelinesManagementPage = () => {
           )}
         </CardContent>
       </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Top Alerts */}
+        <div className="lg:col-span-2 space-y-4">
+          <h2 className="text-xl font-semibold text-foreground">Top Priority Alerts</h2>
+
+          {topAlerts.map((alert) => (
+            <PipelineAlertCard key={alert.id} alert={alert} />
+          ))}
+        </div>
+
+        {/* Alert Queue Summary */}
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold text-foreground">Alert Queue</h2>
+
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-primary">{alertQueue}</p>
+                <p className="text-sm text-muted-foreground">Total Alerts in Queue</p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => navigate("/pipeline/alerts")}
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                View Full Alert List
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 };
