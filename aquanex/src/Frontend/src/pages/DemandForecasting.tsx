@@ -133,6 +133,25 @@ const weatherCodeLabel = (code?: number | null) => {
   return map[code] || `Weather Code ${code}`;
 };
 
+const normalizeLocationQueries = (rawLocation: string): string[] => {
+  const base = String(rawLocation || "").trim();
+  if (!base) return [];
+  const parts = base
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const dedupedAdjacent = parts.filter((part, idx) => idx === 0 || part.toLowerCase() !== parts[idx - 1].toLowerCase());
+  const shortlist = [
+    dedupedAdjacent.join(", "),
+    dedupedAdjacent.slice(0, 2).join(", "),
+    dedupedAdjacent.slice(0, 1).join(", "),
+    parts.join(", "),
+  ]
+    .map((q) => q.trim())
+    .filter(Boolean);
+  return [...new Set(shortlist)];
+};
+
 type LatLngPoint = [number, number];
 
 const toXY = ([lat, lng]: LatLngPoint) => ({ x: lng, y: lat });
@@ -221,6 +240,16 @@ const DemandForecasting = () => {
       .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
   }, [layoutPolygon]);
 
+  const layoutCentroid = useMemo<{ lat: number; lng: number } | null>(() => {
+    if (layoutLatLng.length < 3) return null;
+    const sums = layoutLatLng.reduce(
+      (acc, [lat, lng]) => ({ lat: acc.lat + lat, lng: acc.lng + lng, count: acc.count + 1 }),
+      { lat: 0, lng: 0, count: 0 }
+    );
+    if (!sums.count) return null;
+    return { lat: sums.lat / sums.count, lng: sums.lng / sums.count };
+  }, [layoutLatLng]);
+
   const zonedLayout = useMemo(() => {
     if (layoutLatLng.length < 3) return [];
     const lats = layoutLatLng.map((p) => p[0]);
@@ -249,7 +278,7 @@ const DemandForecasting = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
-      if (!workspaceLocation) {
+      if (!workspaceLocation && !layoutCentroid) {
         setWeatherData(null);
         setWeatherError("No workspace location set.");
         return;
@@ -257,25 +286,44 @@ const DemandForecasting = () => {
       setWeatherLoading(true);
       setWeatherError("");
       try {
-        const geoResp = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(workspaceLocation)}&count=1&language=en&format=json`
-        );
-        if (!geoResp.ok) throw new Error(`Geocoding failed (${geoResp.status})`);
-        const geoJson = await geoResp.json();
-        const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
-        if (!first || typeof first.latitude !== "number" || typeof first.longitude !== "number") {
-          throw new Error("Location not found by weather geocoder.");
+        let latitude: number | null = layoutCentroid?.lat ?? null;
+        let longitude: number | null = layoutCentroid?.lng ?? null;
+        let resolvedName = "";
+
+        if (latitude === null || longitude === null) {
+          const queries = normalizeLocationQueries(workspaceLocation);
+          let geoResult: any = null;
+          for (const query of queries) {
+            const geoResp = await fetch(
+              `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
+            );
+            if (!geoResp.ok) continue;
+            const geoJson = await geoResp.json();
+            const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
+            if (first && typeof first.latitude === "number" && typeof first.longitude === "number") {
+              geoResult = first;
+              break;
+            }
+          }
+          if (!geoResult) {
+            throw new Error("Location not found by weather geocoder.");
+          }
+          latitude = geoResult.latitude;
+          longitude = geoResult.longitude;
+          resolvedName = `${geoResult.name}${geoResult.country ? `, ${geoResult.country}` : ""}`;
+        } else {
+          resolvedName = workspaceLocation || "Layout centroid";
         }
 
         const weatherResp = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${first.latitude}&longitude=${first.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`
+          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`
         );
         if (!weatherResp.ok) throw new Error(`Weather fetch failed (${weatherResp.status})`);
         const weatherJson = await weatherResp.json();
         setWeatherData({
-          resolvedName: `${first.name}${first.country ? `, ${first.country}` : ""}`,
-          latitude: first.latitude,
-          longitude: first.longitude,
+          resolvedName,
+          latitude,
+          longitude,
           current: weatherJson?.current || null,
         });
       } catch (err: any) {
@@ -287,7 +335,7 @@ const DemandForecasting = () => {
     };
 
     fetchWeather();
-  }, [workspaceLocation]);
+  }, [workspaceLocation, layoutCentroid]);
 
   const getTrendIcon = (trend) => {
     if (trend === "increase") return <TrendingUp className="w-5 h-5 text-red-500" />;
