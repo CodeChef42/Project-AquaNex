@@ -88,6 +88,16 @@ interface ExtractedPoint {
   enabled: boolean;
 }
 
+interface ModuleRecommendationResult {
+  source: string;
+  centroid: { lat: number; lng: number } | null;
+  area_m2: number;
+  place_name: string;
+  recommended_modules: string[];
+  module_reasons: Record<string, string>;
+  summary: string;
+}
+
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
 const FitMapToPoints = ({
@@ -155,8 +165,8 @@ const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
   { id: 2, label: "Team", icon: Users },
-  { id: 3, label: "Modules", icon: LayoutGrid },
-  { id: 4, label: "Layout", icon: MapPin },
+  { id: 3, label: "Layout", icon: MapPin },
+  { id: 4, label: "Modules", icon: LayoutGrid },
   { id: 5, label: "Gateway", icon: Cpu },
   { id: 6, label: "Demand", icon: Sprout },
   { id: 7, label: "Ready", icon: CheckCircle },
@@ -189,6 +199,11 @@ const MODULES = [
     desc: "Real-time alerts and incident tracking",
   },
 ];
+
+const MODULE_LABELS = MODULES.reduce<Record<string, string>>((acc, mod) => {
+  acc[mod.id] = mod.label;
+  return acc;
+}, {});
 
 const SPACE_TYPES = [
   "Urban Landscape",
@@ -279,6 +294,11 @@ const Onboarding = () => {
   const [detectedLayoutCoords, setDetectedLayoutCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [weatherStatus, setWeatherStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [weatherError, setWeatherError] = useState("");
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState("");
+  const [recommendation, setRecommendation] = useState<ModuleRecommendationResult | null>(null);
+  const [recommendationSignature, setRecommendationSignature] = useState("");
+  const [recommendationModalOpen, setRecommendationModalOpen] = useState(false);
   const [weeklyForecast, setWeeklyForecast] = useState<{
     time: string[];
     temperature_2m_max: number[];
@@ -709,6 +729,70 @@ const Onboarding = () => {
     return { plants, waterSystems };
   };
 
+  const requestModuleRecommendation = async (polygonOverride?: number[][]) => {
+    const polygon = Array.isArray(polygonOverride) && polygonOverride.length >= 3
+      ? polygonOverride
+      : finalLayoutPolygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) return;
+    const signature = JSON.stringify(polygon);
+    if (recommendationLoading) return;
+    if (recommendationSignature === signature && recommendation) return;
+    setRecommendationLoading(true);
+    setRecommendationError("");
+    try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      const response = await api.post("/layout-module-recommendation/", {
+        workspaceId: targetWorkspaceId || undefined,
+        layout_polygon: polygon,
+      });
+      const payload = response?.data || {};
+      const recommended = Array.isArray(payload?.recommended_modules)
+        ? payload.recommended_modules.map((item: any) => String(item))
+        : [];
+      const moduleReasons =
+        payload?.module_reasons && typeof payload.module_reasons === "object"
+          ? payload.module_reasons
+          : {};
+      setRecommendation({
+        source: String(payload?.source || "heuristic"),
+        centroid:
+          payload?.centroid && typeof payload.centroid === "object"
+            ? {
+                lat: Number(payload.centroid.lat || 0),
+                lng: Number(payload.centroid.lng || 0),
+              }
+            : null,
+        area_m2: Number(payload?.area_m2 || 0),
+        place_name: String(payload?.place_name || ""),
+        recommended_modules: recommended,
+        module_reasons: moduleReasons,
+        summary: String(payload?.summary || ""),
+      });
+      setRecommendationSignature(signature);
+    } catch (error: any) {
+      setRecommendationError(
+        error?.response?.data?.error ||
+          error?.message ||
+          "Failed to generate module recommendation."
+      );
+    } finally {
+      setRecommendationLoading(false);
+    }
+  };
+
+  const applyRecommendedModules = () => {
+    if (!recommendation || !Array.isArray(recommendation.recommended_modules)) return;
+    const next = recommendation.recommended_modules.filter((moduleId) =>
+      MODULES.some((moduleDef) => moduleDef.id === moduleId)
+    );
+    if (!next.length) return;
+    update({ modules: next });
+    toast({
+      title: "Modules applied",
+      description: "Recommended modules have been selected.",
+    });
+  };
+
   const canProceed = () => {
     if (step === 1)
       return (
@@ -717,8 +801,12 @@ const Onboarding = () => {
         data.companyType !== "" &&
         (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
       );
-    if (step === 3) return data.modules.length > 0;
-    if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
+    if (step === 3) {
+      if (finalLayoutPolygon.length < 3) return false;
+      const finalSignature = JSON.stringify(finalLayoutPolygon);
+      return layoutConfirmed && recommendationSignature === finalSignature && !!recommendation;
+    }
+    if (step === 4) return data.modules.length > 0;
     if (step === 6) {
       const demandPayload = buildDemandForecastingPayload();
       return demandPayload.plants.length > 0 || demandPayload.waterSystems.length > 0;
@@ -961,6 +1049,10 @@ const Onboarding = () => {
     setLayoutTaskMessage("");
     setLayoutConfirmed(false);
     setSavingLayout(false);
+    setRecommendation(null);
+    setRecommendationSignature("");
+    setRecommendationError("");
+    setRecommendationModalOpen(false);
     setData((prev) => ({
       ...prev,
       layout: {
@@ -997,6 +1089,7 @@ const Onboarding = () => {
         },
       }));
       setLayoutConfirmed(true);
+      await requestModuleRecommendation(finalLayoutPolygon);
       await fetchWorkspace();
     } catch (error) {
       console.error("Layout confirm save failed:", error);
@@ -1126,6 +1219,12 @@ const Onboarding = () => {
   }, [step, hasDemandForecastingModule, goToNextVisibleStep]);
 
   useEffect(() => {
+    if (step !== 3) return;
+    if (!layoutConfirmed) return;
+    void requestModuleRecommendation();
+  }, [step, layoutConfirmed, finalLayoutPolygon]);
+
+  useEffect(() => {
     if (!layoutTaskId) return;
 
     let isCancelled = false;
@@ -1166,6 +1265,7 @@ const Onboarding = () => {
           if (Array.isArray(ws?.layout_polygon) && ws.layout_polygon.length >= 3) {
             setExtractedPolygon(ws.layout_polygon);
             setLayoutConfirmed(false);
+            void requestModuleRecommendation(ws.layout_polygon);
             setData((prev) => ({
               ...prev,
               layout: {
@@ -1415,56 +1515,6 @@ const Onboarding = () => {
 
     // ─── Step 3 ───
     if (step === 3)
-      return (
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-bold">Choose your modules</h2>
-            <p className="text-muted-foreground mt-1">
-              Select features your team needs. You can change this later.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {MODULES.map((mod) => {
-              const selected = data.modules.includes(mod.id);
-              return (
-                <button
-                  key={mod.id}
-                  type="button"
-                  onClick={() => toggleModule(mod.id)}
-                  className={`text-left p-5 rounded-2xl border-2 transition-all ${
-                    selected
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/40"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-sm">{mod.label}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {mod.desc}
-                      </p>
-                    </div>
-                    <div
-                      className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
-                        selected
-                          ? "border-primary bg-primary"
-                          : "border-border"
-                      }`}
-                    >
-                      {selected && (
-                        <span className="text-white text-[10px]">✓</span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      );
-
-    // ─── Step 4 ───
-    if (step === 4)
       return (
         <div className="space-y-6">
           <div>
@@ -1792,6 +1842,42 @@ const Onboarding = () => {
                   : "Confirm final layout and coordinates"}
               </button>
 
+              <div className="rounded-xl border border-border p-3 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <p className="text-xs font-semibold">AI Recommendation</p>
+                  <button
+                    type="button"
+                    onClick={() => void requestModuleRecommendation()}
+                    disabled={!layoutConfirmed || recommendationLoading}
+                    className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {recommendationLoading ? "Analyzing..." : "Refresh Recommendation"}
+                  </button>
+                </div>
+                {!layoutConfirmed && (
+                  <p className="text-xs text-muted-foreground">
+                    Confirm final layout first. Recommendation is mandatory before next step.
+                  </p>
+                )}
+                {recommendationError && (
+                  <p className="text-xs text-destructive">{recommendationError}</p>
+                )}
+                {recommendation && (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      Recommendation ready ({recommendation.recommended_modules.length} modules)
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setRecommendationModalOpen(true)}
+                      className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
+                    >
+                      AI Recommendation
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -1821,11 +1907,123 @@ const Onboarding = () => {
             </div>
           )}
 
+          {recommendationModalOpen && recommendation && (
+            <div className="fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4">
+              <div className="w-full max-w-2xl rounded-2xl bg-background border border-border shadow-xl p-5 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">Suitable Features for This Layout</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Source: {recommendation.source}
+                      {recommendation.place_name ? ` · ${recommendation.place_name}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRecommendationModalOpen(false)}
+                    className="px-2 py-1 rounded-md border border-border text-xs hover:bg-muted"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {recommendation.recommended_modules.map((moduleId) => (
+                    <span
+                      key={`modal-${moduleId}`}
+                      className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium"
+                    >
+                      {MODULE_LABELS[moduleId] || moduleId}
+                    </span>
+                  ))}
+                </div>
+                {recommendation.summary && (
+                  <p className="text-sm text-muted-foreground">{recommendation.summary}</p>
+                )}
+                <div className="space-y-2">
+                  {recommendation.recommended_modules.map((moduleId) => (
+                    <p key={`modal-reason-${moduleId}`} className="text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {MODULE_LABELS[moduleId] || moduleId}:
+                      </span>{" "}
+                      {recommendation.module_reasons?.[moduleId] || "Recommended based on layout context."}
+                    </p>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      applyRecommendedModules();
+                      setRecommendationModalOpen(false);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
+                  >
+                    Apply Recommended Features
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground text-center">
             {finalLayoutPolygon.length >= 3 && !layoutConfirmed
               ? "Please confirm final layout to continue."
+              : finalLayoutPolygon.length >= 3 && layoutConfirmed && !recommendation
+              ? "Generating AI recommendation from your layout. Please wait."
+              : finalLayoutPolygon.length >= 3 && layoutConfirmed && recommendation
+              ? "AI recommendation ready. Continue to module selection."
               : "You can refine this map later from the dashboard."}
           </p>
+        </div>
+      );
+
+    // ─── Step 4 ───
+    if (step === 4)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Choose your modules</h2>
+            <p className="text-muted-foreground mt-1">
+              Select features your team needs. You can change this later.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {MODULES.map((mod) => {
+              const selected = data.modules.includes(mod.id);
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  onClick={() => toggleModule(mod.id)}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all ${
+                    selected
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-sm">{mod.label}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {mod.desc}
+                      </p>
+                    </div>
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
+                        selected
+                          ? "border-primary bg-primary"
+                          : "border-border"
+                      }`}
+                    >
+                      {selected && (
+                        <span className="text-white text-[10px]">✓</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       );
 

@@ -14,6 +14,7 @@ import random
 import hashlib
 import os
 import re
+import math
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -184,6 +185,259 @@ def _resolve_user_workspace(request, create_if_missing=False):
         status="active",
         layout_status="idle",
     )
+
+
+def _normalize_layout_polygon(raw_polygon):
+    if not isinstance(raw_polygon, list):
+        return []
+    normalized = []
+    for point in raw_polygon:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        lng = _optional_float(point[0])
+        lat = _optional_float(point[1])
+        if lng is None or lat is None:
+            continue
+        if not (-180 <= lng <= 180 and -90 <= lat <= 90):
+            continue
+        normalized.append([lng, lat])
+    return normalized
+
+
+def _layout_area_and_centroid(polygon):
+    if len(polygon) < 3:
+        return 0.0, None
+    centroid_lng = sum(point[0] for point in polygon) / len(polygon)
+    centroid_lat = sum(point[1] for point in polygon) / len(polygon)
+    ring = polygon
+    if ring[0] != ring[-1]:
+        ring = ring + [ring[0]]
+    radius_m = 6378137.0
+    area_sum = 0.0
+    for idx in range(len(ring) - 1):
+        lng1, lat1 = ring[idx]
+        lng2, lat2 = ring[idx + 1]
+        lam1 = math.radians(lng1)
+        lam2 = math.radians(lng2)
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        area_sum += (lam2 - lam1) * (2 + math.sin(phi1) + math.sin(phi2))
+    area_m2 = abs((area_sum * radius_m * radius_m) / 2.0)
+    return area_m2, {"lat": round(centroid_lat, 7), "lng": round(centroid_lng, 7)}
+
+
+def _extract_json_object(raw_text):
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+    if fenced:
+        try:
+            return json.loads(fenced.group(1).strip())
+        except Exception:
+            pass
+    first = text.find("{")
+    last = text.rfind("}")
+    if first >= 0 and last > first:
+        try:
+            return json.loads(text[first:last + 1])
+        except Exception:
+            return None
+    return None
+
+
+def _overpass_location_signals(lat, lng, radius_m):
+    query = f"""
+[out:json][timeout:20];
+(
+  nwr(around:{int(radius_m)},{lat},{lng})["highway"];
+  nwr(around:{int(radius_m)},{lat},{lng})["leisure"~"park|garden|golf_course|pitch"];
+  nwr(around:{int(radius_m)},{lat},{lng})["landuse"~"grass|meadow|farmland|orchard|vineyard|forest|recreation_ground|brownfield|greenfield|construction|quarry"];
+  nwr(around:{int(radius_m)},{lat},{lng})["natural"~"wood|grassland|scrub|sand|bare_rock|heath"];
+);
+out tags;
+"""
+    response = requests.post(
+        "https://overpass-api.de/api/interpreter",
+        data=query,
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    elements = payload.get("elements") if isinstance(payload, dict) else []
+    if not isinstance(elements, list):
+        elements = []
+    stats = {
+        "road_elements": 0,
+        "green_elements": 0,
+        "decorative_elements": 0,
+        "agriculture_elements": 0,
+        "empty_ground_elements": 0,
+        "total_elements": len(elements),
+    }
+    for item in elements:
+        tags = item.get("tags") if isinstance(item, dict) else {}
+        if not isinstance(tags, dict):
+            continue
+        highway = str(tags.get("highway") or "").strip().lower()
+        leisure = str(tags.get("leisure") or "").strip().lower()
+        landuse = str(tags.get("landuse") or "").strip().lower()
+        natural = str(tags.get("natural") or "").strip().lower()
+        if highway:
+            stats["road_elements"] += 1
+        if leisure in {"park", "garden", "golf_course", "pitch"}:
+            stats["green_elements"] += 1
+        if leisure in {"garden"}:
+            stats["decorative_elements"] += 2
+        if landuse in {"grass", "meadow", "forest", "recreation_ground"}:
+            stats["green_elements"] += 1
+        if landuse in {"farmland", "orchard", "vineyard"}:
+            stats["green_elements"] += 2
+            stats["agriculture_elements"] += 2
+        if landuse in {"brownfield", "greenfield", "construction", "quarry"}:
+            stats["empty_ground_elements"] += 1
+        if natural in {"wood", "grassland", "scrub"}:
+            stats["green_elements"] += 1
+        if natural in {"sand", "bare_rock", "heath"}:
+            stats["empty_ground_elements"] += 1
+    return stats
+
+
+def _reverse_geocode_name(lat, lng):
+    response = requests.get(
+        "https://nominatim.openstreetmap.org/reverse",
+        params={
+            "format": "jsonv2",
+            "lat": str(lat),
+            "lon": str(lng),
+        },
+        headers={"User-Agent": "AquaNex/1.0"},
+        timeout=12,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    if not isinstance(payload, dict):
+        return ""
+    display_name = str(payload.get("display_name") or "").strip()
+    if display_name:
+        return display_name
+    address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
+    locality = str(address.get("city") or address.get("town") or address.get("village") or "").strip()
+    country = str(address.get("country") or "").strip()
+    return ", ".join([part for part in [locality, country] if part])
+
+
+def _heuristic_module_recommendation(area_m2, signals):
+    road = int(signals.get("road_elements") or 0)
+    green = int(signals.get("green_elements") or 0)
+    decorative = int(signals.get("decorative_elements") or 0)
+    agriculture = int(signals.get("agriculture_elements") or 0)
+    empty_ground = int(signals.get("empty_ground_elements") or 0)
+    modules = ["pipeline_management"]
+    reasons = {
+        "pipeline_management": "Pipeline monitoring is included as a base capability for all layouts.",
+    }
+    if agriculture >= 2 or (green >= 6 and area_m2 >= 10000):
+        modules.append("soil_salinity")
+        reasons["soil_salinity"] = "Large green/agricultural footprint suggests salinity control is valuable."
+    if green >= 4 or decorative >= 2 or (road >= 4 and green >= 2):
+        modules.append("demand_forecasting")
+        reasons["demand_forecasting"] = "Significant vegetation or mixed roadside greenery benefits from demand prediction."
+    if decorative >= 2 or agriculture >= 2 or green >= 7:
+        modules.append("water_quality")
+        reasons["water_quality"] = "Plantation/decorative vegetation density indicates water quality risk management is needed."
+    if empty_ground >= 6 and len(modules) == 1:
+        reasons["pipeline_management"] = "Mostly road/utility-oriented footprint favors pipeline-first monitoring."
+    return {
+        "recommended_modules": modules,
+        "module_reasons": reasons,
+    }
+
+
+def _groq_module_recommendation(context_payload, heuristic_modules):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    rules = [
+        "pipeline_management works for all scenarios and should always be included.",
+        "soil_salinity is best for large parks, crop fields, farms, or broad plantation zones.",
+        "demand_forecasting is best when there are many plants/trees or meaningful roadside greenery.",
+        "water_quality is best for plantations and decorative flowers/greenery vulnerable to poor water quality.",
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an irrigation domain assistant. Return strict JSON only.",
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "task": "Recommend AquaNex modules from layout context.",
+                    "allowed_modules": [
+                        "pipeline_management",
+                        "soil_salinity",
+                        "demand_forecasting",
+                        "water_quality",
+                        "incident_analytics",
+                    ],
+                    "rules": rules,
+                    "layout_context": context_payload,
+                    "heuristic_start": heuristic_modules,
+                    "response_schema": {
+                        "recommended_modules": ["pipeline_management"],
+                        "summary": "short explanation",
+                        "module_reasons": {
+                            "pipeline_management": "reason",
+                        },
+                    },
+                }
+            ),
+        },
+    ]
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps({
+            "model": model,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 500,
+        }),
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Groq returned no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    content = message.get("content") if isinstance(message, dict) else ""
+    parsed = _extract_json_object(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("Groq response was not valid JSON")
+    modules = parsed.get("recommended_modules")
+    if not isinstance(modules, list):
+        raise ValueError("Groq response missing recommended_modules")
+    normalized_modules = []
+    for module_name in modules:
+        module_key = str(module_name or "").strip()
+        if module_key and module_key not in normalized_modules:
+            normalized_modules.append(module_key)
+    if "pipeline_management" not in normalized_modules:
+        normalized_modules.insert(0, "pipeline_management")
+    parsed["recommended_modules"] = normalized_modules
+    if not isinstance(parsed.get("module_reasons"), dict):
+        parsed["module_reasons"] = {}
+    return parsed
 
 
 def _infer_metric_family(metric, device_type):
@@ -1149,6 +1403,94 @@ class WorkspaceListView(APIView):
             "workspaces": WorkspaceSerializer(workspaces, many=True).data,
             "active_workspace_id": str(active.id) if active else None,
         })
+
+
+class LayoutModuleRecommendationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
+        raw_polygon = request.data.get("layout_polygon")
+        if raw_polygon is None and workspace is not None:
+            raw_polygon = workspace.layout_polygon
+        polygon = _normalize_layout_polygon(raw_polygon)
+        if len(polygon) < 3:
+            return Response({"error": "layout_polygon with at least 3 points is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        area_m2, centroid = _layout_area_and_centroid(polygon)
+        if not centroid:
+            return Response({"error": "Unable to resolve layout centroid"}, status=status.HTTP_400_BAD_REQUEST)
+
+        radius_m = max(250, min(2500, int(math.sqrt(max(area_m2, 1.0) / math.pi) * 1.5)))
+        signals = {
+            "road_elements": 0,
+            "green_elements": 0,
+            "decorative_elements": 0,
+            "agriculture_elements": 0,
+            "empty_ground_elements": 0,
+            "total_elements": 0,
+        }
+        signal_error = ""
+        try:
+            signals = _overpass_location_signals(centroid["lat"], centroid["lng"], radius_m)
+        except Exception as exc:
+            signal_error = str(exc)
+
+        place_name = ""
+        try:
+            place_name = _reverse_geocode_name(centroid["lat"], centroid["lng"])
+        except Exception:
+            place_name = ""
+
+        heuristic = _heuristic_module_recommendation(area_m2, signals)
+        heuristic_modules = heuristic["recommended_modules"]
+        llm_context = {
+            "centroid": centroid,
+            "area_m2": round(area_m2, 2),
+            "search_radius_m": radius_m,
+            "signals": signals,
+            "place_name": place_name,
+        }
+
+        try:
+            llm_result = _groq_module_recommendation(llm_context, heuristic_modules)
+        except Exception as exc:
+            return Response(
+                {
+                    "error": f"Groq recommendation failed: {str(exc)}",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        llm_modules = llm_result.get("recommended_modules")
+        if not isinstance(llm_modules, list) or not llm_modules:
+            return Response(
+                {"error": "Groq recommendation failed: empty recommended_modules"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        recommended_modules = llm_modules
+        module_reasons = heuristic.get("module_reasons", {})
+        llm_reasons = llm_result.get("module_reasons")
+        if isinstance(llm_reasons, dict) and llm_reasons:
+            module_reasons = llm_reasons
+        summary = str(llm_result.get("summary") or "").strip() or "Module recommendations generated from layout and geospatial context."
+        source = "groq_llm"
+
+        if "pipeline_management" not in recommended_modules:
+            recommended_modules = ["pipeline_management", *recommended_modules]
+
+        return Response({
+            "success": True,
+            "source": source,
+            "centroid": centroid,
+            "area_m2": round(area_m2, 2),
+            "place_name": place_name,
+            "signals": signals,
+            "recommended_modules": recommended_modules,
+            "module_reasons": module_reasons,
+            "summary": summary,
+            "signal_error": signal_error,
+        }, status=status.HTTP_200_OK)
 
 
 class GatewayDiscoverView(APIView):
