@@ -5,10 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Breadcrumbs from "@/components/Breadcrumbs";
-import { MapContainer, TileLayer, Polygon, useMap, Tooltip } from "react-leaflet";
+import { MapContainer, TileLayer, Polygon, useMap, Tooltip, CircleMarker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useAuth } from "@/contexts/AuthContext";
+import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
@@ -55,11 +56,28 @@ const SoilSalinity = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
+  const moduleSetup = useModuleDeviceSetup(["soil_salinity_sensor"]);
+  const {
+    gatewayIdInput,
+    setGatewayIdInput,
+    scanning,
+    error,
+    missingTypes,
+    geolocatedModuleDevices,
+    isConfigured,
+  } = moduleSetup;
+  const deviceTypeLabels: Record<string, string> = {
+    soil_salinity_sensor: "Soil Salinity Sensor",
+  };
 
   const layoutPolygon = useMemo(() => {
     if (!workspace?.layout_polygon || workspace.layout_polygon.length < 3) return [];
     return workspace.layout_polygon.map((p: any) => [p[1], p[0]] as [number, number]);
   }, [workspace]);
+  const mapFocusPoints = useMemo<[number, number][]>(
+    () => [...layoutPolygon, ...geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number])],
+    [layoutPolygon, geolocatedModuleDevices]
+  );
 
   // Compute 4 static sub-zones based on layout bounding box
   const zonedLayout = useMemo(() => {
@@ -99,6 +117,88 @@ const SoilSalinity = () => {
         return "success";
     }
   };
+
+  if (!isConfigured) {
+    return (
+      <div className="p-8 space-y-6">
+        <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Soil Salinity" }]} />
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Soil Intelligence Console</h1>
+            <p className="text-muted-foreground">Monitor and manage soil salinity across all zones</p>
+          </div>
+          <Button variant="outline">
+            <Filter className="w-4 h-4 mr-2" />
+            Filters
+          </Button>
+        </div>
+        <Card className="h-[500px]">
+          <CardHeader>
+            <CardTitle>Map View</CardTitle>
+            <CardDescription>Default layout and configured device coordinates</CardDescription>
+          </CardHeader>
+          <CardContent className="h-full pb-12">
+            <div className="rounded-xl border border-border overflow-hidden h-full">
+              <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "100%", width: "100%" }}>
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles © Esri"
+                />
+                <FitMapToPointsOnce points={mapFocusPoints} />
+                {layoutPolygon.length >= 3 && (
+                  <Polygon
+                    positions={layoutPolygon}
+                    pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }}
+                  />
+                )}
+                {geolocatedModuleDevices.map((device: any) => (
+                  <CircleMarker
+                    key={device.id}
+                    center={[device.lat, device.lng]}
+                    radius={6}
+                    pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                  >
+                    <Popup>
+                      <div className="text-xs space-y-1">
+                        <p className="font-semibold">{device.id}</p>
+                        <p>{device.type}</p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Devices Not Configured</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Configure required soil salinity devices to continue.
+            </p>
+            <p className="text-sm">
+              Missing: {missingTypes.map((type) => deviceTypeLabels[type] || type).join(", ")}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={gatewayIdInput}
+                onChange={(event) => setGatewayIdInput(event.target.value)}
+                placeholder="Gateway ID"
+                className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
+              />
+              <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
+                {scanning ? "Scanning..." : "Configure Devices"}
+              </Button>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 space-y-6">
@@ -157,7 +257,7 @@ const SoilSalinity = () => {
                       url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                       attribution="Tiles © Esri"
                     />
-                    <FitMapToPointsOnce points={layoutPolygon} />
+                    <FitMapToPointsOnce points={mapFocusPoints} />
                     
                     {/* Render the 4 zones as rectangles for now to ensure alignment and visibility */}
                     {zonedLayout.map((zone) => (
@@ -180,6 +280,21 @@ const SoilSalinity = () => {
                       positions={layoutPolygon}
                       pathOptions={{ color: "white", weight: 2, fillOpacity: 0, dashArray: "5, 5" }}
                     />
+                    {geolocatedModuleDevices.map((device: any) => (
+                      <CircleMarker
+                        key={device.id}
+                        center={[device.lat, device.lng]}
+                        radius={6}
+                        pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                      >
+                        <Popup>
+                          <div className="text-xs space-y-1">
+                            <p className="font-semibold">{device.id}</p>
+                            <p>{device.type}</p>
+                          </div>
+                        </Popup>
+                      </CircleMarker>
+                    ))}
                   </MapContainer>
                 )}
               </div>

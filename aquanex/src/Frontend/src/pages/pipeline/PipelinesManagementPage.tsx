@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import PipelineAlertCard from "@/components/PipelineAlertCard";
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap } from "react-leaflet";
+import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -42,7 +42,20 @@ const PipelinesManagementPage = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
   const [incidents, setIncidents] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const moduleSetup = useModuleDeviceSetup(["flowmeter", "pressure_sensor"]);
+  const {
+    gatewayIdInput,
+    setGatewayIdInput,
+    scanning,
+    error,
+    missingTypes,
+    geolocatedModuleDevices,
+    isConfigured,
+  } = moduleSetup;
+  const deviceTypeLabels: Record<string, string> = {
+    flowmeter: "Flow Meter",
+    pressure_sensor: "Pressure Sensor",
+  };
 
   const deriveSeverity = (inc: any): string => {
     const severity = String(inc?.severity || "").toLowerCase();
@@ -77,7 +90,6 @@ const PipelinesManagementPage = () => {
       console.error("Failed to fetch incidents", err);
       setIncidents([]); 
     } finally {
-      setLoading(false);
     }
   };
 
@@ -97,14 +109,7 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  const devices = Array.isArray(workspace?.devices) ? workspace.devices : [];
-  const geolocatedDevices = devices.filter(
-    (device: any) =>
-      typeof device?.lat === "number" &&
-      Number.isFinite(device.lat) &&
-      typeof device?.lng === "number" &&
-      Number.isFinite(device.lng)
-  );
+  const geolocatedDevices = geolocatedModuleDevices;
 
   const isPressureDevice = (device: any) =>
     String(device?.type || "").toLowerCase().includes("pressure");
@@ -218,18 +223,81 @@ const PipelinesManagementPage = () => {
   );
 
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case "critical":
-        return "destructive";
-      case "high":
-        return "alert";
-      case "medium":
-        return "warning";
-      default:
-        return "secondary";
-    }
-  };
+  if (!isConfigured) {
+    return (
+      <div className="p-8 space-y-6">
+        <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
+        <div>
+          <h1 className="text-3xl font-bold text-foreground mb-2">Pipelines Management</h1>
+          <p className="text-muted-foreground">Monitor and manage pipeline alerts and resources</p>
+        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Pipeline Map</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-xl border border-border overflow-hidden">
+              <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles © Esri"
+                />
+                <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
+                {layoutPolygon.length > 2 && (
+                  <Polygon
+                    positions={layoutPolygon.map((point: any) => [point[1], point[0]])}
+                    pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }}
+                  />
+                )}
+                {geolocatedDevices.map((device: any) => (
+                  <CircleMarker
+                    key={device.id}
+                    center={[device.lat, device.lng]}
+                    radius={7}
+                    pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                  >
+                    <Popup>
+                      <div className="text-xs space-y-1">
+                        <p className="font-semibold">{device.id}</p>
+                        <p>{device.type}</p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Devices Not Configured</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Configure required pipeline devices to continue.
+            </p>
+            <p className="text-sm">
+              Missing:{" "}
+              {missingTypes.map((type) => deviceTypeLabels[type] || type).join(", ")}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={gatewayIdInput}
+                onChange={(event) => setGatewayIdInput(event.target.value)}
+                placeholder="Gateway ID"
+                className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
+              />
+              <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
+                {scanning ? "Scanning..." : "Configure Devices"}
+              </Button>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 space-y-6">

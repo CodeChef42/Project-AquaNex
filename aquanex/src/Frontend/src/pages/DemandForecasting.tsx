@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, CloudSun, MapPin, Building2, Wind } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { MapContainer, Polygon, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { MapContainer, Polygon, TileLayer, Tooltip, useMap, CircleMarker, Popup } from "react-leaflet";
+import { Button } from "@/components/ui/button";
+import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -226,6 +228,19 @@ const clipPolygonWithRect = (
 
 const DemandForecasting = () => {
   const { workspace } = useAuth();
+  const moduleSetup = useModuleDeviceSetup(["soil_moisture_sensor"]);
+  const {
+    gatewayIdInput,
+    setGatewayIdInput,
+    scanning,
+    error,
+    missingTypes,
+    geolocatedModuleDevices,
+    isConfigured,
+  } = moduleSetup;
+  const deviceTypeLabels: Record<string, string> = {
+    soil_moisture_sensor: "Soil Moisture Sensor",
+  };
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
   const [weatherData, setWeatherData] = useState<any>(null);
@@ -249,6 +264,10 @@ const DemandForecasting = () => {
     if (!sums.count) return null;
     return { lat: sums.lat / sums.count, lng: sums.lng / sums.count };
   }, [layoutLatLng]);
+  const mapFocusPoints = useMemo<[number, number][]>(
+    () => [...layoutLatLng, ...geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number])],
+    [layoutLatLng, geolocatedModuleDevices]
+  );
 
   const zonedLayout = useMemo(() => {
     if (layoutLatLng.length < 3) return [];
@@ -386,6 +405,92 @@ const DemandForecasting = () => {
     return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
   };
 
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="bg-white border-b">
+          <div className="container mx-auto px-6 py-8">
+            <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Demand Forecasting" }]} />
+            <h1 className="text-3xl font-bold text-gray-900 mb-2 mt-4">Predictive Water Demand Forecasting</h1>
+            <p className="text-gray-600">
+              AI-powered water demand predictions and optimization
+              {companyName ? ` for ${companyName}` : ""}
+            </p>
+          </div>
+        </div>
+        <div className="container mx-auto px-6 py-8 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-teal-600" />
+                Irrigation Space Layout
+              </CardTitle>
+              <CardDescription>Default layout and configured device coordinates</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-xl border border-border overflow-hidden">
+                <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution="Tiles &copy; Esri"
+                  />
+                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
+                  {layoutLatLng.length >= 3 && (
+                    <Polygon
+                      positions={layoutLatLng}
+                      pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
+                    />
+                  )}
+                  {geolocatedModuleDevices.map((device: any) => (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={6}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-1">
+                          <p className="font-semibold">{device.id}</p>
+                          <p>{device.type}</p>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ))}
+                </MapContainer>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Devices Not Configured</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Configure required demand forecasting devices to continue.
+              </p>
+              <p className="text-sm">
+                Missing: {missingTypes.map((type) => deviceTypeLabels[type] || type).join(", ")}
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={gatewayIdInput}
+                  onChange={(event) => setGatewayIdInput(event.target.value)}
+                  placeholder="Gateway ID"
+                  className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
+                />
+                <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
+                  {scanning ? "Scanning..." : "Configure Devices"}
+                </Button>
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -484,7 +589,7 @@ const DemandForecasting = () => {
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     attribution="Tiles &copy; Esri"
                   />
-                  <FitMapToPointsOnce points={layoutLatLng} fallbackZoom={12} maxZoom={16} />
+                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
                   {zonedLayout.length > 0 ? (
                     zonedLayout.map((zone) => (
                       <Polygon
@@ -501,6 +606,21 @@ const DemandForecasting = () => {
                       pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
                     />
                   )}
+                  {geolocatedModuleDevices.map((device: any) => (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={6}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-1">
+                          <p className="font-semibold">{device.id}</p>
+                          <p>{device.type}</p>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ))}
                 </MapContainer>
               </div>
             ) : (

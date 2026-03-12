@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle, Droplet, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Polygon, TileLayer, useMap, CircleMarker, Popup } from "react-leaflet";
+import { Button } from "@/components/ui/button";
+import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -96,12 +98,30 @@ const WaterQualityMonitoring = () => {
   const { workspace } = useAuth();
   const navigate = useNavigate();
   const [selectedZone, setSelectedZone] = useState(null);
+  const moduleSetup = useModuleDeviceSetup(["ph_sensor", "turbidity_sensor"]);
+  const {
+    gatewayIdInput,
+    setGatewayIdInput,
+    scanning,
+    error,
+    missingTypes,
+    geolocatedModuleDevices,
+    isConfigured,
+  } = moduleSetup;
+  const deviceTypeLabels: Record<string, string> = {
+    ph_sensor: "pH Sensor",
+    turbidity_sensor: "Turbidity Sensor",
+  };
   const layoutPolygon = Array.isArray((workspace as any)?.layout_polygon) ? ((workspace as any).layout_polygon as any[]) : [];
   const layoutLatLng = useMemo<[number, number][]>(() => {
     return layoutPolygon
       .map((point: any) => [Number(point?.[1]), Number(point?.[0])] as [number, number])
       .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
   }, [layoutPolygon]);
+  const mapFocusPoints = useMemo<[number, number][]>(
+    () => [...layoutLatLng, ...geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number])],
+    [layoutLatLng, geolocatedModuleDevices]
+  );
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -128,6 +148,93 @@ const WaterQualityMonitoring = () => {
       return "critical";
     }
   };
+
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="bg-white border-b">
+          <div className="container mx-auto px-6 py-8">
+            <nav className="text-sm text-gray-500 mb-4">
+              <a href="/" className="hover:text-teal-600">Home</a>
+              <span className="mx-2">›</span>
+              <span className="text-gray-900">Water Quality</span>
+            </nav>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Water Quality Monitoring</h1>
+            <p className="text-gray-600">Real-time water quality analysis and management</p>
+          </div>
+        </div>
+        <div className="container mx-auto px-6 py-8 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Droplet className="w-5 h-5 text-teal-600" />
+                Irrigation Space Layout
+              </CardTitle>
+              <CardDescription>Default layout and configured device coordinates</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-xl border border-border overflow-hidden">
+                <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution="Tiles &copy; Esri"
+                  />
+                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
+                  {layoutLatLng.length >= 3 && (
+                    <Polygon
+                      positions={layoutLatLng}
+                      pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
+                    />
+                  )}
+                  {geolocatedModuleDevices.map((device: any) => (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={6}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-1">
+                          <p className="font-semibold">{device.id}</p>
+                          <p>{device.type}</p>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ))}
+                </MapContainer>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Devices Not Configured</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Configure required water quality devices to continue.
+              </p>
+              <p className="text-sm">
+                Missing: {missingTypes.map((type) => deviceTypeLabels[type] || type).join(", ")}
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={gatewayIdInput}
+                  onChange={(event) => setGatewayIdInput(event.target.value)}
+                  placeholder="Gateway ID"
+                  className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
+                />
+                <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
+                  {scanning ? "Scanning..." : "Configure Devices"}
+                </Button>
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -206,11 +313,26 @@ const WaterQualityMonitoring = () => {
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     attribution="Tiles &copy; Esri"
                   />
-                  <FitMapToPointsOnce points={layoutLatLng} fallbackZoom={12} maxZoom={16} />
+                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
                   <Polygon
                     positions={layoutLatLng}
                     pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
                   />
+                  {geolocatedModuleDevices.map((device: any) => (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={6}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-1">
+                          <p className="font-semibold">{device.id}</p>
+                          <p>{device.type}</p>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ))}
                 </MapContainer>
               </div>
             ) : (

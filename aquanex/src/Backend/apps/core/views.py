@@ -595,8 +595,35 @@ def _tb_canonical_type(value):
         "soil_moisture_sensor": "soil_moisture_sensor",
         "soil_moisture": "soil_moisture_sensor",
         "moisture_sensor": "soil_moisture_sensor",
+        "turbidity_sensor": "turbidity_sensor",
+        "turbidity": "turbidity_sensor",
     }
     return aliases.get(key)
+
+
+def _normalize_required_device_types(raw_value):
+    values = []
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif isinstance(raw_value, str):
+        values = [part.strip() for part in raw_value.split(",")]
+    normalized = []
+    for value in values:
+        canonical = _tb_canonical_type(value)
+        if canonical and canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
+def _filter_devices_by_types(devices, required_types):
+    if not required_types:
+        return devices
+    allowed = set(required_types)
+    return [
+        device
+        for device in devices
+        if _tb_canonical_type(device.get("type")) in allowed
+    ]
 
 
 def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
@@ -625,6 +652,8 @@ def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
         return "flowmeter"
     if "ph" in name or metric == "ph":
         return "ph_sensor"
+    if "turbidity" in name or metric in {"turbidity", "turbidity_ntu"}:
+        return "turbidity_sensor"
     return "sensor"
 
 
@@ -1072,6 +1101,44 @@ class OnboardingView(APIView):
         })
 
 
+class WorkspaceInviteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
+        if not workspace:
+            return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        email = str(request.data.get("email") or "").strip()
+        if not email:
+            return Response({"error": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if already invited to avoid spamming
+        # (Optional: allow re-sending if requested)
+        
+        # Add to workspace invite_emails list if not present
+        current_invites = workspace.invite_emails or []
+        if email not in current_invites:
+            workspace.invite_emails = current_invites + [email]
+            workspace.save(update_fields=["invite_emails"])
+
+        WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
+
+        inviter_name = request.user.full_name or request.user.username or "A colleague"
+        workspace_name = workspace.workspace_name or workspace.company_name or "AquaNex Workspace"
+
+        try:
+            from .utils import send_workspace_invite
+            success = send_workspace_invite(email, workspace_name, inviter_name)
+            if success:
+                return Response({"success": True, "message": f"Invitation sent to {email}"})
+            else:
+                return Response({"success": False, "error": "Failed to send email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            logger.error(f"Failed to send invite email: {e}")
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class WorkspaceListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1092,6 +1159,7 @@ class GatewayDiscoverView(APIView):
         protocol = str(request.data.get("protocol") or "").strip().lower()
         force_refresh = bool(request.data.get("force_refresh", False))
         preview_only = bool(request.data.get("preview_only", False))
+        required_types = _normalize_required_device_types(request.data.get("required_device_types"))
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1106,12 +1174,14 @@ class GatewayDiscoverView(APIView):
             and workspace.gateway_id == gateway_id
             and workspace.devices
         ):
+            filtered_devices = _filter_devices_by_types(workspace.devices, required_types)
             return Response({
                 "success": True,
                 "gateway_id": gateway_id,
                 "source": "gateway_memory",
-                "devices": workspace.devices,
-                "microcontrollers": _microcontrollers_from_devices(workspace.devices),
+                "devices": filtered_devices,
+                "microcontrollers": _microcontrollers_from_devices(filtered_devices),
+                "required_device_types": required_types,
             }, status=status.HTTP_200_OK)
 
         cfg = _tb_config()
@@ -1154,6 +1224,8 @@ class GatewayDiscoverView(APIView):
             source = "simulated_fallback"
             missing_coordinates = [device["id"] for device in devices]
 
+        devices = _filter_devices_by_types(devices, required_types)
+
         if not preview_only:
             workspace.gateway_id = gateway_id
             workspace.devices = devices
@@ -1174,6 +1246,7 @@ class GatewayDiscoverView(APIView):
             "devices": devices,
             "microcontrollers": _microcontrollers_from_devices(devices),
             "missing_coordinates": missing_coordinates,
+            "required_device_types": required_types,
         }, status=status.HTTP_200_OK)
 
 

@@ -14,6 +14,7 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import { useToast } from "../../components/ui/use-toast";
 import api from "../../lib/api";
 
 import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
@@ -237,6 +238,8 @@ const Onboarding = () => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
+  const [addingEmail, setAddingEmail] = useState(false);
+  const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [uploadingLayout, setUploadingLayout] = useState(false);
   const [layoutTaskId, setLayoutTaskId] = useState<string | null>(null);
@@ -262,9 +265,11 @@ const Onboarding = () => {
   const hasDemandForecastingModule = data.modules.includes("demand_forecasting");
   const visibleSteps = useMemo(
     () =>
-      hasDemandForecastingModule
-        ? STEPS
-        : STEPS.filter((stepDef) => stepDef.id !== 6),
+      STEPS.filter((stepDef) => {
+        if (stepDef.id === 5) return false;
+        if (stepDef.id === 6) return hasDemandForecastingModule;
+        return true;
+      }),
     [hasDemandForecastingModule]
   );
   const visibleStepIds = useMemo(() => visibleSteps.map((stepDef) => stepDef.id), [visibleSteps]);
@@ -651,10 +656,46 @@ const Onboarding = () => {
     });
   };
 
-  const addEmail = () => {
-    if (emailInput && !data.inviteEmails.includes(emailInput)) {
+  const addEmail = async () => {
+    if (!emailInput) return;
+    if (data.inviteEmails.includes(emailInput)) {
+      toast({
+        title: "Already added",
+        description: "This email is already in the list.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAddingEmail(true);
+    try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      if (!targetWorkspaceId) {
+        throw new Error("Could not ensure workspace ID.");
+      }
+
+      await api.post(
+        "/workspace-invite/",
+        { email: emailInput },
+        { headers: { "X-Workspace-Id": targetWorkspaceId } }
+      );
+
+      toast({
+        title: "Invitation sent",
+        description: `Invitation email sent to ${emailInput}`,
+      });
+
       update({ inviteEmails: [...data.inviteEmails, emailInput] });
       setEmailInput("");
+    } catch (error) {
+      console.error("Failed to send invite:", error);
+      toast({
+        title: "Invitation failed",
+        description: "Could not send invitation email. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setAddingEmail(false);
     }
   };
 
@@ -678,7 +719,6 @@ const Onboarding = () => {
       );
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
-    if (step === 5) return true;
     if (step === 6) {
       const demandPayload = buildDemandForecastingPayload();
       return demandPayload.plants.length > 0 || demandPayload.waterSystems.length > 0;
@@ -1076,10 +1116,14 @@ const Onboarding = () => {
   }, [workspace, createNewWorkspace, skipCompanyIdentity]);
 
   useEffect(() => {
+    if (step === 5) {
+      setStep(goToNextVisibleStep(5));
+      return;
+    }
     if (step === 6 && !hasDemandForecastingModule) {
       setStep(7);
     }
-  }, [step, hasDemandForecastingModule]);
+  }, [step, hasDemandForecastingModule, goToNextVisibleStep]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -1325,15 +1369,17 @@ const Onboarding = () => {
                 placeholder="colleague@company.com"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addEmail()}
-                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                onKeyDown={(e) => e.key === "Enter" && !addingEmail && addEmail()}
+                disabled={addingEmail}
+                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-50"
               />
               <button
                 type="button"
                 onClick={addEmail}
-                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+                disabled={addingEmail}
+                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-70"
               >
-                Add
+                {addingEmail ? "Sending..." : "Add"}
               </button>
             </div>
             {data.inviteEmails.length > 0 && (
