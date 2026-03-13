@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { motion, useScroll, useTransform } from "framer-motion";
 import chevronDownIcon from "@/assets/icons/icons8-chevron-down-26.png";
 
 const solutions = [
@@ -26,86 +27,173 @@ const solutions = [
 
 const SolutionsSection = () => {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start end", "end start"],
+  });
+
+  const scale = useTransform(scrollYProgress, [0, 0.4], [0.96, 1]);
+  const y = useTransform(scrollYProgress, [0, 0.4], [60, 0]);
 
   return (
-    <section id="solutions">
-      <div className="mx-4 overflow-hidden rounded-t-3xl bg-accent md:mx-8">
-        <div className="section-padding py-2">
-          <div className="pb-4 pt-8">
-            <span className="mb-3 block text-xs font-semibold uppercase tracking-[0.15em] text-accent-foreground/60">
-              Solutions
-            </span>
-          </div>
+    <section
+      id="solutions"
+      ref={ref}
+      className="relative py-32"
+      style={{ background: "rgba(245,240,232,0.97)" }} // light background
+    >
+
+      <div className="relative mx-auto max-w-6xl px-6">
+
+        {/* Header */}
+        <motion.div
+          className="mb-16"
+          initial={{ opacity: 0, y: 40 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6 }}
+        >
+          <span
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#16a34a" }} // darker green for light theme
+          >
+            Solutions
+          </span>
+
+          <h2 className="mt-3 text-4xl md:text-5xl font-bold text-gray-900 leading-tight">
+            Intelligence across <br /> every drop of water.
+          </h2>
+        </motion.div>
+
+        {/* Accordion */}
+        <div className="space-y-4">
           {solutions.map((solution, i) => (
-            <div key={solution.title} className="border-b border-accent-foreground/10 last:border-b-0">
+            <motion.div
+              key={solution.title}
+              initial={{ opacity: 0, y: 25 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: "-40px" }}
+              transition={{ duration: 0.45, delay: i * 0.08 }}
+              className="rounded-2xl border backdrop-blur-md"
+              style={{
+                background: "rgba(255, 255, 255, 0.7)", // light frosted card
+                borderColor: "rgba(0,0,0,0.06)",
+              }}
+            >
               <button
                 type="button"
-                onClick={() => setOpenIndex(openIndex === i ? null : i)}
-                className="group flex w-full items-center justify-between py-5 md:py-6"
+                onClick={() =>
+                  setOpenIndex(openIndex === i ? null : i)
+                }
+                className="group flex w-full items-center justify-between px-6 py-6"
               >
-                <span className="text-left text-xl font-medium text-accent-foreground md:text-2xl">
+                <span className="text-left text-xl md:text-2xl font-medium text-gray-900">
                   {solution.title}
                 </span>
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-accent-foreground/30 transition-transform duration-300 group-hover:bg-accent-foreground/10">
-                  <img
-                    src={chevronDownIcon}
-                    alt="Toggle solution details"
-                    className={`h-5 w-5 transition-transform duration-300 ${
-                      openIndex === i ? "rotate-180" : ""
-                    }`}
-                  />
-                </div>
+
+                <motion.div
+                  animate={{ rotate: openIndex === i ? 180 : 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="flex h-10 w-10 items-center justify-center rounded-full border transition-all duration-300 group-hover:scale-110"
+                  style={{
+                    borderColor: "rgba(0,0,0,0.12)",
+                  }}
+                >
+                  <img src={chevronDownIcon} className="h-4 w-4" />
+                </motion.div>
               </button>
 
-              {openIndex === i && (
-                <div className="overflow-hidden">
-                  <p className="max-w-xl pb-6 text-sm text-accent-foreground/70">{solution.desc}</p>
-                </div>
-              )}
-            </div>
+              <motion.div
+                initial={false}
+                animate={{
+                  height: openIndex === i ? "auto" : 0,
+                  opacity: openIndex === i ? 1 : 0,
+                }}
+                transition={{ duration: 0.35 }}
+                style={{ overflow: "hidden" }}
+              >
+                <p className="px-6 pb-6 text-sm leading-relaxed text-gray-700 max-w-xl">
+                  {solution.desc}
+                </p>
+              </motion.div>
+            </motion.div>
           ))}
         </div>
+      </div>
 
-        <div className="relative">
-          <div className="relative h-[500px] overflow-hidden bg-gradient-to-tr from-primary via-accent to-foreground md:h-[600px]">
-            {/* Background imagery commented out temporarily */}
-            {/* <img
-              src={irrigationBg}
-              alt="Smart irrigation system in agricultural field"
-              className="h-full w-full object-cover"
-              loading="lazy"
-            /> */}
-            <div className="absolute inset-0 bg-gradient-to-t from-foreground/60 to-transparent" />
+      {/* Smart Irrigation Panel */}
+      <motion.div
+        style={{ scale, y }}
+        className="relative mt-28"
+      >
+        <div className="mx-auto max-w-6xl px-6">
+          <div
+            className="relative rounded-3xl overflow-hidden p-10 md:p-16"
+            style={{
+              background: "#ffffff",
+              border: "1px solid rgba(22,163,74,0.15)",
+            }}
+          >
+            {/* subtle green glow */}
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background:
+                  "radial-gradient(circle at 70% 40%, rgba(134,239,172,0.08), transparent 60%)",
+              }}
+            />
 
-            <div className="section-padding absolute left-0 right-0 top-0 flex items-center justify-between py-5">
-              <h3 className="text-2xl font-semibold text-white md:text-3xl">Smart Irrigation</h3>
+            <div className="relative z-10">
+              <span
+                className="text-xs font-semibold uppercase tracking-widest"
+                style={{ color: "#16a34a" }}
+              >
+                Smart Irrigation
+              </span>
+
+              <h3 className="mt-3 text-3xl md:text-4xl font-bold text-gray-900">
+                AI that adapts. <br /> Fields that thrive.
+              </h3>
             </div>
 
-            <div className="section-padding absolute bottom-0 left-0 right-0 grid gap-6 pb-8 md:grid-cols-2">
-              <p className="max-w-md text-sm leading-relaxed text-white/80">
-                Our AI-powered irrigation system adjusts water flow based on real-time sensor data, weather
-                patterns, and predictive models. Reduce waste by up to 35% while ensuring every field gets
+            <div className="relative z-10 mt-12 grid gap-8 md:grid-cols-2 items-end">
+              <motion.p
+                className="text-sm leading-relaxed text-gray-700 max-w-md"
+                initial={{ opacity: 0, x: -30 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+              >
+                Our AI-powered irrigation system adjusts water flow based on
+                real-time sensor data, weather patterns, and predictive models.
+                Reduce waste by up to 35% while ensuring every field receives
                 exactly what it needs.
-              </p>
-              <div className="flex items-end justify-end">
-                <div className="relative h-40 w-64 overflow-hidden rounded-xl border border-white/20 bg-foreground/30">
-                  {/* <img
-                    src={greenhouseImg}
-                    alt="Greenhouse irrigation system"
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  /> */}
-                  <div className="absolute bottom-0 left-0 right-0 p-3">
-                    <p className="text-xs leading-relaxed text-white/90">
-                      Precision monitoring adapts to weather and soil conditions in real-time.
-                    </p>
-                  </div>
+              </motion.p>
+
+              <motion.div
+                className="flex justify-end"
+                initial={{ opacity: 0, x: 40 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+              >
+                <div
+                  className="relative h-40 w-64 rounded-2xl p-5 flex items-end"
+                  style={{
+                    background: "#f3f4f6",
+                    border: "1px solid rgba(22,163,74,0.2)",
+                  }}
+                >
+                  <p className="text-xs text-green-600 leading-relaxed">
+                    Precision monitoring adapts to weather and soil conditions
+                    in real-time.
+                  </p>
                 </div>
-              </div>
+              </motion.div>
             </div>
           </div>
         </div>
-      </div>
+      </motion.div>
     </section>
   );
 };

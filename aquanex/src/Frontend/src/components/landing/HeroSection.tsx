@@ -5,6 +5,7 @@ import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 import landingpic from "@/assets/landingpic.png";
 import landingpic2 from "@/assets/landingpic2.png";
 import landingpicbreak from "@/assets/landingpicbreak.png";
+import { motion, AnimatePresence } from 'framer-motion';
 
 const slides = [
   {
@@ -61,11 +62,7 @@ const HeroSection = () => {
             i === current ? "opacity-100" : "opacity-0"
           }`}
         >
-          <img
-            src={slide.image}
-            alt=""
-            className="w-full h-full object-cover"
-          />
+          <img src={slide.image} alt="" className="w-full h-full object-cover" />
         </div>
       ))}
 
@@ -74,28 +71,48 @@ const HeroSection = () => {
 
       {/* Text overlay */}
       <div className="relative z-10 h-full flex flex-col items-center justify-center text-center px-6">
-        <p className="text-primary font-semibold text-sm uppercase tracking-widest mb-4">
-          Intelligent Irrigation Systems
-        </p>
 
-        <div
-          className={`min-h-[180px] flex flex-col items-center justify-center transition-opacity duration-400 ${
-            animating ? "opacity-0" : "opacity-100"
-          }`}
+        {/* Badge — animates once on mount */}
+        <motion.p
+          className="text-[#86efac] font-semibold text-sm uppercase tracking-widest mb-4"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.1 }}
         >
-          <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight mb-2">
-            {slides[current].heading}
-          </h1>
-          <h2 className="text-4xl md:text-6xl font-bold text-primary leading-tight mb-6">
-            {slides[current].subheading}
-          </h2>
-          <p className="text-lg text-white/75 max-w-2xl mb-10">
-            {slides[current].body}
-          </p>
+          Intelligent Irrigation Systems
+        </motion.p>
+
+        {/* Slide text — animates on slide change */}
+        <div className="min-h-[180px] flex flex-col items-center justify-center">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={current}
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              transition={{ duration: 0.45, ease: 'easeInOut' }}
+              className="flex flex-col items-center"
+            >
+              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight mb-2">
+                {slides[current].heading}
+              </h1>
+              <h2 className="text-4xl md:text-6xl font-bold text-[#86efac] leading-tight mb-6">
+                {slides[current].subheading}
+              </h2>
+              <p className="text-lg text-white/75 max-w-2xl mb-10">
+                {slides[current].body}
+              </p>
+            </motion.div>
+          </AnimatePresence>
         </div>
 
-        {/* Buttons */}
-        <div className="flex gap-4 flex-wrap justify-center">
+        {/* Buttons — staggered entrance on mount */}
+        <motion.div
+          className="flex gap-4 flex-wrap justify-center"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.5 }}
+        >
           <button
             onClick={() => navigate("/signin")}
             className="flex items-center gap-2 bg-transparent border border-white/40 text-white px-6 py-3 rounded-xl font-medium hover:bg-white/10 transition"
@@ -105,14 +122,19 @@ const HeroSection = () => {
           </button>
           <button
             onClick={() => navigate("/signup")}
-            className="bg-primary text-primary-foreground px-6 py-3 rounded-xl font-semibold hover:bg-primary/90 transition shadow-lg"
+            className="bg-[#86efac] text-[#0a0a0a] px-6 py-3 rounded-xl font-semibold hover:bg-[#86efac]/90 transition shadow-lg"
           >
             Get Started
           </button>
-        </div>
+        </motion.div>
 
         {/* Dot indicators */}
-        <div className="flex gap-3 mt-12">
+        <motion.div
+          className="flex gap-3 mt-12"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.6, delay: 0.7 }}
+        >
           {slides.map((_, i) => (
             <button
               key={i}
@@ -125,12 +147,12 @@ const HeroSection = () => {
               }}
               className={`rounded-full transition-all duration-300 ${
                 i === current
-                  ? "w-8 h-2 bg-primary"
+                  ? "w-8 h-2 bg-[#86efac]"
                   : "w-2 h-2 bg-white/30 hover:bg-white/60"
               }`}
             />
           ))}
-        </div>
+        </motion.div>
       </div>
 
       {/* Arrow buttons */}
@@ -146,6 +168,7 @@ const HeroSection = () => {
       >
         <ChevronRight className="w-6 h-6" />
       </button>
+
     </section>
   );
 };
