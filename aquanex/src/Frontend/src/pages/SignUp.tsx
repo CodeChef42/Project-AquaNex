@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from '../assets/Picture1.png';
 
-const ACCESS_KEY = 'adminTester'; // your existing registration gate key
+
 
 const SignUp = () => {
   const [username, setUsername] = useState('');
@@ -16,10 +16,8 @@ const SignUp = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [secretKey, setSecretKey] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Secret key modal state
@@ -33,10 +31,7 @@ const SignUp = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (secretKey !== ACCESS_KEY) {
-      toast({ title: 'Access Denied', description: 'Invalid access key. Registration is currently restricted.', variant: 'destructive' });
-      return;
-    }
+
     if (password !== confirmPassword) {
       toast({ title: 'Error', description: 'Passwords do not match', variant: 'destructive' });
       return;
@@ -183,22 +178,7 @@ const SignUp = () => {
                   </button>
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="secretKey">
-                  Access Key <span className="text-xs text-muted-foreground font-normal">(required for registration)</span>
-                </Label>
-                <div className="relative">
-                  <Input id="secretKey" type={showSecretKey ? "text" : "password"} placeholder="Enter access key" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} required className="w-full pr-10" />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 px-3 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowSecretKey((v) => !v)}
-                    aria-label={showSecretKey ? "Hide access key" : "Show access key"}
-                  >
-                    {showSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
+              
 
               <Button
                 type="submit"
