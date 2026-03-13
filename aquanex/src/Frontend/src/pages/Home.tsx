@@ -3,11 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import api from "@/lib/api";
 import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { useSimulation } from "@/contexts/SimulationContext";
 
 const HOME_FALLBACK_CENTER: [number, number] = [25.2048, 55.2708];
 
@@ -32,6 +32,9 @@ const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, workspace, fetchWorkspace } = useAuth();
+  const [recentIssues, setRecentIssues] = useState<any[]>([]);
+  const [totalAlerts, setTotalAlerts] = useState(0);
+  const [totalRepairHours, setTotalRepairHours] = useState(0);
   
   const userName = user?.full_name || user?.username || "User";
   const layoutPolygon = Array.isArray(workspace?.layout_polygon)
@@ -44,33 +47,78 @@ const Dashboard = () => {
   }, [layoutPolygon]);
 
   useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        const response = await api.get("/incidents/");
+        const payload = response.data;
+        const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.results) ? payload.results : [];
+        
+        // Total Alerts
+        setTotalAlerts(rows.length);
+
+        // Calculate Total Repair Hours
+        // Assuming 'repair_time_hours' or estimating based on status/duration
+        // For now, we simulate this calculation based on severity weights if actual data is missing
+        const hours = rows.reduce((acc: number, inc: any) => {
+            const duration = inc.repair_duration_hours || (
+                inc.severity === 'critical' ? 8 : 
+                inc.severity === 'high' ? 4 : 
+                inc.severity === 'medium' ? 2 : 1
+            );
+            return acc + duration;
+        }, 0);
+        setTotalRepairHours(Math.round(hours));
+
+        const mapped = rows
+          .slice()
+          .sort((a: any, b: any) => {
+            const tA = new Date(a.last_seen_at || a.detected_at || a.created_at || 0).getTime();
+            const tB = new Date(b.last_seen_at || b.detected_at || b.created_at || 0).getTime();
+            return tB - tA;
+          })
+          .slice(0, 8)
+          .map((inc: any, idx: number) => {
+            const rawTs = inc.last_seen_at || inc.detected_at || inc.created_at;
+            const ts = rawTs ? new Date(rawTs) : null;
+            const severity = String(inc.severity || "medium").toLowerCase();
+            return {
+              key: `${inc.id || idx}-${inc.gateway_id || "gw"}-${inc.incident_type || "incident"}`,
+              title: `Alert: ${String(inc.incident_type || "incident").replace(/_/g, " ")}`,
+              timestamp: ts && !Number.isNaN(ts.getTime())
+                ? ts.toLocaleString("en-US", {
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Just now",
+              severity:
+                severity === "critical"
+                  ? "High"
+                  : severity === "high"
+                  ? "High"
+                  : severity === "low"
+                  ? "Low"
+                  : "Medium",
+              link: "/pipeline/alerts",
+            };
+          });
+
+        setRecentIssues(mapped);
+      } catch (error) {
+        console.error("Failed to fetch incidents for home feed", error);
+        setRecentIssues([]);
+      }
+    };
+
     fetchWorkspace();
-    const timer = window.setInterval(fetchWorkspace, 8000);
+    fetchIncidents();
+    const timer = window.setInterval(() => {
+      fetchWorkspace();
+      fetchIncidents();
+    }, 8000);
     return () => window.clearInterval(timer);
   }, [fetchWorkspace]);
-
-  const { logs, phase, isRunning } = useSimulation();
-
-  const totalAlerts = useMemo(() => logs.filter(l => l.level === "error").length, [logs]);
-
-  const totalRepairHours = useMemo(() => {
-    return Math.round(logs.filter(l => l.level === "error").length * 1.5);
-  }, [logs]);
-
-  const allIssues = useMemo(() => {
-    return logs
-      .filter(l => l.level === "error" || l.level === "success")
-      .slice(0, 8)
-      .map(l => ({
-        key: `sim-${l.id}`,
-        title: l.message,
-        timestamp: l.ts,
-        severity: l.level === "error" ? "High" : "Low",
-        link: "/simulation",
-        source: "sim",
-      }));
-  }, [logs]);
-
 
   return (
     <div className="p-8 space-y-8">
@@ -176,62 +224,31 @@ const Dashboard = () => {
       {/* Live Issues Feed */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Live Issues Feed</CardTitle>
-            <div className="flex items-center gap-2">
-              {isRunning && (
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span className={`w-2 h-2 rounded-full animate-pulse ${
-                    phase === "Breakage" ? "bg-destructive" :
-                    phase === "Leak" ? "bg-yellow-500" :
-                    "bg-emerald-500"
-                  }`} />
-                  Simulation: {phase}
-                </span>
-              )}
-            </div>
-          </div>
+          <CardTitle>Live Issues Feed</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {allIssues.length === 0 ? (
+          {recentIssues.length === 0 ? (
             <p className="text-sm text-muted-foreground">No live alerts at the moment.</p>
           ) : (
-            allIssues.map((issue) => (
-              <div
-                key={issue.key}
-                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    {issue.source === "sim" && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                        Simulation
-                      </span>
-                    )}
-                    <h4 className="font-medium text-sm truncate">{issue.title}</h4>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">{issue.timestamp}</span>
-                    <Badge
-                      variant={
-                        issue.severity === "High" ? "destructive" :
-                        issue.severity === "Medium" ? "default" : "secondary"
-                      }
-                    >
-                      {issue.severity}
-                    </Badge>
-                  </div>
+          recentIssues.map((issue) => (
+            <div key={issue.key} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+              <div className="flex-1">
+                <h4 className="font-medium">{issue.title}</h4>
+                <div className="flex items-center gap-2 mt-1">
+                  <Clock className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">{issue.timestamp}</span>
+                  <Badge variant={issue.severity === "High" ? "destructive" : issue.severity === "Medium" ? "default" : "secondary"}>
+                    {issue.severity}
+                  </Badge>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => navigate(issue.link)}>
-                  View Details
-                </Button>
               </div>
-            ))
-          )}
+              <Button variant="outline" size="sm" onClick={() => navigate(issue.link)}>
+                View Details
+              </Button>
+            </div>
+          )))}
         </CardContent>
       </Card>
-
     </div>
   );
 };
