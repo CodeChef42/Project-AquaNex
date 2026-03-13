@@ -182,6 +182,7 @@ def _resolve_user_workspace(request, create_if_missing=False):
         workspace_name="",
         company_name="",
         company_type="",
+        location="",
         status="active",
         layout_status="idle",
     )
