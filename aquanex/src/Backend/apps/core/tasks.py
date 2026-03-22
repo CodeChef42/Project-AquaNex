@@ -2,7 +2,7 @@ from celery import shared_task
 from .models import Workspace, Incident
 import math
 import re
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 import logging
 import os
 import hashlib
