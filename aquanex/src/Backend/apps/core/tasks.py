@@ -2,7 +2,7 @@ from celery import shared_task
 from .models import Workspace, Incident
 import math
 import re
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 import logging
 import os
 import hashlib
@@ -415,13 +415,30 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
 
         workspace = Workspace.objects.get(id=workspace_id)
 
-        # file_path is a storage key. Keep local-path fallback for backward compatibility.
-        path_obj = Path(file_path)
+        # 1. Determine if the file_path is a safe local path or a storage key
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        candidate_path = Path(file_path).resolve()
+
+        is_safe_local_path = False
+        try:
+            if candidate_path.exists() and str(candidate_path).startswith(str(temp_dir)):
+                is_safe_local_path = True
+        except Exception:
+            pass
+
         storage_key = None
-        if not path_obj.exists() and default_storage is not None:
-            storage_key = file_path
+        path_obj = candidate_path
+
+        if not is_safe_local_path and default_storage is not None:
+            # 2. Sanitize storage_key to prevent path traversal in storage backends
+            # We treat the key as a POSIX-style relative path.
+            normalized_key = os.path.normpath(str(file_path)).replace("\\", "/")
+            if normalized_key.startswith(("/", "..")):
+                raise ValueError(f"Illegal storage key detected: {file_path}")
+
+            storage_key = normalized_key
             logger.info(f"[Celery] Attempting to open storage key: {storage_key}")
-            suffix = Path(file_path).suffix or ".bin"
+            suffix = Path(storage_key).suffix or ".bin"
             try:
                 with default_storage.open(storage_key, "rb") as source:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -429,8 +446,12 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
                         temp_local_path = tmp.name
             except Exception as e:
                 logger.error(f"[Celery] Failed to open storage key: {storage_key} — {e}")
-                raise FileNotFoundError(f"Storage key missing on S3: {storage_key}")
-            path_obj = Path(temp_local_path)
+                raise FileNotFoundError(f"Storage key missing or illegal path: {storage_key}")
+            path_obj = Path(temp_local_path).resolve()
+
+        # Final safety check: path_obj MUST be in temp_dir before we read it
+        if not str(path_obj).startswith(str(temp_dir)):
+            raise ValueError(f"Illegal file path or storage key detected: {file_path}")
 
         extension = path_obj.suffix.lower().lstrip(".")
 

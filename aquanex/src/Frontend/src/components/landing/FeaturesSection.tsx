@@ -1,4 +1,6 @@
 import { useRef } from "react";
+import { motion } from "framer-motion";
+
 import wavesIcon from "@/assets/icons/icons8-waves-32.png";
 import testTubeIcon from "@/assets/icons/icons8-test-tube-32.png";
 import barChartIcon from "@/assets/icons/icons8-bar-chart-48.png";
@@ -12,7 +14,7 @@ const agents = [
     title: "Pipeline Agent",
     description:
       "Real-time leak detection and flow monitoring across your entire pipeline network. Prevent water loss before it happens.",
-    color: "primary",
+    color: "accent",
   },
   {
     icon: testTubeIcon,
@@ -26,7 +28,7 @@ const agents = [
     title: "Demand Agent",
     description:
       "Predictive water demand forecasting using weather, crop type, and historical data. Allocate resources with precision.",
-    color: "primary",
+    color: "accent",
   },
   {
     icon: wetIcon,
@@ -40,7 +42,7 @@ const agents = [
     title: "Analytics Agent",
     description:
       "Unified dashboard with AI-driven insights, anomaly detection, and ROI reporting across all water management operations.",
-    color: "primary",
+    color: "accent",
   },
 ];
 
@@ -48,58 +50,84 @@ const FeaturesSection = () => {
   const ref = useRef<HTMLDivElement | null>(null);
 
   return (
-    <section id="features" className="section-padding py-24" ref={ref}>
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-16 flex flex-col justify-between gap-6 md:flex-row md:items-end">
-          <div>
-            <span className="mb-3 block text-xs font-semibold uppercase tracking-[0.15em] text-primary">
-              Platform
+    <section
+      id="features"
+      className="relative py-20 md:py-32 overflow-hidden"
+      style={{ background: "#faf7f2", isolation: "isolate" }}
+      ref={ref}
+    >
+      {/* Ambient background glow */}
+      <div className="absolute inset-0" style={{ zIndex: 0 }}>
+        <motion.div
+          className="absolute w-[300px] h-[300px] md:w-[600px] md:h-[600px] rounded-full blur-[80px] md:blur-[120px]"
+          style={{ background: "rgba(134,239,172,0.15)" }}
+          animate={{ x: [0, 60, -50, 0], y: [0, -40, 50, 0] }}
+          transition={{ duration: 20, repeat: Infinity }}
+        />
+      </div>
+
+      <div className="mx-auto max-w-7xl px-6 relative" style={{ zIndex: 1 }}>
+
+        {/* Header */}
+        <motion.div
+          className="mb-16 md:mb-20 flex flex-col justify-between gap-6 md:flex-row md:items-end"
+          initial={{ opacity: 0, y: 40 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.7 }}
+        >
+          <div className="max-w-2xl">
+            <span className="mb-4 block text-xs font-bold uppercase tracking-[0.2em] text-[#16a34a]">
+              Platform Intelligence
             </span>
-            <h2 className="font-display text-4xl leading-[1.1] text-foreground md:text-5xl lg:text-6xl">
+
+            <h2 className="font-display text-4xl leading-[1.1] text-foreground md:text-6xl lg:text-7xl font-extrabold">
               5 AI Agents.
               <br />
-              One <em>Platform.</em>
+              One <em className="text-[#16a34a] not-italic">Platform.</em>
             </h2>
           </div>
-          <p className="max-w-md text-lg leading-relaxed text-muted-foreground">
-            Each agent specializes in a critical aspect of water management, working together to deliver
-            zero-waste irrigation.
-          </p>
-        </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent, i) => {
-            return (
-              <div
-                key={agent.title}
-                className={`group relative cursor-pointer rounded-2xl border border-border bg-card p-7 transition-all duration-300 hover:scale-[1.02] hover:shadow-lg ${
-                  i === 4 ? "md:col-span-2 lg:col-span-1" : ""
-                }`}
-              >
-                <div
-                  className={`mb-5 flex h-14 w-14 items-center justify-center rounded-xl ${
-                    agent.color === "primary" ? "bg-primary/10" : "bg-accent/10"
-                  }`}
-                >
-                  <img
-                    src={agent.icon}
-                    alt={agent.title}
-                    className="h-9 w-9 object-contain"
-                  />
-                </div>
-                <h3 className="mb-2 text-lg font-semibold text-foreground">{agent.title}</h3>
-                <p className="mb-4 text-sm leading-relaxed text-muted-foreground">{agent.description}</p>
-                <div className="flex items-center gap-1.5 text-sm font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100">
-                  Learn more
-                  <img
-                    src={rightArrowIcon}
-                    alt="Learn more"
-                    className="h-4 w-4"
-                  />
-                </div>
+          <motion.p
+            className="max-w-md text-base md:text-lg text-muted-foreground leading-relaxed"
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+          >
+            Our modular ecosystem of AI agents provides 360° visibility into your water network, from soil health to pipeline integrity.
+          </motion.p>
+        </motion.div>
+
+        {/* Feature Grid */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {agents.map((agent, i) => (
+            <motion.div
+              key={agent.title}
+              className="group relative flex flex-col rounded-3xl border border-black/5 bg-white p-8 transition-all hover:border-[#16a34a]/30 hover:shadow-xl hover:shadow-green-900/5 active:scale-[0.98] md:p-10"
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: "-50px" }}
+              transition={{ duration: 0.5, delay: i * 0.1 }}
+            >
+              <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f0fdf4] text-[#16a34a] transition-transform group-hover:scale-110 md:h-16 md:w-16">
+                <img src={agent.icon} alt="" className="h-7 w-7 md:h-8 md:w-8" />
               </div>
-            );
-          })}
+
+              <h3 className="mb-4 text-xl font-bold text-gray-900 md:text-2xl">
+                {agent.title}
+              </h3>
+
+              <p className="mb-8 flex-1 text-sm md:text-base leading-relaxed text-gray-600">
+                {agent.description}
+              </p>
+
+              <div className="flex items-center gap-2 text-sm font-bold text-[#16a34a]">
+                Learn More
+                <img src={rightArrowIcon} alt="" className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </div>
+            </motion.div>
+          ))}
         </div>
       </div>
     </section>

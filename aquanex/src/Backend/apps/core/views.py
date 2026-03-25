@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import math
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -1069,8 +1070,21 @@ def _persist_telemetry_row(workspace, gateway, device_id, mcu_id, ts, lat, lng, 
 
 
 def _process_layout_sync_from_upload(workspace_id, layout_file, task_filename):
-    suffix = Path(layout_file.name).suffix or ".bin"
-    tmp_path = Path("/tmp") / f"layout_sync_{uuid.uuid4().hex}{suffix}"
+    # Sanitize the extension: only allow standard alphanumeric extensions
+    raw_ext = Path(layout_file.name).suffix or ".bin"
+    if not re.match(r"^\.[a-zA-Z0-9]{1,10}$", raw_ext):
+        raw_ext = ".bin"
+
+    # Use the system's temporary directory for cross-platform support (Windows/Linux)
+    temp_dir = Path(tempfile.gettempdir()).resolve()
+    # Combining a safe directory with a generated UUID prevents path traversal
+    safe_filename = f"layout_sync_{uuid.uuid4().hex}{raw_ext}"
+    tmp_path = (temp_dir / safe_filename).resolve()
+
+    # Final validation: ensure the resolved path is actually inside the temp directory
+    if not str(tmp_path).startswith(str(temp_dir)):
+        raise ValueError("Illegal file path detected.")
+
     with tmp_path.open("wb") as target:
         for chunk in layout_file.chunks():
             target.write(chunk)
@@ -2124,15 +2138,15 @@ def predict_breakage(request):
         }, status=status.HTTP_200_OK)
 
     except requests.exceptions.RequestException as e:
+        logger.error(f"ML service request failed: {e}")
         return Response({
             'error': 'ML service unavailable',
-            'details': str(e),
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     except Exception as e:
+        logger.exception(f"Internal server error in ManualMLPredictView: {e}")
         return Response({
             'error': 'Internal server error',
-            'details': str(e),
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
