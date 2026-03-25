@@ -27,8 +27,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
-import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+
 
 const allItems = [
   { title: "Home", url: "/home", icon: LayoutDashboard, module: null },
@@ -42,42 +42,52 @@ const allItems = [
   { title: "Settings", url: "/settings", icon: Settings, module: null },
 ];
 
+
 export function AppSidebar() {
   const { open } = useSidebar();
   const { workspace, logout } = useAuth();
-  const navigate = useNavigate();
 
   const items = allItems.filter(
     (item) => item.module === null || workspace?.modules?.includes(item.module)
   );
 
-  const handleLogout = () => {
-    logout();
-    navigate("/");
-  };
-
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" className="bg-white/70 backdrop-blur-sm border-r border-cyan-100">
+
       <SidebarHeader className="p-3">
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar/60 px-2 py-1.5">
-          <div className="min-w-0">
-            {open && <div className="text-xs font-semibold tracking-wide text-sidebar-foreground">Navigation</div>}
+        {open ? (
+          // ✅ Expanded: "Navigation" text + trigger
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-cyan-100 bg-white/60 px-2 py-1.5">
+            <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase pl-1">
+              Navigation
+            </span>
+            <SidebarTrigger className="text-slate-500 hover:bg-cyan-50 hover:text-cyan-700 shrink-0" />
           </div>
-          <SidebarTrigger className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" />
-        </div>
+        ) : (
+          // ✅ Collapsed: just trigger centered
+          <div className="flex items-center justify-center py-1">
+            <SidebarTrigger className="text-slate-500 hover:bg-cyan-50 hover:text-cyan-700" />
+          </div>
+        )}
       </SidebarHeader>
-      <SidebarSeparator />
+
+      <SidebarSeparator className="bg-cyan-100" />
+
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => (
-                <SidebarMenuItem key={item.title} className="border-b border-sidebar-border/50 last:border-b-0">
-                  <SidebarMenuButton asChild tooltip={item.title} className="rounded-none hover:bg-sidebar-accent/60 transition-colors">
+                <SidebarMenuItem key={item.title} className="border-b border-cyan-100/70 last:border-b-0">
+                  <SidebarMenuButton
+                    asChild
+                    tooltip={item.title}
+                    className="rounded-none hover:bg-cyan-50/80 transition-colors text-slate-600"
+                  >
                     <NavLink
                       to={item.url}
                       className="bg-transparent"
-                      activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
+                      activeClassName="bg-cyan-100/70 text-cyan-700 font-medium"
                     >
                       <item.icon />
                       {open && <span>{item.title}</span>}
@@ -90,16 +100,31 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-          onClick={handleLogout}
-        >
-          <LogOut className="w-4 h-4 shrink-0" />
-          {open && <span>Logout</span>}
-        </Button>
+      {/* ✅ Logout — centered when collapsed, full row when expanded */}
+      <SidebarFooter className="p-2">
+        {open ? (
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-2 text-slate-500 hover:text-red-500 hover:bg-red-50"
+            onClick={logout}
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            <span>Logout</span>
+          </Button>
+        ) : (
+          <div className="flex items-center justify-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-slate-500 hover:text-red-500 hover:bg-red-50"
+              onClick={logout}
+            >
+              <LogOut className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
       </SidebarFooter>
+
       <SidebarRail />
     </Sidebar>
   );

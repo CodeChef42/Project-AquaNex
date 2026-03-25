@@ -202,7 +202,7 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       if (!gatewayId || devices.length === 0) return;
 
       const now = Date.now();
-      const intervalSec = Math.max(1, Math.min(10, Number(localStorage.getItem("aquanex_sim_interval_sec") || 5))); 
+      const intervalSec = Math.max(60, Math.min(120, Number(localStorage.getItem("aquanex_sim_interval_sec") || 60))); 
       const lastPushTs = Number(localStorage.getItem("aquanex_sim_last_push_at") || 0);
       
       // Simulation Cycle Logic (Looping every 90 seconds)

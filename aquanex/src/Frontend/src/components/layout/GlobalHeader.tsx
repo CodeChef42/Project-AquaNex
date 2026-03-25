@@ -37,49 +37,40 @@ const GlobalHeader = () => {
   };
 
   return (
-    <header className="h-14 border-b border-border bg-background flex items-center justify-between px-4 shrink-0">
+    // ✅ inline style forces glass bg regardless of sidebar CSS variable overrides
+    <header
+      className="h-20 border-b border-cyan-200/60 flex items-center justify-between px-4 shrink-0 backdrop-blur-md"
+      style={{ background: "rgba(255,255,255,0.6)" }}
+    >
       <div className="flex items-center">
-        <Logo withText={false} size="lg" />
+        <Logo withText={true} size="md" />
       </div>
 
-      {/* Global Search */}
-      <div className="flex-1 max-w-xl relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+      <div className="flex-1 max-w-xl relative mx-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
         <Input
           placeholder="Search alert ID (e.g. 123 or uuid)"
-          className="pl-10 bg-muted/50 border-border"
+          className="pl-10 bg-white/70 border-cyan-200 text-slate-800 placeholder:text-slate-400 focus-visible:ring-cyan-500"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !searching) {
-              handleGlobalSearch();
-            }
+            if (e.key === "Enter" && !searching) handleGlobalSearch();
           }}
         />
       </div>
 
       <div className="flex items-center gap-2">
-        {/* Workspaces Button */}
+        {/* ✅ Removed "Workspaces" text button — replaced with icon only */}
         {location.pathname !== "/workspaces" && (
-          <Button variant="outline" onClick={() => navigate("/workspaces")}>
+          <Button
+            variant="outline"
+            onClick={() => navigate("/workspaces")}
+            className="border-cyan-200 text-slate-700 bg-white/70 hover:bg-slate-700 hover:text-white hover:border-slate-700 transition-colors">
             Workspaces
           </Button>
         )}
 
-        {/* Profile Dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="rounded-full">
-              <User className="w-5 h-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48 bg-card">
-            <DropdownMenuItem onClick={() => navigate("/settings")}>
-              <Settings className="w-4 h-4 mr-2" />
-              Settings
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+
       </div>
     </header>
   );

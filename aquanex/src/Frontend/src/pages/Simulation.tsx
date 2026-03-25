@@ -62,7 +62,7 @@ const Simulation = () => {
   const [activePage, setActivePage] = useState<SimPage>("pipeline");
   const [deviceEnabled, setDeviceEnabled] = useState<Record<string, boolean>>({});
   const [intervalSec, setIntervalSec] = useState(
-    Number(localStorage.getItem("aquanex_sim_interval_sec") || 2)
+    Number(localStorage.getItem("aquanex_sim_interval_sec") || 60)
   );
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
@@ -121,7 +121,7 @@ const Simulation = () => {
   const handleIntervalChange = (val: number) => {
       const safe = clamp(val, 1, 10);
       setIntervalSec(safe);
-      localStorage.setItem("aquanex_sim_interval_sec", String(safe));
+      localStorage.removeItem("aquanex_sim_interval_sec");
   };
 
   return (

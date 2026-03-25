@@ -1,13 +1,14 @@
 import React from 'react';
+import aquanexLogo from '@/assets/Picture1.png'; // ✅ import from assets
 
 interface LogoProps {
   className?: string;
   withText?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  textColor?: string;
 }
 
-const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
-  const logoSrc = `${import.meta.env.BASE_URL}aquanex-logo.png`;
+const Logo = ({ className = '', withText = true, size = 'md', textColor }: LogoProps) => {
 
   const sizeClasses = {
     sm: 'h-8',
@@ -24,14 +25,17 @@ const Logo = ({ className = '', withText = true, size = 'md' }: LogoProps) => {
   };
 
   return (
-    <div className={`flex items-center gap-3 ${className}`}>
+    <div className={`flex items-center gap-2 ${className}`}>
       <img
-        src={logoSrc}
+        src={aquanexLogo} // ✅ use imported asset
         alt="AquaNex Logo"
         className={`${sizeClasses[size]} w-auto object-contain`}
       />
       {withText && (
-        <span className={`font-semibold ${textSizes[size]} text-foreground`}>
+        <span
+          className={`font-semibold ${textSizes[size]}`}
+          style={{ color: textColor ?? 'inherit' }}
+        >
           AquaNex
         </span>
       )}

@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import aquanexLogo from '../assets/Picture1.png';
 import { LeafDecor } from '../components/LeafDecor';
+import Logo from '@/components/Logo';
+
 
 const inputCls = `
   bg-slate-50/80 dark:bg-slate-800/60
@@ -18,6 +19,7 @@ const inputCls = `
   focus-visible:border-cyan-400
   rounded-xl h-11 transition-all
 `;
+
 
 const SignUp = () => {
   const [username, setUsername] = useState('');
@@ -78,25 +80,19 @@ const SignUp = () => {
   };
 
   return (
-    <div className="relative min-h-screen flex flex-col
-      bg-[radial-gradient(ellipse_at_top_left,_#ecfeff_0%,_#f0fdfa_35%,_#e0f2fe_70%,_#f8fafc_100%)]
-      dark:bg-[radial-gradient(ellipse_at_top_left,_#042f2e_0%,_#0c1a2e_40%,_#061220_70%,_#020d18_100%)]
-      text-slate-800 dark:text-slate-100 transition-colors duration-300">
-
+    <div
+      className="relative min-h-screen flex flex-col text-slate-800 dark:text-slate-100 transition-colors duration-300"
+      style={{
+        background: "radial-gradient(ellipse at top left, #ecfeff 0%, #f0fdfa 35%, #e0f2fe 70%, #f8fafc 100%)",
+      }}
+    >
       <LeafDecor />
 
       {/* Secret Key Modal */}
       {generatedSecretKey && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
-          <div className="relative bg-white dark:bg-slate-900
-            border border-cyan-200 dark:border-cyan-800/50
-            rounded-2xl shadow-2xl shadow-cyan-200/40 dark:shadow-cyan-950
-            p-8 w-full max-w-md mx-4 space-y-5">
-
-            {/* accent bar */}
-            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full
-              bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500" />
-
+          <div className="relative bg-white dark:bg-slate-900 border border-cyan-200 dark:border-cyan-800/50 rounded-2xl shadow-2xl shadow-cyan-200/40 dark:shadow-cyan-950 p-8 w-full max-w-md mx-4 space-y-5">
+            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500" />
             <div className="flex items-start gap-3 mt-2">
               <div className="text-2xl">🔑</div>
               <div>
@@ -107,30 +103,24 @@ const SignUp = () => {
                 </p>
               </div>
             </div>
-
-            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl px-4 py-3
-              flex items-center justify-between gap-3
-              border border-slate-200 dark:border-slate-700">
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl px-4 py-3 flex items-center justify-between gap-3 border border-slate-200 dark:border-slate-700">
               <code className="text-sm font-mono text-cyan-700 dark:text-cyan-300 break-all select-all">
                 {generatedSecretKey}
               </code>
-              <Button variant="outline" size="sm" onClick={handleCopy}
-                className="shrink-0 border-cyan-300 dark:border-cyan-700 text-cyan-700 dark:text-cyan-300">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCopy}
+                className="shrink-0 border-cyan-300 dark:border-cyan-700 text-cyan-700 dark:text-cyan-300"
+              >
                 {copied ? '✓ Copied' : 'Copy'}
               </Button>
             </div>
-
-            <div className="bg-amber-50 dark:bg-amber-500/10
-              border border-amber-300 dark:border-amber-500/30
-              rounded-xl px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+            <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 rounded-xl px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
               ⚠️ Store in a safe place (e.g. password manager). Cannot be recovered after closing.
             </div>
-
             <Button
-              className="w-full h-11 rounded-xl font-bold text-white
-                bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600
-                hover:from-cyan-400 hover:to-cyan-500
-                shadow-lg shadow-cyan-400/30 border-0"
+              className="w-full h-11 rounded-xl font-bold text-white bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 shadow-lg shadow-cyan-400/30 border-0"
               onClick={handleContinue}
             >
               Continue to Onboarding →
@@ -139,19 +129,13 @@ const SignUp = () => {
         </div>
       )}
 
-      {/* Header */}
-      <header className="relative z-10 border-b border-cyan-200/60 dark:border-cyan-900/40
-        bg-white/60 dark:bg-slate-950/60 backdrop-blur-md">
+      {/* ✅ Frosted glass header — blends with cyan background */}
+      <header className="relative z-10 border-b border-cyan-200/60 bg-white/50 backdrop-blur-md">
         <div className="container mx-auto px-6 max-w-7xl h-20 flex items-center justify-between">
-          <img
-            src={aquanexLogo}
-            alt="AquaNex"
-            className="h-12 w-auto object-contain"
-          />
+          <Logo withText={true} size="md" />
           <Link
             to="/"
-            className="text-sm font-semibold text-cyan-700 dark:text-cyan-400
-              hover:text-cyan-900 dark:hover:text-cyan-300 transition-colors tracking-wide"
+            className="text-sm font-semibold text-cyan-700 hover:text-cyan-900 transition-colors tracking-wide"
           >
             ← Back to landing
           </Link>
@@ -164,18 +148,12 @@ const SignUp = () => {
 
           {/* Title */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
-              bg-gradient-to-br from-cyan-400 to-teal-500
-              shadow-lg shadow-cyan-300/40 dark:shadow-cyan-900/50 mb-4">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-400 to-teal-500 shadow-lg shadow-cyan-300/40 dark:shadow-cyan-900/50 mb-4">
               <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round"
-                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
-            <h1 className="text-4xl font-extrabold mb-2 tracking-tight
-              text-transparent bg-clip-text
-              bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-700
-              dark:from-cyan-300 dark:via-teal-300 dark:to-cyan-400">
+            <h1 className="text-4xl font-extrabold mb-2 tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-700 dark:from-cyan-300 dark:via-teal-300 dark:to-cyan-400">
               Get Started
             </h1>
             <p className="text-slate-500 dark:text-slate-400 text-sm">
@@ -184,80 +162,101 @@ const SignUp = () => {
           </div>
 
           {/* Card */}
-          <div className="relative bg-white/70 dark:bg-slate-900/70
-            border border-cyan-200/80 dark:border-cyan-800/40
-            rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60
-            p-8 backdrop-blur-xl">
-
-            {/* top accent bar */}
-            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full
-              bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
+          <div className="relative bg-white/70 dark:bg-slate-900/70 border border-cyan-200/80 dark:border-cyan-800/40 rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60 p-8 backdrop-blur-xl">
+            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
 
             <form onSubmit={handleSubmit} className="space-y-4 mt-2">
 
               <div className="space-y-2">
-                <Label htmlFor="username"
-                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                <Label htmlFor="username" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
                   Username
                 </Label>
-                <Input id="username" type="text" placeholder="Enter your username"
-                  value={username} onChange={(e) => setUsername(e.target.value)}
-                  required className={inputCls} />
+                <Input
+                  id="username"
+                  type="text"
+                  placeholder="Enter your username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  className={inputCls}
+                />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="fullName"
-                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                <Label htmlFor="fullName" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
                   Full Name
                 </Label>
-                <Input id="fullName" type="text" placeholder="John Doe"
-                  value={fullName} onChange={(e) => setFullName(e.target.value)}
-                  required className={inputCls} />
+                <Input
+                  id="fullName"
+                  type="text"
+                  placeholder="John Doe"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  className={inputCls}
+                />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="email"
-                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                <Label htmlFor="email" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
                   Email
                 </Label>
-                <Input id="email" type="email" placeholder="john@example.com"
-                  value={email} onChange={(e) => setEmail(e.target.value)}
-                  required className={inputCls} />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="john@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className={inputCls}
+                />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password"
-                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                <Label htmlFor="password" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
                   Password
                 </Label>
                 <div className="relative">
-                  <Input id="password" type={showPassword ? "text" : "password"}
-                    placeholder="Min. 8 characters" value={password}
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Min. 8 characters"
+                    value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    required className={`w-full pr-11 ${inputCls}`} />
-                  <button type="button"
+                    required
+                    className={`w-full pr-11 ${inputCls}`}
+                  />
+                  <button
+                    type="button"
                     className="absolute inset-y-0 right-0 px-3.5 text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors"
                     onClick={() => setShowPassword((v) => !v)}
-                    aria-label={showPassword ? "Hide password" : "Show password"}>
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword"
-                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                <Label htmlFor="confirmPassword" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
                   Confirm Password
                 </Label>
                 <div className="relative">
-                  <Input id="confirmPassword" type={showConfirmPassword ? "text" : "password"}
-                    placeholder="Re-enter password" value={confirmPassword}
+                  <Input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"}
+                    placeholder="Re-enter password"
+                    value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    required className={`w-full pr-11 ${inputCls}`} />
-                  <button type="button"
+                    required
+                    className={`w-full pr-11 ${inputCls}`}
+                  />
+                  <button
+                    type="button"
                     className="absolute inset-y-0 right-0 px-3.5 text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors"
                     onClick={() => setShowConfirmPassword((v) => !v)}
-                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}>
+                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                  >
                     {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
@@ -266,14 +265,11 @@ const SignUp = () => {
               <Button
                 type="submit"
                 disabled={loading}
-                className="w-full h-11 rounded-xl font-bold text-white text-sm tracking-wide
-                  bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600
-                  hover:from-cyan-400 hover:via-teal-400 hover:to-cyan-500
-                  shadow-lg shadow-cyan-400/30 dark:shadow-cyan-900/50
-                  transition-all duration-200 border-0 mt-2"
+                className="w-full h-11 rounded-xl font-bold text-white text-sm tracking-wide bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600 hover:from-cyan-400 hover:via-teal-400 hover:to-cyan-500 shadow-lg shadow-cyan-400/30 dark:shadow-cyan-900/50 transition-all duration-200 border-0 mt-2"
               >
                 {loading ? 'Creating account...' : 'Create Account'}
               </Button>
+
             </form>
           </div>
 
@@ -282,23 +278,23 @@ const SignUp = () => {
               Already have an account?{' '}
               <Link
                 to="/signin"
-                className="text-cyan-600 dark:text-cyan-400 hover:text-teal-600 dark:hover:text-cyan-300
-                  font-semibold transition-colors"
+                className="text-cyan-600 dark:text-cyan-400 hover:text-teal-600 dark:hover:text-cyan-300 font-semibold transition-colors"
               >
                 Sign in
               </Link>
             </p>
           </div>
+
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-cyan-200/40 dark:border-cyan-900/30
-        py-4 bg-white/30 dark:bg-black/10">
+      <footer className="relative z-10 border-t border-cyan-200/40 dark:border-cyan-900/30 py-4 bg-white/30 dark:bg-black/10">
         <p className="text-center text-slate-400 dark:text-slate-600 text-xs tracking-wide">
           © 2026 AquaNex. Intelligent Irrigation Systems.
         </p>
       </footer>
+
     </div>
   );
 };

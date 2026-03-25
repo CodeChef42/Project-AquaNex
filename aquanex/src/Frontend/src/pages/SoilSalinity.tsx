@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapPin, Filter } from "lucide-react";
+import { Filter } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,6 @@ import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
-// Helper to fit map bounds once
 const FitMapToPointsOnce = ({ points }: { points: [number, number][] }) => {
   const map = useMap();
   const [fitted, setFitted] = useState(false);
@@ -26,23 +25,77 @@ const FitMapToPointsOnce = ({ points }: { points: [number, number][] }) => {
   return null;
 };
 
-// Re-use logic from DemandForecasting for consistent zoning
+// ── Sutherland-Hodgman polygon clipping ──
+type LatLngPoint = [number, number];
+
+const toXY = ([lat, lng]: LatLngPoint) => ({ x: lng, y: lat });
+const toLatLng = ({ x, y }: { x: number; y: number }): LatLngPoint => [y, x];
+
 const clipPolygonWithRect = (
-  polygon: [number, number][],
+  polygon: LatLngPoint[],
   rect: { minX: number; maxX: number; minY: number; maxY: number }
-): [number, number][] => {
+): LatLngPoint[] => {
   if (polygon.length < 3) return [];
 
-  // Simple bounding box clip implementation or just mock it for now since we don't have full geom library imported
-  // For the sake of this task, we will simulate the zones by returning the whole polygon if it centers in the rect
-  // But to be more accurate like DemandForecasting, let's copy the logic if possible or simplify.
-  // Actually, we can just copy the helper functions if we want perfect parity.
-  // Let's implement a simplified version that just returns the full polygon colored differently for "mock" zones
-  // OR we can copy the full logic. Given "like did for demand forecasting", full logic is better.
-  
-  // Actually, let's just stick to the main polygon for now but colored by zone logic if we had it.
-  // The prompt asks to "add those 4 static zones".
-  return polygon; // Placeholder, real logic below in component
+  const clipEdge = (
+    input: Array<{ x: number; y: number }>,
+    inside: (p: { x: number; y: number }) => boolean,
+    intersect: (a: { x: number; y: number }, b: { x: number; y: number }) => { x: number; y: number }
+  ) => {
+    const output: Array<{ x: number; y: number }> = [];
+    if (input.length === 0) return output;
+    let prev = input[input.length - 1];
+    let prevInside = inside(prev);
+    for (const curr of input) {
+      const currInside = inside(curr);
+      if (currInside) {
+        if (!prevInside) output.push(intersect(prev, curr));
+        output.push(curr);
+      } else if (prevInside) {
+        output.push(intersect(prev, curr));
+      }
+      prev = curr;
+      prevInside = currInside;
+    }
+    return output;
+  };
+
+  const intersectVertical = (xEdge: number, a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dx = b.x - a.x;
+    if (Math.abs(dx) < 1e-12) return { x: xEdge, y: a.y };
+    const t = (xEdge - a.x) / dx;
+    return { x: xEdge, y: a.y + t * (b.y - a.y) };
+  };
+
+  const intersectHorizontal = (yEdge: number, a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dy = b.y - a.y;
+    if (Math.abs(dy) < 1e-12) return { x: a.x, y: yEdge };
+    const t = (yEdge - a.y) / dy;
+    return { x: a.x + t * (b.x - a.x), y: yEdge };
+  };
+
+  let output = polygon.map(toXY);
+  output = clipEdge(output, (p) => p.x >= rect.minX, (a, b) => intersectVertical(rect.minX, a, b));
+  output = clipEdge(output, (p) => p.x <= rect.maxX, (a, b) => intersectVertical(rect.maxX, a, b));
+  output = clipEdge(output, (p) => p.y >= rect.minY, (a, b) => intersectHorizontal(rect.minY, a, b));
+  output = clipEdge(output, (p) => p.y <= rect.maxY, (a, b) => intersectHorizontal(rect.maxY, a, b));
+
+  const latLng = output.map(toLatLng);
+  const deduped: LatLngPoint[] = [];
+  for (const point of latLng) {
+    const prev = deduped[deduped.length - 1];
+    if (!prev || Math.abs(prev[0] - point[0]) > 1e-8 || Math.abs(prev[1] - point[1]) > 1e-8) {
+      deduped.push(point);
+    }
+  }
+  if (deduped.length > 1) {
+    const first = deduped[0];
+    const last = deduped[deduped.length - 1];
+    if (Math.abs(first[0] - last[0]) < 1e-8 && Math.abs(first[1] - last[1]) < 1e-8) {
+      deduped.pop();
+    }
+  }
+  return deduped.length >= 3 ? deduped : [];
 };
 
 const zones = [
@@ -74,12 +127,12 @@ const SoilSalinity = () => {
     if (!workspace?.layout_polygon || workspace.layout_polygon.length < 3) return [];
     return workspace.layout_polygon.map((p: any) => [p[1], p[0]] as [number, number]);
   }, [workspace]);
+
   const mapFocusPoints = useMemo<[number, number][]>(
     () => [...layoutPolygon, ...geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number])],
     [layoutPolygon, geolocatedModuleDevices]
   );
 
-  // Compute 4 static sub-zones based on layout bounding box
   const zonedLayout = useMemo(() => {
     if (layoutPolygon.length < 3) return [];
     const lats = layoutPolygon.map((p) => p[0]);
@@ -91,30 +144,26 @@ const SoilSalinity = () => {
     const midLat = (minLat + maxLat) / 2;
     const midLng = (minLng + maxLng) / 2;
 
-    // We can't easily do full polygon clipping without a library like Sutherland-Hodgman in 200 lines.
-    // However, DemandForecasting has it. Let's try to grab it or approximate.
-    // For this specific request, let's just render the 4 zones as rectangles that approximate the area, 
-    // OR just use the full layout polygon 4 times with slight offsets? 
-    // No, "like Demand Forecasting" implies splitting.
-    // Since I can't see the helper in DemandForecasting fully (it was truncated in previous reads potentially),
-    // I will implement a visual approximation: 4 quadrants of the bounding box.
-    
-    return [
-      { label: "Zone A", color: "#ef4444", bounds: [[midLat, minLng], [maxLat, midLng]] }, // Top-Left
-      { label: "Zone B", color: "#f59e0b", bounds: [[midLat, midLng], [maxLat, maxLng]] }, // Top-Right
-      { label: "Zone C", color: "#22c55e", bounds: [[minLat, minLng], [midLat, midLng]] }, // Bottom-Left
-      { label: "Zone D", color: "#3b82f6", bounds: [[minLat, midLng], [midLat, maxLng]] }, // Bottom-Right
+    const zoneRects = [
+      { label: "Zone A", color: "#ef4444", rect: { minX: minLng, maxX: midLng, minY: midLat, maxY: maxLat } },
+      { label: "Zone B", color: "#f59e0b", rect: { minX: midLng, maxX: maxLng, minY: midLat, maxY: maxLat } },
+      { label: "Zone C", color: "#22c55e", rect: { minX: minLng, maxX: midLng, minY: minLat, maxY: midLat } },
+      { label: "Zone D", color: "#3b82f6", rect: { minX: midLng, maxX: maxLng, minY: minLat, maxY: midLat } },
     ];
+
+    return zoneRects
+      .map((zone) => ({
+        ...zone,
+        polygon: clipPolygonWithRect(layoutPolygon, zone.rect),
+      }))
+      .filter((zone) => zone.polygon.length >= 3);
   }, [layoutPolygon]);
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
-      case "high":
-        return "destructive";
-      case "medium":
-        return "warning";
-      default:
-        return "success";
+      case "high": return "destructive";
+      case "medium": return "warning";
+      default: return "success";
     }
   };
 
@@ -258,28 +307,31 @@ const SoilSalinity = () => {
                       attribution="Tiles © Esri"
                     />
                     <FitMapToPointsOnce points={mapFocusPoints} />
-                    
-                    {/* Render the 4 zones as rectangles for now to ensure alignment and visibility */}
-                    {zonedLayout.map((zone) => (
+
+                    {/* Clipped zone polygons */}
+                    {zonedLayout.length > 0 ? (
+                      zonedLayout.map((zone) => (
                         <Polygon
-                            key={zone.label}
-                            positions={[
-                                [zone.bounds[0][0], zone.bounds[0][1]], // SW
-                                [zone.bounds[1][0], zone.bounds[0][1]], // NW
-                                [zone.bounds[1][0], zone.bounds[1][1]], // NE
-                                [zone.bounds[0][0], zone.bounds[1][1]], // SE
-                            ] as [number, number][]}
-                            pathOptions={{ color: zone.color, weight: 2, fillOpacity: 0.4 }}
+                          key={zone.label}
+                          positions={zone.polygon}
+                          pathOptions={{ color: zone.color, weight: 2, fillOpacity: 0.4 }}
                         >
-                            <Tooltip sticky>{zone.label}</Tooltip>
+                          <Tooltip sticky>{zone.label}</Tooltip>
                         </Polygon>
-                    ))}
-                    
+                      ))
+                    ) : (
+                      <Polygon
+                        positions={layoutPolygon}
+                        pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }}
+                      />
+                    )}
+
                     {/* Outline the main layout */}
                     <Polygon
                       positions={layoutPolygon}
                       pathOptions={{ color: "white", weight: 2, fillOpacity: 0, dashArray: "5, 5" }}
                     />
+
                     {geolocatedModuleDevices.map((device: any) => (
                       <CircleMarker
                         key={device.id}
@@ -306,7 +358,7 @@ const SoilSalinity = () => {
         <div className="space-y-4">
           <h3 className="text-lg font-semibold">Zone Summary</h3>
           {zones.map((zone) => (
-            <Card 
+            <Card
               key={zone.id}
               className="cursor-pointer hover:shadow-lg transition-shadow"
               onClick={() => navigate(`/soil-salinity/zone/${zone.id}`)}

@@ -42,6 +42,13 @@ const PipelinesManagementPage = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
   const [incidents, setIncidents] = useState<any[]>([]);
+  const [pipelineForm, setPipelineForm] = useState({ pipe_section_id: "", pipeline_category: "", material: "", pressure_class: "", nominal_dia: "", water_capacity: "" });
+  const [pipelineState, setPipelineState] = useState<"form" | "success" | "done">("form");
+
+const handleSavePipeline = () => {
+    setPipelineState("success");
+    setPipelineForm({ pipe_section_id: "", pipeline_category: "", material: "", pressure_class: "", nominal_dia: "", water_capacity: "" });
+  };
   const moduleSetup = useModuleDeviceSetup(["flowmeter", "pressure_sensor"]);
   const {
     gatewayIdInput,
@@ -413,7 +420,58 @@ const PipelinesManagementPage = () => {
           )}
         </div>
       </div>
-    </div>
+{/* Pipeline Registry */}
+      {pipelineState === "form" && (
+        <div>
+          <h2 className="text-xl font-semibold mb-4">Pipeline Registry</h2>
+          <Card>
+            <CardContent className="pt-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[
+                  { label: "Pipe Section ID", placeholder: "e.g. PS-001", key: "pipe_section_id" },
+                  { label: "Pipeline Category", placeholder: "e.g. Main Distribution", key: "pipeline_category" },
+                  { label: "Material", placeholder: "e.g. uPVC, HDPE, DI", key: "material" },
+                  { label: "Pressure Class", placeholder: "e.g. PN10, PN16", key: "pressure_class" },
+                  { label: "Nominal Diameter (mm)", placeholder: "e.g. 110", key: "nominal_dia" },
+                  { label: "Water Capacity (m³/h)", placeholder: "e.g. 45.0", key: "water_capacity" },
+                ].map((field) => (
+                  <div key={field.key} className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">{field.label}</label>
+                    <input
+                      type="text"
+                      placeholder={field.placeholder}
+                      value={pipelineForm[field.key as keyof typeof pipelineForm]}
+                      onChange={(e) => setPipelineForm(prev => ({ ...prev, [field.key]: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button onClick={handleSavePipeline}>Save Data</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {pipelineState === "success" && (
+        <Card className="border-green-200 bg-green-50">
+          <CardContent className="pt-6 pb-6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-green-600 text-xl">✓</span>
+              <p className="text-green-700 font-medium">Pipeline section saved successfully.</p>
+            </div>
+            <button
+              onClick={() => setPipelineState("done")}
+              className="text-green-600 hover:text-green-800 text-sm font-medium"
+            >
+              Dismiss
+            </button>
+          </CardContent>
+        </Card>
+      )}
+    </div> 
   );
 };
 

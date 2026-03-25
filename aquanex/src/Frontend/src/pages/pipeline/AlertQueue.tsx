@@ -128,7 +128,7 @@ const AlertList = () => {
           items={[
             { label: "Home", path: "/home" },
             { label: "Pipeline Management", path: "/pipeline" },
-            { label: "Alert List" }
+            { label: "Alert Queue" }
           ]} 
         />
 

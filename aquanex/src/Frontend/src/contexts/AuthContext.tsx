@@ -1,12 +1,14 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import api from '../lib/api';
 
+
 interface User {
   id: number;
   username: string;
   full_name: string;
   email: string;
 }
+
 
 interface Workspace {
   id: string;
@@ -47,26 +49,31 @@ interface Workspace {
   demand_forecasting_systems?: Array<{ name: string; quantity: number }>;
 }
 
+
 interface AuthContextType {
   user: User | null;
   workspace: Workspace | null;
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, fullName: string, email: string) => Promise<string>; // ← now returns string
+  register: (username: string, password: string, fullName: string, email: string) => Promise<string>;
   logout: () => void;
   fetchWorkspace: () => Promise<void>;
   fetchWorkspaces: () => Promise<void>;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   isAuthenticated: boolean;
   loading: boolean;
+  loggingOut: boolean; // ✅ new
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SIM_RUNNING_KEY = "aquanex_sim_running";
 const SIM_STARTED_AT_KEY = "aquanex_sim_started_at";
 const SIM_INTERVAL_SEC_KEY = "aquanex_sim_interval_sec";
 const SIM_LAST_PUSH_AT_KEY = "aquanex_sim_last_push_at";
+const LOGOUT_DELAY_MS = 1800;
+
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -76,6 +83,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.getItem('selected_workspace_id')
   );
   const [loading, setLoading] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false); // ✅ new
+
 
   const enableSimulationSession = () => {
     localStorage.setItem(SIM_RUNNING_KEY, "true");
@@ -87,6 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+
   useEffect(() => {
     const token = localStorage.getItem('access_token');
     if (token) {
@@ -95,6 +105,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     }
   }, []);
+
 
   const fetchUser = async () => {
     try {
@@ -110,11 +121,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+
   const fetchWorkspaces = async () => {
     try {
       const response = await api.get('/onboarding/');
       const listed = Array.isArray(response.data?.workspaces) ? response.data.workspaces : [];
       setWorkspaces(listed);
+
 
       if (response.data.exists && response.data.workspace) {
         const currentId = String(response.data.workspace.id || "");
@@ -132,7 +145,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+
   const fetchWorkspace = fetchWorkspaces;
+
 
   const selectWorkspace = async (workspaceId: string) => {
     localStorage.setItem('selected_workspace_id', workspaceId);
@@ -144,6 +159,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     fetchWorkspaces();
   };
 
+
   const login = async (username: string, password: string) => {
     const response = await api.post('/auth/login/', { username, password });
     localStorage.setItem('access_token', response.data.access);
@@ -152,6 +168,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     enableSimulationSession();
     await fetchWorkspaces();
   };
+
 
   const register = async (username: string, password: string, fullName: string, email: string): Promise<string> => {
     const response = await api.post('/auth/register/', {
@@ -164,22 +181,29 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('refresh_token', response.data.refresh);
     setUser(response.data.user);
     enableSimulationSession();
-    return response.data.secret_key; // ← return the key to SignUp.tsx
+    return response.data.secret_key;
   };
 
+
+  // ✅ logout now shows loading screen first, then clears state
   const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('selected_workspace_id');
-    localStorage.removeItem(SIM_RUNNING_KEY);
-    localStorage.removeItem(SIM_STARTED_AT_KEY);
-    localStorage.removeItem(SIM_INTERVAL_SEC_KEY);
-    localStorage.removeItem(SIM_LAST_PUSH_AT_KEY);
-    setUser(null);
-    setWorkspace(null);
-    setWorkspaces([]);
-    setSelectedWorkspaceId(null);
+    setLoggingOut(true);
+    setTimeout(() => {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      localStorage.removeItem('selected_workspace_id');
+      localStorage.removeItem(SIM_RUNNING_KEY);
+      localStorage.removeItem(SIM_STARTED_AT_KEY);
+      localStorage.removeItem(SIM_INTERVAL_SEC_KEY);
+      localStorage.removeItem(SIM_LAST_PUSH_AT_KEY);
+      setUser(null);
+      setWorkspace(null);
+      setWorkspaces([]);
+      setSelectedWorkspaceId(null);
+      setLoggingOut(false);
+    }, LOGOUT_DELAY_MS);
   };
+
 
   return (
     <AuthContext.Provider value={{
@@ -195,11 +219,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       selectWorkspace,
       isAuthenticated: !!user,
       loading,
+      loggingOut, // ✅ exposed
     }}>
       {children}
     </AuthContext.Provider>
   );
 };
+
 
 export const useAuth = () => {
   const context = useContext(AuthContext);

@@ -256,7 +256,7 @@ const IncidentAnalysis = () => {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">High/Critical Alerts</CardTitle>
+            <CardTitle className="text-sm font-medium">Critical Alerts</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-destructive">{criticalAlerts}</div>

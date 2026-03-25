@@ -9,13 +9,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 const trendData = [
-  { day: "Day 1", ec: 5.2 },
-  { day: "Day 15", ec: 5.8 },
-  { day: "Day 30", ec: 6.4 },
-  { day: "Day 45", ec: 6.9 },
-  { day: "Day 60", ec: 7.1 },
-  { day: "Day 75", ec: 7.2 },
-  { day: "Day 90", ec: 7.2 },
+  { day: "01/03", ec: 5.2 },
+  { day: "04/03", ec: 5.5 },
+  { day: "07/03", ec: 5.8 },
+  { day: "10/03", ec: 6.1 },
+  { day: "13/03", ec: 6.4 },
+  { day: "16/03", ec: 6.6 },
+  { day: "19/03", ec: 6.9 },
+  { day: "22/03", ec: 7.0 },
+  { day: "25/03", ec: 7.1 },
+  { day: "28/03", ec: 7.2 },
+  { day: "31/03", ec: 7.2 },
 ];
 
 const ZoneDetail = () => {
@@ -52,7 +56,7 @@ const ZoneDetail = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <TrendingUp className="w-5 h-5" />
-            Salinity Trend - Last 90 Days
+            Salinity Trend - March 2026
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -109,7 +113,7 @@ const ZoneDetail = () => {
               className="w-full"
               onClick={() => setWaterQualityOpen(true)}
             >
-              View Water Quality Impact
+              View Details
             </Button>
           </CardContent>
         </Card>
@@ -245,3 +249,4 @@ const ZoneDetail = () => {
 };
 
 export default ZoneDetail;
+
