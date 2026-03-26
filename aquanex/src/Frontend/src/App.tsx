@@ -12,12 +12,12 @@ import MainLayout from "./components/layout/MainLayout";
 const LandingPage             = lazy(() => import("./pages/LandingPage"));
 const Home                    = lazy(() => import("./pages/Home"));
 const PipelinesManagementPage = lazy(() => import("./pages/pipeline/PipelinesManagementPage"));
-const IncidentDetail          = lazy(() => import("./pages/pipeline/IncidentDetail"));
-const AlertList               = lazy(() => import("./pages/pipeline/AlertList"));
+const IncidentDetails         = lazy(() => import("./pages/pipeline/IncidentDetails"));
+const AlertList               = lazy(() => import("./pages/pipeline/AlertQueue"));
 const PipelineResources       = lazy(() => import("./pages/pipeline/PipelineResources"));
 const SoilSalinity            = lazy(() => import("./pages/SoilSalinity"));
 const ZoneDetail              = lazy(() => import("./pages/soil/ZoneDetail"));
-const IncidentAnalysis        = lazy(() => import("./pages/IncidentAnalysis"));
+const IncidentAnalysis        = lazy(() => import("./pages/IncidentAnalytics"));
 const WaterQuality            = lazy(() => import("./pages/WaterQuality"));
 const WaterQualityRecommendation = lazy(() => import("./pages/WaterQualityRecommendation"));
 const DemandForecasting       = lazy(() => import("./pages/DemandForecasting"));
@@ -87,7 +87,7 @@ const App = () => (
 
                   <Route element={<ModuleRoute module="pipeline_management" />}>
                     <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
-                    <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
+                    <Route path="/pipeline/incident/:incidentId" element={<IncidentDetails />} />
                     <Route path="/pipeline/alerts"               element={<AlertList />} />
                     <Route path="/pipeline/resources/:incidentId" element={<PipelineResources />} />
                   </Route>
