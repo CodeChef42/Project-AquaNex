@@ -49,7 +49,7 @@ const GlobalHeader = () => {
       <div className="flex-1 max-w-xl relative mx-4">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
         <Input
-          placeholder="Search alert ID (e.g. 123 or uuid)"
+          placeholder="Search alert ID"
           className="pl-10 bg-white/70 border-cyan-200 text-slate-800 placeholder:text-slate-400 focus-visible:ring-cyan-500"
           value={query}
           onChange={(e) => setQuery(e.target.value)}

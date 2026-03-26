@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MapContainer, Marker, Polygon, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -37,7 +37,8 @@ const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
 
 const Workspaces = () => {
   const navigate = useNavigate();
-  const { workspaces, workspace, fetchWorkspaces, selectWorkspace, logout } = useAuth();
+  const { workspaces, workspace, fetchWorkspaces, selectWorkspace, logout, deleteWorkspace } = useAuth();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const formatArea = (areaM2: number) => {
     const area = Number.isFinite(areaM2) ? Math.max(0, areaM2) : 0;
@@ -85,6 +86,16 @@ const Workspaces = () => {
   const handleOpenWorkspace = (workspaceId: string) => {
     selectWorkspace(workspaceId);
     navigate("/home");
+  };
+
+  const handleDelete = async (workspaceId: string) => {
+    if (!confirm("Are you sure you want to delete this workspace? This cannot be undone.")) return;
+    setDeletingId(workspaceId);
+    try {
+      await deleteWorkspace(workspaceId);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -175,7 +186,7 @@ const Workspaces = () => {
                     Area: {item.layout_area_m2 ? formatArea(item.layout_area_m2) : "Not mapped"}
                   </p>
                   <p className="text-slate-500">Modules: {item.modules?.length || 0}</p>
-                  <div className="pt-2">
+                  <div className="pt-2 flex gap-2">
                     <Button
                       variant={isActive ? "default" : "outline"}
                       size="sm"
@@ -188,6 +199,15 @@ const Workspaces = () => {
                     >
                       {isActive ? "Active Workspace" : "Open Workspace"}
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={deletingId === item.id}
+                      className="text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      onClick={() => handleDelete(item.id)}
+                    >
+                      {deletingId === item.id ? "Deleting..." : "Delete"}
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -199,6 +219,5 @@ const Workspaces = () => {
     </div>
   );
 };
-
 
 export default Workspaces;

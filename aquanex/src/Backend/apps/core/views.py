@@ -1419,7 +1419,18 @@ class WorkspaceListView(APIView):
             "active_workspace_id": str(active.id) if active else None,
         })
 
+class WorkspaceDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def delete(self, request, pk):
+        try:
+            workspace = Workspace.objects.get(id=pk, owner=request.user)
+        except Workspace.DoesNotExist:
+            return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        workspace.delete()
+        return Response({"success": True}, status=status.HTTP_204_NO_CONTENT)
+    
 class LayoutModuleRecommendationView(APIView):
     permission_classes = [IsAuthenticated]
 

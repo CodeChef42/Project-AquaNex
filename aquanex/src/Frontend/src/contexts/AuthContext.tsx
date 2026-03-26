@@ -1,14 +1,12 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import api from '../lib/api';
 
-
 interface User {
   id: number;
   username: string;
   full_name: string;
   email: string;
 }
-
 
 interface Workspace {
   id: string;
@@ -49,7 +47,6 @@ interface Workspace {
   demand_forecasting_systems?: Array<{ name: string; quantity: number }>;
 }
 
-
 interface AuthContextType {
   user: User | null;
   workspace: Workspace | null;
@@ -61,11 +58,11 @@ interface AuthContextType {
   fetchWorkspace: () => Promise<void>;
   fetchWorkspaces: () => Promise<void>;
   selectWorkspace: (workspaceId: string) => Promise<void>;
+  deleteWorkspace: (workspaceId: string) => Promise<void>;
   isAuthenticated: boolean;
   loading: boolean;
-  loggingOut: boolean; // ✅ new
+  loggingOut: boolean;
 }
-
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SIM_RUNNING_KEY = "aquanex_sim_running";
@@ -73,7 +70,6 @@ const SIM_STARTED_AT_KEY = "aquanex_sim_started_at";
 const SIM_INTERVAL_SEC_KEY = "aquanex_sim_interval_sec";
 const SIM_LAST_PUSH_AT_KEY = "aquanex_sim_last_push_at";
 const LOGOUT_DELAY_MS = 1800;
-
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -83,7 +79,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.getItem('selected_workspace_id')
   );
   const [loading, setLoading] = useState(true);
-  const [loggingOut, setLoggingOut] = useState(false); // ✅ new
+  const [loggingOut, setLoggingOut] = useState(false);
+
 
 
   const enableSimulationSession = () => {
@@ -97,6 +94,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
 
+
   useEffect(() => {
     const token = localStorage.getItem('access_token');
     if (token) {
@@ -105,7 +103,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     }
   }, []);
-
 
   const fetchUser = async () => {
     try {
@@ -121,18 +118,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-
   const fetchWorkspaces = async () => {
     try {
       const response = await api.get('/onboarding/');
       const listed = Array.isArray(response.data?.workspaces) ? response.data.workspaces : [];
-      setWorkspaces(listed);
 
+      // Deduplicate by id in case backend returns duplicates
+      const unique: Workspace[] = listed.filter(
+        (w: Workspace, i: number, arr: Workspace[]) => arr.findIndex((x) => x.id === w.id) === i
+      );
+      setWorkspaces(unique);
 
       if (response.data.exists && response.data.workspace) {
         const currentId = String(response.data.workspace.id || "");
         setWorkspace(response.data.workspace);
-        if (!selectedWorkspaceId || !listed.some((w: Workspace) => w.id === selectedWorkspaceId)) {
+        if (!selectedWorkspaceId || !unique.some((w: Workspace) => w.id === selectedWorkspaceId)) {
           localStorage.setItem('selected_workspace_id', currentId);
           setSelectedWorkspaceId(currentId);
         }
@@ -146,7 +146,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
 
+
   const fetchWorkspace = fetchWorkspaces;
+
 
 
   const selectWorkspace = async (workspaceId: string) => {
@@ -156,9 +158,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (localMatch) {
       setWorkspace(localMatch);
     }
-    fetchWorkspaces();
+    await fetchWorkspaces();
   };
 
+  const deleteWorkspace = async (workspaceId: string) => {
+    await api.delete(`/onboarding/${workspaceId}/delete/`);
+    if (workspace?.id === workspaceId) {
+      setWorkspace(null);
+      setSelectedWorkspaceId(null); 
+      localStorage.removeItem('selected_workspace_id');
+    }
+    await fetchWorkspaces();
+  };  
 
   const login = async (username: string, password: string) => {
     const response = await api.post('/auth/login/', { username, password });
@@ -168,7 +179,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     enableSimulationSession();
     await fetchWorkspaces();
   };
-
 
   const register = async (username: string, password: string, fullName: string, email: string): Promise<string> => {
     const response = await api.post('/auth/register/', {
@@ -184,8 +194,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return response.data.secret_key;
   };
 
-
-  // ✅ logout now shows loading screen first, then clears state
   const logout = () => {
     setLoggingOut(true);
     setTimeout(() => {
@@ -204,7 +212,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }, LOGOUT_DELAY_MS);
   };
 
-
   return (
     <AuthContext.Provider value={{
       user,
@@ -217,15 +224,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       fetchWorkspace,
       fetchWorkspaces,
       selectWorkspace,
+      deleteWorkspace,
       isAuthenticated: !!user,
       loading,
-      loggingOut, // ✅ exposed
+      loggingOut,
     }}>
       {children}
     </AuthContext.Provider>
   );
 };
-
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
