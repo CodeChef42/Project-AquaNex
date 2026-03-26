@@ -1288,62 +1288,39 @@ class OnboardingView(APIView):
             workspace = None
 
         if workspace is None:
-            workspace = Workspace.objects.create(
+            incomplete = Workspace.objects.filter(
                 owner=user,
-                workspace_name=data.get('workspaceName', '') or "New Workspace",
-                # Workspace 2+ inherits company from the first workspace when omitted.
-                company_name=resolved_company_name,
-                company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
-                location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
-                team_size=data.get('teamSize', ''),
-                modules=data.get('modules', []),
-                gateway_id=data.get('gatewayId', ''),
-                devices=data.get('devices', []),
-                invite_emails=data.get('inviteEmails', []),
-                threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
-                threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
-                threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
-                notifications=data.get('notifications', []),
-                demand_forecasting_plants=data.get('demandForecasting', {}).get('plants', []),
-                demand_forecasting_systems=data.get('demandForecasting', {}).get('waterSystems', []),
-                layout_polygon=data.get('layout_polygon', []),
-                layout_area_m2=float(data.get('layout_area_m2', 0)),
-                layout_notes=data.get('layout_notes', ''),
-                layout_file_name=data.get('layout_file_name'),
-                layout_status='processing' if data.get('layout_file_name') else 'idle',
-                layout_job_error=None,
-                status='active',
-            )
-        else:
-            workspace.workspace_name = data.get('workspaceName', workspace.workspace_name or workspace.company_name)
-            if fallback_workspace and str(workspace.id) != str(fallback_workspace.id):
-                # Keep all non-primary workspaces tied to the first workspace organization name.
-                workspace.company_name = fallback_company_name or workspace.company_name
-            elif incoming_company_name:
-                workspace.company_name = incoming_company_name
-            elif not workspace.company_name and fallback_company_name:
-                workspace.company_name = fallback_company_name
-            workspace.company_type = data.get('companyType', workspace.company_type)
-            workspace.location = data.get('location', workspace.location)
-            workspace.team_size = data.get('teamSize', workspace.team_size)
-            workspace.modules = data.get('modules', workspace.modules)
-            workspace.gateway_id = data.get('gatewayId', workspace.gateway_id)
-            workspace.devices = data.get('devices', workspace.devices)
-            workspace.invite_emails = data.get('inviteEmails', workspace.invite_emails)
-            workspace.threshold_soil_moisture = data.get('thresholds', {}).get('soilMoisture', workspace.threshold_soil_moisture)
-            workspace.threshold_ph = data.get('thresholds', {}).get('ph', workspace.threshold_ph)
-            workspace.threshold_pressure = data.get('thresholds', {}).get('pressure', workspace.threshold_pressure)
-            workspace.notifications = data.get('notifications', workspace.notifications)
-            workspace.demand_forecasting_plants = data.get('demandForecasting', {}).get('plants', workspace.demand_forecasting_plants)
-            workspace.demand_forecasting_systems = data.get('demandForecasting', {}).get('waterSystems', workspace.demand_forecasting_systems)
-            workspace.layout_polygon = data.get('layout_polygon', workspace.layout_polygon)
-            workspace.layout_area_m2 = float(data.get('layout_area_m2', workspace.layout_area_m2))
-            workspace.layout_notes = data.get('layout_notes', workspace.layout_notes)
-            workspace.layout_file_name = data.get('layout_file_name', workspace.layout_file_name)
-            workspace.layout_status = 'processing' if data.get('layout_file_name') else workspace.layout_status
-            workspace.layout_job_error = None
-            workspace.status = 'active'
-            workspace.save()
+                workspace_name='',
+                status='active'
+            ).first()
+
+            if incomplete and not create_new_workspace:
+                workspace = incomplete
+                workspace.workspace_name = data.get('workspaceName', '') or 'New Workspace'
+                workspace.company_name = resolved_company_name
+                workspace.company_type = data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else '')
+                workspace.location = data.get('location', '') or (fallback_workspace.location if fallback_workspace else '')
+                workspace.team_size = data.get('teamSize', '')
+                workspace.modules = data.get('modules', [])
+                workspace.gateway_id = data.get('gatewayId', '')
+                workspace.devices = data.get('devices', [])
+                workspace.invite_emails = data.get('inviteEmails', [])
+                workspace.threshold_soil_moisture = data.get('thresholds', {}).get('soilMoisture', [20, 80])
+                workspace.threshold_ph = data.get('thresholds', {}).get('ph', [6, 8])
+                workspace.threshold_pressure = data.get('thresholds', {}).get('pressure', [2, 6])
+                workspace.notifications = data.get('notifications', [])
+                workspace.demand_forecasting_plants = data.get('demandForecasting', {}).get('plants', [])
+                workspace.demand_forecasting_systems = data.get('demandForecasting', {}).get('waterSystems', [])
+                workspace.layout_polygon = data.get('layout_polygon', [])
+                workspace.layout_area_m2 = float(data.get('layout_area_m2', 0))
+                workspace.layout_notes = data.get('layout_notes', '')
+                workspace.layout_file_name = data.get('layout_file_name')
+                workspace.layout_status = 'processing' if data.get('layout_file_name') else 'idle'
+                workspace.layout_job_error = None
+                workspace.status = 'active'
+                workspace.save()
+            else:
+                workspace = Workspace.objects.create()
 
         for email in data.get('inviteEmails', []):
             WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
