@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const IncidentDetail = () => {
+const IncidentDetails = () => {
   const { incidentId } = useParams();
   const navigate = useNavigate();
   const [materialOpen, setMaterialOpen] = useState(false);
@@ -187,4 +187,4 @@ const IncidentDetail = () => {
   );
 };
 
-export default IncidentDetail;
+export default IncidentDetails;
