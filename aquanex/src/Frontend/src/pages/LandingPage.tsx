@@ -1,4 +1,4 @@
-import { motion, useScroll } from "framer-motion";
+import { motion } from "framer-motion";
 import Header from "@/components/landing/Header";
 import HeroSection from "@/components/landing/HeroSection";
 import FeaturesSection from "@/components/landing/FeaturesSection";
@@ -23,8 +23,6 @@ const articles = [
 ];
 
 const LandingPage = () => {
-  const { scrollYProgress } = useScroll();
-
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -32,15 +30,6 @@ const LandingPage = () => {
       transition={{ duration: 0.6 }}
       style={{ background: "#f5f0e8", scrollBehavior: "smooth" }}
     >
-      {/* Scroll progress bar */}
-      <motion.div
-        className="fixed top-0 left-0 right-0 h-[3px] origin-left z-50"
-        style={{
-          scaleX: scrollYProgress,
-          background: "#86efac",
-        }}
-      />
-
       {/* Animated ambient background */}
       <div className="fixed inset-0 -z-10 overflow-hidden">
         <motion.div
