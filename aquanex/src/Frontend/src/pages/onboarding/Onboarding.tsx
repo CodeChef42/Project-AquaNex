@@ -1318,11 +1318,11 @@ const Onboarding = () => {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              Irrigation Project / Greenspace Name <span className="text-destructive">*</span>
+              Irrigation Project Name<span className="text-destructive">*</span>
             </label>
             <input
               type="text"
-              placeholder="e.g. Safa Park Sector A"
+              placeholder="Enter your greenspace name"
               value={data.workspaceName}
               onChange={(e) => update({ workspaceName: e.target.value })}
               className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
@@ -1336,7 +1336,7 @@ const Onboarding = () => {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Dubai Municipality Parks Division"
+                  placeholder="Enter your company name"
                   value={data.companyName}
                   onChange={(e) => update({ companyName: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
