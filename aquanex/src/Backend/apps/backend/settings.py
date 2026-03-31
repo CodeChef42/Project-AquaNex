@@ -53,7 +53,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.aquanex.app",
     "https://aquanex.app",
     "https://aquanex-deployment-2-mbilal-1120s-projects.vercel.app",
-    "https://project-aquanex.onrender.com",
+    "https://project-aquanex-xtn5.onrender.com",
 ]
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
