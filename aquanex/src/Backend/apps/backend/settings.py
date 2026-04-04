@@ -39,7 +39,7 @@ DEBUG = True
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "project-aquanex.onrender.com",   # your Render URL
+    "project-aquanex-xtn5.onrender.com",   # your Render URL
     ".onrender.com",                  # wildcard covers all subdomains
 ]
 

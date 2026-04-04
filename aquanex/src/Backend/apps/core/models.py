@@ -26,7 +26,6 @@ class User(AbstractBaseUser):
     username     = models.CharField(max_length=255, unique=True)
     full_name    = models.CharField(max_length=255, blank=True, null=True)
     email        = models.EmailField(max_length=255)
-    password     = models.CharField(max_length=255)
     secret_key_hash = models.CharField(max_length=255, blank=True, null=True)
     is_active    = models.BooleanField(default=True)
     is_staff     = models.BooleanField(default=False)
