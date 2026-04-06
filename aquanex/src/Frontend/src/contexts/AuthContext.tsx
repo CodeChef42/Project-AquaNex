@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import api from '../lib/api';
+
 
 interface User {
   id: number;
@@ -7,6 +8,7 @@ interface User {
   full_name: string;
   email: string;
 }
+
 
 interface Workspace {
   id: string;
@@ -47,6 +49,7 @@ interface Workspace {
   demand_forecasting_systems?: Array<{ name: string; quantity: number }>;
 }
 
+
 interface AuthContextType {
   user: User | null;
   workspace: Workspace | null;
@@ -64,12 +67,14 @@ interface AuthContextType {
   loggingOut: boolean;
 }
 
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SIM_RUNNING_KEY = "aquanex_sim_running";
 const SIM_STARTED_AT_KEY = "aquanex_sim_started_at";
 const SIM_INTERVAL_SEC_KEY = "aquanex_sim_interval_sec";
 const SIM_LAST_PUSH_AT_KEY = "aquanex_sim_last_push_at";
 const LOGOUT_DELAY_MS = 1800;
+
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -80,7 +85,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   );
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
-
 
 
   const enableSimulationSession = () => {
@@ -94,31 +98,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
 
-
-  useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      fetchUser();
-    } else {
-      setLoading(false);
-    }
-  }, []);
-
-  const fetchUser = async () => {
-    try {
-      const response = await api.get('/auth/profile/');
-      setUser(response.data);
-      enableSimulationSession();
-      await fetchWorkspaces();
-    } catch (error) {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchWorkspaces = async () => {
+  // ✅ Stable reference — empty deps because only uses React state setters (always stable) and api (module constant)
+  const fetchWorkspaces = useCallback(async () => {
     try {
       const response = await api.get('/onboarding/');
       const listed = Array.isArray(response.data?.workspaces) ? response.data.workspaces : [];
@@ -132,10 +113,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (response.data.exists && response.data.workspace) {
         const currentId = String(response.data.workspace.id || "");
         setWorkspace(response.data.workspace);
-        if (!selectedWorkspaceId || !unique.some((w: Workspace) => w.id === selectedWorkspaceId)) {
-          localStorage.setItem('selected_workspace_id', currentId);
-          setSelectedWorkspaceId(currentId);
-        }
+        // ✅ Functional update avoids needing selectedWorkspaceId in deps
+        setSelectedWorkspaceId((prev) => {
+          if (!prev || !unique.some((w: Workspace) => w.id === prev)) {
+            localStorage.setItem('selected_workspace_id', currentId);
+            return currentId;
+          }
+          return prev;
+        });
       } else {
         setWorkspace(null);
       }
@@ -143,12 +128,38 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setWorkspace(null);
       setWorkspaces([]);
     }
-  };
+  }, []); // empty — only uses stable setters + api
 
 
-
+  // ✅ Stable alias
   const fetchWorkspace = fetchWorkspaces;
 
+
+  // ✅ Depends on fetchWorkspaces which is now stable
+  const fetchUser = useCallback(async () => {
+    try {
+      const response = await api.get('/auth/profile/');
+      setUser(response.data);
+      enableSimulationSession();
+      await fetchWorkspaces();
+    } catch (error) {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchWorkspaces]);
+
+
+  // ✅ Runs exactly once on mount because fetchUser is stable
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      fetchUser();
+    } else {
+      setLoading(false);
+    }
+  }, [fetchUser]);
 
 
   const selectWorkspace = async (workspaceId: string) => {
@@ -161,15 +172,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await fetchWorkspaces();
   };
 
+
   const deleteWorkspace = async (workspaceId: string) => {
     await api.delete(`/onboarding/${workspaceId}/delete/`);
     if (workspace?.id === workspaceId) {
       setWorkspace(null);
-      setSelectedWorkspaceId(null); 
+      setSelectedWorkspaceId(null);
       localStorage.removeItem('selected_workspace_id');
     }
     await fetchWorkspaces();
-  };  
+  };
+
 
   const login = async (username: string, password: string) => {
     const response = await api.post('/auth/login/', { username, password });
@@ -179,6 +192,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     enableSimulationSession();
     await fetchWorkspaces();
   };
+
 
   const register = async (username: string, password: string, fullName: string, email: string): Promise<string> => {
     const response = await api.post('/auth/register/', {
@@ -193,6 +207,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     enableSimulationSession();
     return response.data.secret_key;
   };
+
 
   const logout = () => {
     setLoggingOut(true);
@@ -211,6 +226,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoggingOut(false);
     }, LOGOUT_DELAY_MS);
   };
+
 
   return (
     <AuthContext.Provider value={{
@@ -233,6 +249,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     </AuthContext.Provider>
   );
 };
+
 
 export const useAuth = () => {
   const context = useContext(AuthContext);

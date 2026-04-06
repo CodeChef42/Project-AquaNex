@@ -146,7 +146,7 @@ if DB_PASSWORD:
             user='postgres.xxiojmtocfiawqzcxffi',
             password=DB_PASSWORD,
             host='aws-1-ap-northeast-1.pooler.supabase.com',
-            port='5432',
+            port='6543',
             sslmode='require',
             connect_timeout=5,
         )
@@ -158,7 +158,7 @@ if DB_PASSWORD:
                 'USER': 'postgres.xxiojmtocfiawqzcxffi',
                 'PASSWORD': DB_PASSWORD,
                 'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
-                'PORT': '5432',
+                'PORT': '6543',
                 'OPTIONS': {
                     'sslmode': 'require',
                     'connect_timeout': 5,
@@ -175,7 +175,7 @@ else:
     print(" DB_PASSWORD is None — check your .env file")
 
 
-# =============================================================================
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

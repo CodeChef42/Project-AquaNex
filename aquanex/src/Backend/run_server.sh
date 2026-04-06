@@ -23,6 +23,8 @@ source venv/bin/activate
 # Select Redis broker (must match what Celery worker is using)
 # ----------------------------
 echo ""
+echo "This is for running both local redis and the local AquaNex server"
+echo ""
 echo "Select Redis broker:"
 echo "1) Render Redis (production)"
 echo "2) Local Redis (development)"
@@ -68,7 +70,7 @@ done
 # Start Django dev server
 # ----------------------------
 echo ""
-echo "Starting Django server on 0.0.0.0:8000"
+echo "Starting Django server on 0.0.0.0:3001"
 echo ""
 
-exec python manage.py runserver 0.0.0.0:8000
+exec python manage.py runserver 0.0.0.0:3001

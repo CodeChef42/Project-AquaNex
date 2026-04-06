@@ -1296,7 +1296,7 @@ class OnboardingView(APIView):
 
             if incomplete and not create_new_workspace:
                 workspace = incomplete
-                workspace.workspace_name = data.get('workspaceName', '') or 'New Workspace'
+                workspace.workspace_name = data.get('workspaceName', '')
                 workspace.company_name = resolved_company_name
                 workspace.company_type = data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else '')
                 workspace.location = data.get('location', '') or (fallback_workspace.location if fallback_workspace else '')
@@ -1322,7 +1322,7 @@ class OnboardingView(APIView):
             else:
                 workspace = Workspace.objects.create(
                     owner=user,
-                    workspace_name=data.get('workspaceName', '') or 'New Workspace',
+                    workspace_name=data.get('workspaceName', ''),
                     company_name=resolved_company_name,
                     company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
                     location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
@@ -1346,7 +1346,7 @@ class OnboardingView(APIView):
                     status='active',
                 )
         else:
-            workspace.workspace_name = data.get('workspaceName', workspace.workspace_name or workspace.company_name)
+            workspace.workspace_name = data.get('workspaceName', ""),
             if fallback_workspace and str(workspace.id) != str(fallback_workspace.id):
                 workspace.company_name = fallback_company_name or workspace.company_name
             elif incoming_company_name:
