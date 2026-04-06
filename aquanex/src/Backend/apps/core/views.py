@@ -1236,14 +1236,38 @@ class ChangePasswordView(APIView):
             serializer.save()
             return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            'user': UserSerializer(user).data,
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }, status=status.HTTP_201_CREATED)
 
 
+class CheckAvailabilityView(APIView):
+    permission_classes = []
+
+    def post(self, request):
+        from django.contrib.auth import get_user_model
+        import random
+        User = get_user_model()
+        data = request.data
+        result = {}
+
+        if 'username' in data:
+            uname = data['username'].strip()
+            taken = User.objects.filter(username__iexact=uname).exists()
+            result['username_taken'] = taken
+            if taken:
+                # Generate 3 suggestions
+                suggestions = []
+                for suffix in [str(random.randint(10, 99)), str(random.randint(100, 999)), f"_{random.randint(1, 99)}"]:
+                    candidate = f"{uname}{suffix}"
+                    if not User.objects.filter(username__iexact=candidate).exists():
+                        suggestions.append(candidate)
+                result['suggestions'] = suggestions[:3]
+
+        if 'email' in data:
+            result['email_taken'] = User.objects.filter(
+                email__iexact=data['email'].strip()
+            ).exists()
+
+        return Response(result, status=200)
+    
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -1290,13 +1314,13 @@ class OnboardingView(APIView):
         if workspace is None:
             incomplete = Workspace.objects.filter(
                 owner=user,
-                workspace_name='',
+                workspace_name__in=['', None],
                 status='active'
             ).first()
 
             if incomplete and not create_new_workspace:
                 workspace = incomplete
-                workspace.workspace_name = data.get('workspaceName', '')
+                workspace.workspace_name = data.get('workspaceName') or ''
                 workspace.company_name = resolved_company_name
                 workspace.company_type = data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else '')
                 workspace.location = data.get('location', '') or (fallback_workspace.location if fallback_workspace else '')
@@ -1346,7 +1370,7 @@ class OnboardingView(APIView):
                     status='active',
                 )
         else:
-            workspace.workspace_name = data.get('workspaceName', ""),
+            workspace.workspace_name = data.get('workspaceName') or ''
             if fallback_workspace and str(workspace.id) != str(fallback_workspace.id):
                 workspace.company_name = fallback_company_name or workspace.company_name
             elif incoming_company_name:

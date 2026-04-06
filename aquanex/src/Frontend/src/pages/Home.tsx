@@ -100,7 +100,7 @@ const Dashboard = () => {
       fetchIncidents();
     }, 30000);
     return () => window.clearInterval(timer);
-  }, [fetchWorkspace]);
+  }, []);
 
   return (
     <div className="p-8 space-y-8">

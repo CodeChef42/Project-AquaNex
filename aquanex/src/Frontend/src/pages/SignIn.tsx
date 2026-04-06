@@ -25,7 +25,7 @@ const SignIn = () => {
     try {
       await login(username, password);
       toast({ title: 'Success', description: 'Logged in successfully!' });
-      navigate('/workspaces');
+      window.location.href = '/workspaces';
     } catch (error: any) {
       setLoading(false);
       toast({

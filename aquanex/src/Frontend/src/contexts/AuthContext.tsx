@@ -208,7 +208,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return response.data.secret_key;
   };
 
-
   const logout = () => {
     setLoggingOut(true);
     setTimeout(() => {
@@ -219,14 +218,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       localStorage.removeItem(SIM_STARTED_AT_KEY);
       localStorage.removeItem(SIM_INTERVAL_SEC_KEY);
       localStorage.removeItem(SIM_LAST_PUSH_AT_KEY);
-      setUser(null);
-      setWorkspace(null);
-      setWorkspaces([]);
-      setSelectedWorkspaceId(null);
-      setLoggingOut(false);
+      window.location.href = '/signin';
     }, LOGOUT_DELAY_MS);
   };
-
 
   return (
     <AuthContext.Provider value={{

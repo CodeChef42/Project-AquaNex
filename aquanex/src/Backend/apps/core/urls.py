@@ -7,7 +7,8 @@ from .views import (
     GatewayTelemetryIngestView,
     LayoutUploadView, 
     LayoutTaskStatus,  # NEW
-    RegisterView, 
+    RegisterView,
+    CheckAvailabilityView,
     LoginView, 
     UserProfileView, 
     predict_breakage, 
@@ -31,6 +32,7 @@ urlpatterns = [
     path("incidents/<str:pk>/resolve/", IncidentResolveView.as_view(), name="incident-resolve"),
     path("incidents/seed/", IncidentSeedView.as_view(), name="incident-seed"),
     path("auth/register/", RegisterView.as_view(), name="register"),
+    path("auth/check-availability/", CheckAvailabilityView.as_view(), name="check-availability"),
     path("auth/login/", LoginView.as_view(), name="login"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/profile/", UserProfileView.as_view(), name="profile"),

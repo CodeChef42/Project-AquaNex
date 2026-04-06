@@ -118,7 +118,7 @@ const HeroSection = () => {
             onClick={() => navigate("/signup")}
             className="flex h-12 w-full sm:w-auto items-center justify-center rounded-full bg-[#16a34a] px-8 text-sm font-bold text-white shadow-xl shadow-green-900/20 active:scale-95 transition-all md:h-14 md:text-base"
           >
-            Get Started for Free
+            Get Started
           </button>
           <button
             onClick={() => {
