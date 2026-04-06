@@ -126,6 +126,10 @@ const computePipelineDeltas = (telemetry: Array<{ metric: string; reading: numbe
 
 export const SimulationProvider = ({ children }: { children: ReactNode }) => {
   const { workspace } = useAuth();
+  const workspaceRef = useRef(workspace);
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
   const [phase, setPhase] = useState<"Normal" | "Leak" | "Breakage">("Normal");
   const [cycleTime, setCycleTime] = useState(0);
   const [latestReadings, setLatestReadings] = useState<Record<string, number>>({});
@@ -197,8 +201,8 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       if (!isRunning) setIsRunning(true);
       if (sendingRef.current) return;
 
-      const gatewayId = String(workspace?.gateway_id || "").trim();
-      const devices = Array.isArray(workspace?.devices) ? workspace.devices : [];
+      const gatewayId = String(workspaceRef.current?.gateway_id || "").trim();
+      const devices = Array.isArray(workspaceRef.current?.devices) ? workspaceRef.current!.devices : [];
       if (!gatewayId || devices.length === 0) return;
 
       const now = Date.now();
@@ -353,7 +357,7 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [workspace]);
+  }, []);
 
   return (
     <SimulationContext.Provider value={{ isRunning, phase, cycleTime, latestReadings, records, logs, startSimulation, stopSimulation, clearLogs, clearRecords }}>
