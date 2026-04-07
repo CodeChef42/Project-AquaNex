@@ -170,7 +170,7 @@ const SignUp = () => {
 
   return (
     <div
-      className="relative min-h-screen flex flex-col text-slate-800 dark:text-slate-100 transition-colors duration-300"
+      className="relative min-h-screen flex flex-col justify-center text-slate-800 dark:text-slate-100 transition-colors duration-300"
       style={{
         background:
           'radial-gradient(ellipse at top left, #ecfeff 0%, #f0fdfa 35%, #e0f2fe 70%, #f8fafc 100%)',
@@ -220,10 +220,10 @@ const SignUp = () => {
       )}
 
 
-      <header className="relative z-10 border-b border-cyan-200/60 bg-white/50 backdrop-blur-md">
-        <div className="container mx-auto px-6 max-w-7xl h-20 flex items-center justify-between">
+      <header className="relative z-10 border-b border-cyan-200/60 bg-white/50 backdrop-blur-md shadow-sm">
+        <div className="container mx-auto px-4 max-w-7xl h-16 flex items-center justify-between">
           <Logo withText={true} size="md" />
-          <Link to="/" className="text-sm font-semibold text-cyan-700 hover:text-cyan-900 transition-colors tracking-wide">
+          <Link to="/" className="text-sm font-medium text-cyan-700 hover:text-cyan-900 transition-colors tracking-wide">
             ← Back to landing
           </Link>
         </div>
@@ -247,24 +247,27 @@ const SignUp = () => {
           </div>
 
 
-          <div className="relative bg-white/70 dark:bg-slate-900/70 border border-cyan-200/80 dark:border-cyan-800/40 rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60 p-8 backdrop-blur-xl">
+          <div className="relative bg-white/70 dark:bg-slate-900/70 border border-cyan-200/80 dark:border-cyan-800/40 rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60 px-8 py-9 backdrop-blur-xl max-w-md mx-auto">
             <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
 
 
-            <div className="mt-2 space-y-4">
-              <div className="flex justify-center">
+            <div className="mt-4 space-y-4">
+              <div className="w-full flex justify-center [&>div]:w-full mb-0.5">
                 <GoogleLogin
                   onSuccess={(credentialResponse) => { console.log('Google login success:', credentialResponse); }}
                   onError={() => { console.log('Login Failed'); }}
+                  width="100%"
                 />
               </div>
 
 
-              <div className="flex items-center gap-4">
-                <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
-                <span className="text-sm text-slate-400 dark:text-slate-500 font-medium">or</span>
-                <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
-              </div>
+              <div className="flex items-center gap-3 my-1">
+  <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
+  <span className="text-sm text-slate-400 dark:text-slate-500 font-medium px-1">
+    or
+  </span>
+  <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
+</div>
 
 
               <form onSubmit={handleSubmit} className="space-y-4">
