@@ -28,6 +28,7 @@ const Workspaces              = lazy(() => import("./pages/Workspaces"));
 const SignIn                  = lazy(() => import("./pages/SignIn"));
 const SignUp                  = lazy(() => import("./pages/SignUp"));
 const Onboarding              = lazy(() => import("./pages/onboarding/Onboarding"));
+const AcceptInvite            = lazy(() => import("./pages/AcceptInvite"));
 const NotFound                = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
@@ -77,6 +78,7 @@ const App = () => (
                 <Route path="/signin"     element={<SignIn />} />
                 <Route path="/signup"     element={<SignUp />} />
                 <Route path="/onboarding" element={<Onboarding />} />
+                <Route path="/accept-invite/:token" element={<AcceptInvite />} />
 
                 {/* Protected routes */}
                 <Route element={<ProtectedRoute />}>

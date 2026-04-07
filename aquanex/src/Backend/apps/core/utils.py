@@ -4,15 +4,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def send_workspace_invite(email, workspace_name, inviter_name):
+def send_workspace_invite(email, workspace_name, inviter_name, invite_link):
     """
     Sends an invitation email to a user to join a workspace.
+    invite_link is the tokenised URL where the recipient sets their name + password.
     """
-    subject = f"Invitation to join {workspace_name} on AquaNex"
+    subject = f"You're invited to join {workspace_name} on AquaNex"
     message = (
         f"Hello,\n\n"
-        f"You have been invited by {inviter_name} to join the workspace \"{workspace_name}\" on AquaNex.\n\n"
-        f"Please log in or sign up at https://aquanex.app to accept the invitation.\n\n"
+        f"{inviter_name} has invited you to join the workspace \"{workspace_name}\" on AquaNex.\n\n"
+        f"Click the link below to accept your invitation and create your account:\n\n"
+        f"{invite_link}\n\n"
+        f"This link expires in 72 hours. If you did not expect this email, you can safely ignore it.\n\n"
         f"Best regards,\n"
         f"The AquaNex Team"
     )

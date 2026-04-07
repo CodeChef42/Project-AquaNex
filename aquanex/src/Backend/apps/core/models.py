@@ -208,6 +208,8 @@ class Workspace(models.Model):
 class WorkspaceInvite(models.Model):
     workspace  = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='invites')
     email      = models.EmailField()
+    token      = models.UUIDField(default=uuid.uuid4, unique=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
     status     = models.CharField(max_length=20, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
 

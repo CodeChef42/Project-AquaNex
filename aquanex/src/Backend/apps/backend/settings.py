@@ -89,6 +89,7 @@ EMAIL_USE_TLS = str(os.environ.get('EMAIL_USE_TLS', 'true')).strip().lower() in 
 EMAIL_USE_SSL = str(os.environ.get('EMAIL_USE_SSL', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '20'))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'no-reply@aquanex.app')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://project-aqua-nex.vercel.app')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
