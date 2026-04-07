@@ -812,6 +812,7 @@ const Onboarding = () => {
     if (onboardingWorkspaceId) return onboardingWorkspaceId;
     if (!createNewWorkspace) return workspace?.id || null;
 
+    // ── CHANGED: wrapped in try/catch to expose real error ──
     const bootstrap = await api.post("/onboarding/", {
       createNewWorkspace: true,
       workspaceName: data.workspaceName || "New Workspace",
@@ -828,9 +829,25 @@ const Onboarding = () => {
       gatewayId: data.gatewayId,
       gatewayProtocol: data.gatewayProtocol,
       demandForecasting: buildDemandForecastingPayload(),
+    }).catch((err: any) => {
+      // ── ADDED: log exact backend error ──
+      console.error("❌ /onboarding/ failed | Status:", err?.response?.status);
+      console.error("❌ Response:", err?.response?.data);
+      console.error("❌ Message:", err?.message);
+      return null;
     });
+
+    // ── ADDED: guard if request failed ──
+    if (!bootstrap) return null;
+
     const newId = String(bootstrap?.data?.workspace_id || "");
-    if (!newId) return null;
+
+    // ── ADDED: log if response came back but no workspace_id ──
+    if (!newId) {
+      console.error("❌ No workspace_id in response:", bootstrap?.data);
+      return null;
+    }
+
     setOnboardingWorkspaceId(newId);
     return newId;
   }, [onboardingWorkspaceId, createNewWorkspace, workspace?.id, data]);

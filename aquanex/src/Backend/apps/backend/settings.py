@@ -40,7 +40,9 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "project-aquanex-xtn5.onrender.com",   # your Render URL
-    ".onrender.com",                  # wildcard covers all subdomains
+    ".onrender.com", 
+    "aquanex.app",
+    "www.aquanex.app",
 ]
 
 
