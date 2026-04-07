@@ -1,3 +1,4 @@
+
 """
 Django settings for backend project.
 
@@ -40,7 +41,9 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "project-aquanex-xtn5.onrender.com",   # your Render URL
-    ".onrender.com",                  # wildcard covers all subdomains
+    ".onrender.com", 
+    "aquanex.app",
+    "www.aquanex.app",
 ]
 
 
@@ -81,15 +84,15 @@ INSTALLED_APPS = [
 ]
 
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'ik11001.mixhost.jp')        # ← was smtp.gmail.com
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '465'))                   # ← was 587
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'info@aquanex.app') # ← was ''
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-EMAIL_USE_TLS = str(os.environ.get('EMAIL_USE_TLS', 'true')).strip().lower() in {'1', 'true', 'yes', 'on'}
-EMAIL_USE_SSL = str(os.environ.get('EMAIL_USE_SSL', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
+EMAIL_USE_TLS = str(os.environ.get('EMAIL_USE_TLS', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}  # ← was 'true'
+EMAIL_USE_SSL = str(os.environ.get('EMAIL_USE_SSL', 'true')).strip().lower() in {'1', 'true', 'yes', 'on'}   # ← was 'false'
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '20'))
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'no-reply@aquanex.app')
-
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'info@aquanex.app')  # ← was dynamic
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://www.aquanex.app')
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
