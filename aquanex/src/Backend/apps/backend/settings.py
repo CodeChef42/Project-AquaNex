@@ -93,6 +93,7 @@ EMAIL_USE_SSL = str(os.environ.get('EMAIL_USE_SSL', 'true')).strip().lower() in 
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '20'))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'info@aquanex.app')  # ← was dynamic
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://www.aquanex.app')
+
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',

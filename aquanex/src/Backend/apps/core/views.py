@@ -1446,14 +1446,23 @@ class WorkspaceInviteView(APIView):
             workspace.invite_emails = current_invites + [email]
             workspace.save(update_fields=["invite_emails"])
 
-        WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
+        invite, _ = WorkspaceInvite.objects.update_or_create(
+            workspace=workspace, email=email,
+            defaults={
+                'token': uuid.uuid4(),
+                'expires_at': timezone.now() + timedelta(hours=72),
+                'status': 'pending',
+            }
+        )
 
         inviter_name = request.user.full_name or request.user.username or "A colleague"
         workspace_name = workspace.workspace_name or workspace.company_name or "AquaNex Workspace"
+        frontend_url = settings.FRONTEND_URL.rstrip('/')
+        invite_link = f"{frontend_url}/accept-invite/{invite.token}"
 
         try:
             from .utils import send_workspace_invite
-            success = send_workspace_invite(email, workspace_name, inviter_name)
+            success = send_workspace_invite(email, workspace_name, inviter_name, invite_link)
             if success:
                 return Response({"success": True, "message": f"Invitation sent to {email}"})
             else:
@@ -1461,6 +1470,75 @@ class WorkspaceInviteView(APIView):
         except Exception as e:
             logger.error(f"Failed to send invite email: {e}")
             return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AcceptInviteView(APIView):
+    permission_classes = [AllowAny]
+
+    def _get_valid_invite(self, token):
+        """Look up invite by token and validate it is still usable."""
+        try:
+            invite = WorkspaceInvite.objects.select_related('workspace').get(token=token)
+        except WorkspaceInvite.DoesNotExist:
+            return None, "Invalid invitation link."
+        if invite.status != 'pending':
+            return None, "This invitation has already been used."
+        if invite.expires_at and invite.expires_at < timezone.now():
+            return None, "This invitation link has expired."
+        return invite, None
+
+    def get(self, request, token):
+        invite, error = self._get_valid_invite(token)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+        workspace_name = invite.workspace.workspace_name or invite.workspace.company_name or "AquaNex Workspace"
+        return Response({"email": invite.email, "workspace_name": workspace_name})
+
+    def post(self, request, token):
+        invite, error = self._get_valid_invite(token)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        full_name = str(request.data.get('full_name', '')).strip()
+        password = str(request.data.get('password', '')).strip()
+
+        if not full_name:
+            return Response({"error": "Full name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(password) < 8:
+            return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(email=invite.email).exists():
+            return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Derive a unique username from the email local-part
+        base = re.sub(r'[^a-zA-Z0-9_]', '', invite.email.split('@')[0]) or 'user'
+        username = base
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base}{counter}"
+            counter += 1
+
+        import secrets as _secrets
+        from django.contrib.auth.hashers import make_password as _make_password
+
+        user = User.objects.create_user(
+            username=username,
+            password=password,
+            full_name=full_name,
+            email=invite.email,
+        )
+        user.secret_key_hash = _make_password(_secrets.token_urlsafe(16))
+        user.save(update_fields=['secret_key_hash'])
+
+        invite.status = 'accepted'
+        invite.save(update_fields=['status'])
+
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'user': UserSerializer(user).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 class WorkspaceListView(APIView):
