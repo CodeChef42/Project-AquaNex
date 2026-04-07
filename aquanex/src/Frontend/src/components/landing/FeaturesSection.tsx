@@ -6,7 +6,6 @@ import testTubeIcon from "@/assets/icons/icons8-test-tube-32.png";
 import barChartIcon from "@/assets/icons/icons8-bar-chart-48.png";
 import wetIcon from "@/assets/icons/icons8-wet-32.png";
 import brainIcon from "@/assets/icons/icons8-brain-32.png";
-import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
 
 const agents = [
   {
@@ -118,14 +117,9 @@ const FeaturesSection = () => {
                 {agent.title}
               </h3>
 
-              <p className="mb-8 flex-1 text-sm md:text-base leading-relaxed text-gray-600">
+              <p className="text-sm md:text-base leading-relaxed text-gray-600">
                 {agent.description}
               </p>
-
-              <div className="flex items-center gap-2 text-sm font-bold text-[#16a34a]">
-                Learn More
-                <img src={rightArrowIcon} alt="" className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </div>
             </motion.div>
           ))}
         </div>
