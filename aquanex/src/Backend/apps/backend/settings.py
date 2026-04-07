@@ -144,7 +144,7 @@ if DB_PASSWORD:
         conn = psycopg2.connect(
             dbname='postgres',
             user='postgres.xxiojmtocfiawqzcxffi',
-            password="Aquapercolation",
+            password=DB_PASSWORD,
             host='aws-1-ap-northeast-1.pooler.supabase.com',
             port='6543',
             sslmode='require',
@@ -156,7 +156,7 @@ if DB_PASSWORD:
                 'ENGINE': 'django.db.backends.postgresql',
                 'NAME': 'postgres',
                 'USER': 'postgres.xxiojmtocfiawqzcxffi',
-                'PASSWORD': "Aquapercolation",
+                'PASSWORD': DB_PASSWORD,
                 'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
                 'PORT': '6543',
                 'OPTIONS': {
