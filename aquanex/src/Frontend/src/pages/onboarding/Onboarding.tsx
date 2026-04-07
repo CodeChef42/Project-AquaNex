@@ -252,7 +252,6 @@ const Onboarding = () => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
-  const [addingEmail, setAddingEmail] = useState(false);
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [uploadingLayout, setUploadingLayout] = useState(false);
@@ -673,48 +672,24 @@ const Onboarding = () => {
     });
   };
 
-  const addEmail = async () => {
-    if (!emailInput) return;
-    if (data.inviteEmails.includes(emailInput)) {
-      toast({
-        title: "Already added",
-        description: "This email is already in the list.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setAddingEmail(true);
-    try {
-      const targetWorkspaceId = await ensureTargetWorkspaceId();
-      if (!targetWorkspaceId) {
-        throw new Error("Could not ensure workspace ID.");
-      }
-
-      await api.post(
-        "/workspace-invite/",
-        { email: emailInput },
-        { headers: { "X-Workspace-Id": targetWorkspaceId } }
-      );
-
-      toast({
-        title: "Invitation sent",
-        description: `Invitation email sent to ${emailInput}`,
-      });
-
-      update({ inviteEmails: [...data.inviteEmails, emailInput] });
-      setEmailInput("");
-    } catch (error) {
-      console.error("Failed to send invite:", error);
-      toast({
-        title: "Invitation failed",
-        description: "Could not send invitation email. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setAddingEmail(false);
-    }
-  };
+  const addEmail = () => {
+  if (!emailInput.trim()) return;
+  if (data.inviteEmails.includes(emailInput.trim())) {
+    toast({
+      title: "Already added",
+      description: "This email is already in the list.",
+      variant: "destructive",
+    });
+    return;
+  }
+  // Invites are sent after workspace is created on final step
+  update({ inviteEmails: [...data.inviteEmails, emailInput.trim()] });
+  setEmailInput("");
+  toast({
+    title: "Email added",
+    description: `${emailInput.trim()} will be invited once your workspace is ready.`,
+  });
+};
 
   const buildDemandForecastingPayload = () => {
     const plants = data.demandForecasting.plants
@@ -1463,85 +1438,80 @@ const Onboarding = () => {
       );
 
     // ─── Step 2 ───
-    if (step === 2)
-      return (
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-bold">Set up your team</h2>
-            <p className="text-muted-foreground mt-1">
-              Invite colleagues to collaborate. You can do this later too.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Team Size</label>
-            <div className="flex flex-wrap gap-3">
-              {TEAM_SIZES.map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => update({ teamSize: size })}
-                  className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
-                    data.teamSize === size
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  {size}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Invite Team Members</label>
-            <div className="flex gap-2">
-              <input
-                type="email"
-                placeholder="colleague@company.com"
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !addingEmail && addEmail()}
-                disabled={addingEmail}
-                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-50"
-              />
+    {step === 2 && (
+  <div className="space-y-6">
+    <div>
+      <h2 className="text-2xl font-bold">Set up your team</h2>
+      <p className="text-muted-foreground mt-1">
+        Invite colleagues to collaborate. You can do this later too.
+      </p>
+    </div>
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Team Size</label>
+      <div className="flex flex-wrap gap-3">
+        {TEAM_SIZES.map((size) => (
+          <button
+            key={size}
+            type="button"
+            onClick={() => update({ teamSize: size })}
+            className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
+              data.teamSize === size
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border hover:border-primary/50"
+            }`}
+          >
+            {size}
+          </button>
+        ))}
+      </div>
+    </div>
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Invite Team Members</label>
+      <div className="flex gap-2">
+        <input
+          type="email"
+          placeholder="colleague@company.com"
+          value={emailInput}
+          onChange={(e) => setEmailInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addEmail()}
+          className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+        />
+        <button
+          type="button"
+          onClick={addEmail}
+          className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+        >
+          Add
+        </button>
+      </div>
+      {data.inviteEmails.length > 0 && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {data.inviteEmails.map((email) => (
+            <span
+              key={email}
+              className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm"
+            >
+              {email}
               <button
                 type="button"
-                onClick={addEmail}
-                disabled={addingEmail}
-                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-70"
+                onClick={() =>
+                  update({
+                    inviteEmails: data.inviteEmails.filter((e) => e !== email),
+                  })
+                }
               >
-                {addingEmail ? "Sending..." : "Add"}
+                <X className="w-3 h-3" />
               </button>
-            </div>
-            {data.inviteEmails.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                {data.inviteEmails.map((email) => (
-                  <span
-                    key={email}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm"
-                  >
-                    {email}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        update({
-                          inviteEmails: data.inviteEmails.filter(
-                            (e) => e !== email
-                          ),
-                        })
-                      }
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Press Enter or click Add.
-            </p>
-          </div>
+            </span>
+          ))}
         </div>
-      );
+      )}
+      <p className="text-xs text-muted-foreground">
+        Press Enter or click Add. Invites will be sent once your workspace is ready.
+      </p>
+    </div>
+  </div>
+)}
 
     // ─── Step 3 ───
     if (step === 3)
