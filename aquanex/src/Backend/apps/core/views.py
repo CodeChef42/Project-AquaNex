@@ -1,8 +1,3 @@
-from django.contrib.auth import get_user_model
-from django.conf import settings
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
-
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -29,7 +24,10 @@ from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
-
+import hashlib
+import uuid
+from django.utils import timezone
+from django.db import transaction, IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +72,11 @@ def _coerce_prediction_timestamp(value):
         return timezone.make_aware(dt, timezone.get_current_timezone())
     return dt
 
-
 def _incident_fingerprint(gateway_id, incident_type):
-    return hashlib.sha256(f"{gateway_id}:{incident_type}".encode("utf-8")).hexdigest()
-
+    # Appending a UUID guarantees that every NEW incident gets a completely 
+    # unique fingerprint, allowing multiple historical records per gateway.
+    unique_string = f"{gateway_id}:{incident_type}:{uuid.uuid4()}"
+    return hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
     if not isinstance(prediction, dict):
@@ -85,38 +84,57 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
 
     now_ts = timezone.now()
 
+    # 1. Handle Normal Predictions (Transition 'ongoing' to 'recovering')
     if prediction.get("is_anomaly") is not True:
-        # If normal data comes in, transition 'open' incidents to 'recovering'
-        # This signals the frontend to ask for confirmation.
         Incident.objects.filter(
             workspace=workspace,
             gateway_id=gateway_id,
-            status="open",
+            status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
         return None
 
+    # 2. Extract Data for Anomalous Predictions
     incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
     severity = str(prediction.get("severity") or "").strip().lower() or None
     detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
-    fingerprint = _incident_fingerprint(gateway_id, incident_type)
     details = {"prediction": prediction}
 
-    # Check for recovering incidents first - if we get a new anomaly for a recovering incident, reopen it
-    recovering = Incident.objects.filter(
+    # 3. Check for an ACTIVE ("ongoing") incident first.
+    # If it exists, this is an ongoing leak, so we just update the timestamp.
+    ongoing_incident = Incident.objects.filter(
+        workspace=workspace,
+        gateway_id=gateway_id,
+        incident_type=incident_type,
+        status="ongoing"
+    ).first()
+
+    if ongoing_incident:
+        ongoing_incident.last_seen_at = detected_at
+        ongoing_incident.severity = severity
+        ongoing_incident.details = details
+        ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
+        return {"id": str(ongoing_incident.id), "created": False}
+
+    # 4. Check for a "recovering" incident. 
+    # If the leak stopped briefly but started again, revert it to "ongoing".
+    recovering_incident = Incident.objects.filter(
         workspace=workspace,
         gateway_id=gateway_id,
         incident_type=incident_type,
         status="recovering"
     ).first()
 
-    if recovering:
-        recovering.status = "open"
-        recovering.last_seen_at = detected_at
-        recovering.severity = severity
-        recovering.details = details
-        recovering.save()
-        return {"id": str(recovering.id), "created": False}
+    if recovering_incident:
+        recovering_incident.status = "ongoing"
+        recovering_incident.last_seen_at = detected_at
+        recovering_incident.severity = severity
+        recovering_incident.details = details
+        recovering_incident.save()
+        return {"id": str(recovering_incident.id), "created": False}
 
+    # 5. If NO ongoing or recovering incidents exist, create a BRAND NEW ONE.
+    fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    
     try:
         with transaction.atomic():
             incident = Incident.objects.create(
@@ -124,7 +142,7 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
                 gateway_id=gateway_id,
                 incident_type=incident_type,
                 severity=severity,
-                status="open",
+                status="ongoing",
                 detected_at=detected_at,
                 last_seen_at=detected_at,
                 fingerprint=fingerprint,
@@ -132,27 +150,8 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
             )
             return {"id": str(incident.id), "created": True}
     except IntegrityError:
-        updated = Incident.objects.filter(
-            workspace=workspace,
-            gateway_id=gateway_id,
-            incident_type=incident_type,
-            status="open",
-        ).update(
-            last_seen_at=detected_at,
-            severity=severity,
-            details=details,
-        )
-        if updated:
-            incident = Incident.objects.filter(
-                workspace=workspace,
-                gateway_id=gateway_id,
-                incident_type=incident_type,
-                status="open",
-            ).first()
-            if incident:
-                return {"id": str(incident.id), "created": False}
+        # Failsafe in case a microsecond race condition occurs with MQTT
         return None
-
 
 def _workspace_id_from_request(request):
     data = getattr(request, "data", None)
@@ -525,12 +524,7 @@ def _ml_predict_sync(snapshot):
         },
         timeout=timeout,
     )
-    if not response.ok:
-        try:
-            detail = response.json().get("detail", response.text)
-        except Exception:
-            detail = response.text
-        raise requests.exceptions.RequestException(f"ML API Error ({response.status_code}): {detail}")
+    response.raise_for_status()
     return response.json()
 
 
@@ -548,12 +542,7 @@ def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
         },
         timeout=timeout,
     )
-    if not response.ok:
-        try:
-            detail = response.json().get("detail", response.text)
-        except Exception:
-            detail = response.text
-        raise requests.exceptions.RequestException(f"ML API Error ({response.status_code}): {detail}")
+    response.raise_for_status()
     return response.json()
 
 
@@ -1225,32 +1214,6 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     return devices, sorted(set(missing_coordinates))
 
 
-class RegisterView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                'access': str(refresh.access_token),
-                'refresh': str(refresh),
-                'user': UserSerializer(user).data,
-                'secret_key': user._plain_secret_key,  # shown ONCE at registration
-            }, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-
-class ChangePasswordView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            serializer.save()
-            return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CheckAvailabilityView(APIView):
@@ -1297,70 +1260,6 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def google_auth(request):
-    token = request.data.get('token')
-
-    if not token:
-        return Response(
-            {'error': 'No token provided'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        idinfo = id_token.verify_oauth2_token(
-            token,
-            google_requests.Request(),
-            settings.GOOGLE_CLIENT_ID
-        )
-
-        email = idinfo.get('email')
-        full_name = idinfo.get('name', '')
-        google_sub = idinfo.get('sub')
-
-        if not email:
-            return Response(
-                {'error': 'Google account email not available'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        User = get_user_model()
-        user = User.objects.filter(email__iexact=email).first()
-
-        if not user:
-            base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
-            username = base_username
-            counter = 1
-
-            while User.objects.filter(username=username).exists():
-                username = f"{base_username}{counter}"
-                counter += 1
-
-            user = User.objects.create_user(
-                username=username,
-                email=email,
-                password=None,
-                full_name=full_name or username,
-            )
-
-        refresh = RefreshToken.for_user(user)
-
-        return Response(
-            {
-                'user': UserSerializer(user).data,
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-                'google_sub': google_sub,
-            },
-            status=status.HTTP_200_OK
-        )
-
-    except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_400_BAD_REQUEST
-        )
 
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
@@ -2398,12 +2297,6 @@ class IncidentListView(generics.ListAPIView):
         return queryset.order_by(
             "-last_seen_at", "-detected_at", "-created_at"
         )
-
-
-class IncidentDetailView(generics.RetrieveAPIView):
-    serializer_class = IncidentSerializer
-    permission_classes = [IsAuthenticated]
-    queryset = Incident.objects.all()
 
 
 class IncidentResolveView(APIView):
