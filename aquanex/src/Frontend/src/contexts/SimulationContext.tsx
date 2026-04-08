@@ -218,7 +218,7 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       // ── State Machine Transitions ────────────────────────────────────────
       let currentState = simStateRef.current;
 
-      // NORMAL → anomaly after minimum normal window
+      // NORMAL → anomaly after minimum normal window (30s)
       if (currentState === "NORMAL" && elapsed >= NORMAL_MIN_MS) {
         currentState = Math.random() < 0.6 ? "LEAK_ACTIVE" : "BREAKAGE_ACTIVE";
         simStateRef.current         = currentState;
@@ -226,12 +226,12 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         activeIncidentIdRef.current = null;
         addLog(
           "error",
-          `⚠️ Anomaly triggered: ${currentState === "LEAK_ACTIVE" ? "Leak" : "Breakage"} — anomaly values locked in`,
+          `⚠️ Anomaly triggered: ${currentState === "LEAK_ACTIVE" ? "Leak" : "Breakage"} — anomalous readings will continue until resolved in DB`,
           "pipeline"
         );
       }
 
-      // ANOMALY ACTIVE → poll incident status (only if we have an ID, no concurrent poll)
+      // ANOMALY ACTIVE → poll incident status (only if we have an ID captured from telemetry response)
       if (
         (currentState === "LEAK_ACTIVE" || currentState === "BREAKAGE_ACTIVE") &&
         activeIncidentIdRef.current &&
@@ -239,43 +239,38 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       ) {
         checkingIncidentRef.current = true;
         try {
-          const res            = await api.get(`/incidents/${activeIncidentIdRef.current}/`);
-          const incidentStatus = String(res?.data?.status || "").toLowerCase();
+          // Poll the specific incident detail endpoint
+          const res = await api.get(`/incidents/${activeIncidentIdRef.current}/`);
+          const status = String(res?.data?.status || "").toLowerCase();
 
-          // Only exit anomaly phase when incident is confirmed no longer "open"
-          if (incidentStatus && incidentStatus !== "open") {
+          // Only exit anomaly phase when status is NOT "open"
+          if (status && status !== "open") {
             currentState = "RECOVERY";
             simStateRef.current         = currentState;
             stateEnteredAtRef.current   = now;
             activeIncidentIdRef.current = null;
             addLog(
               "success",
-              `✅ Incident ${incidentStatus} — anomaly values STOPPED, entering recovery`,
+              `✅ Incident Resolved (Status: ${status}) — anomaly readings stopped, entering recovery`,
               "pipeline"
             );
           }
-        } catch {
-          // Silent fail — stay in anomaly, keep sending anomaly values
+        } catch (err: any) {
+          // If 404, maybe incident was deleted or not yet synced, stay in anomaly
+          if (err?.response?.status === 404) {
+             // Optional: addLog("info", "Waiting for incident record to appear in DB...", "pipeline");
+          }
         } finally {
           checkingIncidentRef.current = false;
         }
       }
 
-      // ANOMALY with no incident ID yet — stay locked in anomaly values
-      // (ID gets captured after first successful push below)
-      if (
-        (currentState === "LEAK_ACTIVE" || currentState === "BREAKAGE_ACTIVE") &&
-        !activeIncidentIdRef.current
-      ) {
-        // No action — telemetry generation below will still use anomaly values
-      }
-
-      // RECOVERY → NORMAL after minimum recovery window
+      // RECOVERY → NORMAL after minimum recovery window (20s)
       if (currentState === "RECOVERY" && elapsed >= RECOVERY_MIN_MS) {
         currentState = "NORMAL";
         simStateRef.current       = currentState;
         stateEnteredAtRef.current = now;
-        addLog("info", "🔄 Recovery complete — resuming normal values", "pipeline");
+        addLog("info", "🔄 System normalized — resuming regular telemetry", "pipeline");
       }
 
       // Sync phase badge to UI
