@@ -64,6 +64,24 @@ def _optional_float(value):
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
+def _workspace_id_from_request(request):
+    """Extracts the active workspace ID from request data, query params, or headers."""
+    data = getattr(request, "data", None)
+    if hasattr(data, "get"):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
+            
+    if hasattr(request, "query_params"):
+        query_value = request.query_params.get("workspace_id")
+        if query_value:
+            return str(query_value).strip()
+            
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
+        
+    return ""
 
 def _coerce_prediction_timestamp(value):
     dt = parse_datetime(str(value or "").strip()) if value else None
