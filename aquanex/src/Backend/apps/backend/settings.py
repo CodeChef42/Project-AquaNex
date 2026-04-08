@@ -34,6 +34,7 @@ ALLOWED_HOSTS = [
     ".onrender.com", 
     "aquanex.app",
     "www.aquanex.app",
+    "144.24.249.18"
 ]
 
 
