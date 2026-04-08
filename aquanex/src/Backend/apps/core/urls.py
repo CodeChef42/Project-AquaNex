@@ -6,14 +6,14 @@ from .views import (
     GatewayRegisterView,
     GatewayTelemetryIngestView,
     LayoutUploadView,
-    LayoutTaskStatus,  # NEW
+    LayoutTaskStatus,  #NEW
     RegisterView,
     CheckAvailabilityView,
     LoginView,
     UserProfileView,
     predict_breakage,
     google_auth,
-    OnboardingView,
+    OnboardingView, 
     LayoutModuleRecommendationView,
     ChangePasswordView,
     WorkspaceListView,
@@ -24,6 +24,7 @@ from .views import (
     IncidentDetailView,
     IncidentResolveView,
     IncidentSeedView,
+    PipelineListCreateView,
 )
 
 def health(request):
@@ -54,4 +55,5 @@ urlpatterns = [
     path("gateway-telemetry/", GatewayTelemetryIngestView.as_view(), name="gateway-telemetry"),
     path("layout-upload/", LayoutUploadView.as_view(), name="layout-upload"),
     path("layout-status/<str:task_id>/", LayoutTaskStatus.as_view(), name="layout-status"),
+    path("pipelines/", PipelineListCreateView.as_view(), name="pipelines-list-create"),
 ]

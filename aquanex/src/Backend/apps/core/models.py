@@ -79,34 +79,61 @@ class Technician(models.Model):
     def __str__(self):
         return self.name
 
-class PipeSpecification(models.Model):
-    material       = models.CharField(max_length=100)
-    pressure_class = models.CharField(max_length=50)
-    depth          = models.DecimalField(max_digits=10, decimal_places=2)
-    nominal_dia    = models.DecimalField(max_digits=10, decimal_places=2)
-    pipe_category  = models.CharField(max_length=100)
-    water_capacity = models.DecimalField(max_digits=10, decimal_places=2)
-    created_at     = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'pipe_specs'
-
-    def __str__(self):
-        return f"{self.material} - {self.pipe_category}"
-
 class Pipe(models.Model):
-    pipe_specification = models.ForeignKey(PipeSpecification, on_delete=models.CASCADE)
-    start_lng          = models.DecimalField(max_digits=10, decimal_places=7)
-    start_lat          = models.DecimalField(max_digits=10, decimal_places=7)
-    end_lng            = models.DecimalField(max_digits=10, decimal_places=7)
-    end_lat            = models.DecimalField(max_digits=10, decimal_places=7)
-    created_at         = models.DateTimeField(auto_now_add=True)
+    pipe_id = models.BigAutoField(primary_key=True)
+    
+    # This is the "ID badge" for the workspace. 
+    # It ensures this pipe only shows up in the correct project.
+    workspace = models.ForeignKey('Workspace', on_delete=models.CASCADE, related_name='pipes', null=True)
+    
+    start_lng = models.DecimalField(max_digits=10, decimal_places=7)
+    start_lat = models.DecimalField(max_digits=9, decimal_places=7)
+    end_lng   = models.DecimalField(max_digits=10, decimal_places=7)
+    end_lat   = models.DecimalField(max_digits=9, decimal_places=7)
 
     class Meta:
         db_table = 'pipes'
 
     def __str__(self):
-        return f"Pipe {self.id}"
+        return f"Pipe {self.pipe_id} (WS: {self.workspace_id})"
+
+class PipeSpecification(models.Model):
+    section = models.OneToOneField(
+        Pipe, 
+        on_delete=models.CASCADE, 
+        primary_key=True, 
+        db_column='section_id',
+        related_name='pipespec'
+    )
+    
+    flowmeter = models.ForeignKey(
+        'FlowMeter', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        db_column='flowmeter_id'
+    )
+    sensor = models.ForeignKey(
+        'PressureSensor', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        db_column='sensor_id'
+    )
+
+    material       = models.TextField() 
+    pipe_category  = models.TextField()
+    pressure_class = models.TextField(null=True, blank=True)
+    
+    depth          = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    nominal_dia    = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    water_capacity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    
+    class Meta:
+        db_table = 'pipe_specs'
+
+    def __str__(self):
+        return f"Section {self.section_id}: {self.material} - {self.pipe_category}"
 
 class FlowMeter(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)

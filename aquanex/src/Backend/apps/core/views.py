@@ -28,7 +28,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
-
+from .models import Pipe, PipeSpecification
 
 logger = logging.getLogger(__name__)
 
@@ -2543,3 +2543,70 @@ class IncidentSeedView(APIView):
             },
             status=201,
         )
+
+class PipelineListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Fetch pipes filtered by the active workspace."""
+        workspace_id = request.query_params.get('workspace_id')
+        
+        if not workspace_id:
+            return Response({"error": "workspace_id query parameter is required"}, status=400)
+
+        # Only fetch pipes belonging to the current workspace
+        pipes = Pipe.objects.filter(workspace_id=workspace_id).select_related('pipespec')
+        
+        data = []
+        for pipe in pipes:
+            spec = getattr(pipe, 'pipespec', None)
+            data.append({
+                "pipe_id": pipe.pipe_id,
+                "start_lat": float(pipe.start_lat),
+                "start_lng": float(pipe.start_lng),
+                "end_lat": float(pipe.end_lat),
+                "end_lng": float(pipe.end_lng),
+                "pipeline_category": spec.pipe_category if spec else "N/A",
+                "material": spec.material if spec else "N/A",
+                "nominal_dia": float(spec.nominal_dia) if spec and spec.nominal_dia else 0,
+                "pressure_class": spec.pressure_class if spec else "",
+                "depth": float(spec.depth) if spec and spec.depth else 0,
+                "water_capacity": float(spec.water_capacity) if spec and spec.water_capacity else 0,
+            })
+            
+        return Response(data, status=status.HTTP_200_OK)
+
+    @transaction.atomic
+    def post(self, request):
+        """Save a new pipe and its specs linked to a workspace."""
+        data = request.data
+        workspace_id = data.get('workspace_id')
+
+        if not workspace_id:
+            return Response({"error": "workspace_id is required in payload"}, status=400)
+
+        try:
+            # 1. Create the Pipe row
+            pipe = Pipe.objects.create(
+                workspace_id=workspace_id,
+                start_lat=data.get('start_lat'),
+                start_lng=data.get('start_lng'),
+                end_lat=data.get('end_lat'),
+                end_lng=data.get('end_lng')
+            )
+            
+            # 2. Create the Spec row
+            PipeSpecification.objects.create(
+                section=pipe, 
+                pipe_category=data.get('pipeline_category'),
+                material=data.get('material'),
+                pressure_class=data.get('pressure_class'),
+                nominal_dia=data.get('nominal_dia') or 0,
+                depth=data.get('depth') or 0,
+                water_capacity=data.get('water_capacity') or 0
+            )
+            
+            return Response({"success": True, "pipe_id": pipe.pipe_id}, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
