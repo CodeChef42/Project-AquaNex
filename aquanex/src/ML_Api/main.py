@@ -1,7 +1,12 @@
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
+from healthping import start_health_ping
+
+
 try:
     import numpy as np
 except Exception:
@@ -492,6 +497,7 @@ async def startup_event():
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()
     print("AquaNex ML Service with Delta-based Anomaly Detection started")
+    asyncio.create_task(start_health_ping()) 
 
 
 
