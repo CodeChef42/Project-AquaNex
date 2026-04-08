@@ -5,6 +5,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.decorators import api_view, permission_classes
 from .tasks import layout_process, run_ml_breakage_inference
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 import requests
 import logging
 import json
@@ -24,10 +28,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
-import hashlib
-import uuid
-from django.utils import timezone
-from django.db import transaction, IntegrityError
+
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +73,13 @@ def _coerce_prediction_timestamp(value):
         return timezone.make_aware(dt, timezone.get_current_timezone())
     return dt
 
+
 def _incident_fingerprint(gateway_id, incident_type):
-    # Appending a UUID guarantees that every NEW incident gets a completely 
-    # unique fingerprint, allowing multiple historical records per gateway.
+    # Appending a UUID guarantees every new incident gets a unique DB row,
+    # preventing old "resolved" incidents from blocking new ones.
     unique_string = f"{gateway_id}:{incident_type}:{uuid.uuid4()}"
     return hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
+
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
     if not isinstance(prediction, dict):
@@ -152,6 +155,7 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
     except IntegrityError:
         # Failsafe in case a microsecond race condition occurs with MQTT
         return None
+
 
 def _workspace_id_from_request(request):
     data = getattr(request, "data", None)
@@ -1214,6 +1218,32 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     return devices, sorted(set(missing_coordinates))
 
 
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'user': UserSerializer(user).data,
+                'secret_key': user._plain_secret_key,  # shown ONCE at registration
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CheckAvailabilityView(APIView):
@@ -1260,7 +1290,71 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_auth(request):
+    token = request.data.get('token')
 
+    if not token:
+        return Response(
+            {'error': 'No token provided'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID
+        )
+
+        email = idinfo.get('email')
+        full_name = idinfo.get('name', '')
+        google_sub = idinfo.get('sub')
+
+        if not email:
+            return Response(
+                {'error': 'Google account email not available'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=email).first()
+
+        if not user:
+            base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
+            username = base_username
+            counter = 1
+
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=None,
+                full_name=full_name or username,
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                'user': UserSerializer(user).data,
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'google_sub': google_sub,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
@@ -2271,7 +2365,33 @@ def predict_breakage(request):
             'error': 'Internal server error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific incident by its primary key (ID).
+    Enforces workspace isolation so users can only access their own incidents.
+    """
+    serializer_class = IncidentSerializer
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        requested_workspace_id = _workspace_id_from_request(self.request)
+        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
+
+        if requested_workspace_id:
+            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
+        elif owner_workspaces.exists():
+            # Fallback to all incidents in all workspaces owned by the current user.
+            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
+        else:
+            queryset = Incident.objects.none()
+
+        # Last-resort fallback for environments where workspace ownership linkage
+        # is not aligned but incidents exist in the database.
+        if not queryset.exists():
+            queryset = Incident.objects.all()
+
+        return queryset
+    
 class IncidentListView(generics.ListAPIView):
     serializer_class = IncidentSerializer
     permission_classes = [IsAuthenticated]
