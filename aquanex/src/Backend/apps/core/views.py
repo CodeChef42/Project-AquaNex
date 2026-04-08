@@ -1,3 +1,8 @@
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -1282,6 +1287,70 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_auth(request):
+    token = request.data.get('token')
+
+    if not token:
+        return Response(
+            {'error': 'No token provided'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID
+        )
+
+        email = idinfo.get('email')
+        full_name = idinfo.get('name', '')
+        google_sub = idinfo.get('sub')
+
+        if not email:
+            return Response(
+                {'error': 'Google account email not available'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=email).first()
+
+        if not user:
+            base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
+            username = base_username
+            counter = 1
+
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=None,
+                full_name=full_name or username,
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                'user': UserSerializer(user).data,
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'google_sub': google_sub,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
