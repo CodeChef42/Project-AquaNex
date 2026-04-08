@@ -56,8 +56,8 @@ gateway_latest_prediction: Dict[str, Dict[str, Any]] = {}
 
 
 # MQTT Configuration
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_TOPICS = [
     "aquanex/flowmeter/1",
     "aquanex/pressure/1",
@@ -535,7 +535,7 @@ async def health_check():
 
 
 @app.get("/live-data", response_model=LiveDataResponse)
-async def get_live_data():
+def get_live_data():
     """Get the latest sensor data and prediction from MQTT stream"""
     return LiveDataResponse(
         sensor_data=latest_sensor_data,
@@ -546,7 +546,7 @@ async def get_live_data():
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict_breakage(data: SensorData):
+def predict_breakage(data: SensorData):
     """Manual prediction endpoint (for testing without MQTT)"""
     try:
         result = _predict_from_snapshot({
@@ -561,7 +561,7 @@ async def predict_breakage(data: SensorData):
 
 
 @app.post("/telemetry/ingest")
-async def ingest_telemetry(data: TelemetryIngestRequest):
+def ingest_telemetry(data: TelemetryIngestRequest):
     gateway_id = str(data.gateway_id or "").strip()
     if not gateway_id:
         raise HTTPException(status_code=400, detail="gateway_id is required")

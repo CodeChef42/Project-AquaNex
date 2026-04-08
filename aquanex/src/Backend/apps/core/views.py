@@ -525,7 +525,12 @@ def _ml_predict_sync(snapshot):
         },
         timeout=timeout,
     )
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        raise requests.exceptions.RequestException(f"ML API Error ({response.status_code}): {detail}")
     return response.json()
 
 
@@ -543,7 +548,12 @@ def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
         },
         timeout=timeout,
     )
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        raise requests.exceptions.RequestException(f"ML API Error ({response.status_code}): {detail}")
     return response.json()
 
 
@@ -2388,6 +2398,12 @@ class IncidentListView(generics.ListAPIView):
         return queryset.order_by(
             "-last_seen_at", "-detected_at", "-created_at"
         )
+
+
+class IncidentDetailView(generics.RetrieveAPIView):
+    serializer_class = IncidentSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Incident.objects.all()
 
 
 class IncidentResolveView(APIView):

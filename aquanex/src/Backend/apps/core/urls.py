@@ -21,6 +21,7 @@ from .views import (
     WorkspaceInviteView,
     AcceptInviteView,
     IncidentListView,
+    IncidentDetailView,
     IncidentResolveView,
     IncidentSeedView,
 )
@@ -31,6 +32,7 @@ def health(request):
 urlpatterns = [
     path("health/", health),
     path("incidents/", IncidentListView.as_view(), name="incidents-list"),
+    path("incidents/<str:pk>/", IncidentDetailView.as_view(), name="incident-detail"),
     path("incidents/<str:pk>/resolve/", IncidentResolveView.as_view(), name="incident-resolve"),
     path("incidents/seed/", IncidentSeedView.as_view(), name="incident-seed"),
     path("auth/register/", RegisterView.as_view(), name="register"),
