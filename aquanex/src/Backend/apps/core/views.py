@@ -82,61 +82,69 @@ def _incident_fingerprint(gateway_id, incident_type):
 
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
+    print("\n" + "="*50)
+    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
+    print(f"📦 PREDICTION PAYLOAD: {prediction}")
+    
     if not isinstance(prediction, dict):
+        print("❌ ABORT: Prediction is not a valid dictionary.")
         return None
 
     now_ts = timezone.now()
 
-    # 1. Handle Normal Predictions (Transition 'ongoing' to 'recovering')
     if prediction.get("is_anomaly") is not True:
-        Incident.objects.filter(
+        print("ℹ️ STATUS: Normal data received. is_anomaly is False.")
+        updated = Incident.objects.filter(
             workspace=workspace,
             gateway_id=gateway_id,
             status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
+        print(f"ℹ️ Transitioned {updated} ongoing incidents to recovering.")
+        print("="*50 + "\n")
         return None
 
-    # 2. Extract Data for Anomalous Predictions
+    print("⚠️ ANOMALY CONFIRMED! Proceeding to database insertion logic...")
+    
     incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
     severity = str(prediction.get("severity") or "").strip().lower() or None
     detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
     details = {"prediction": prediction}
 
-    # 3. Check for an ACTIVE ("ongoing") incident first.
-    # If it exists, this is an ongoing leak, so we just update the timestamp.
+    # 1. Check for ongoing
     ongoing_incident = Incident.objects.filter(
-        workspace=workspace,
-        gateway_id=gateway_id,
-        incident_type=incident_type,
-        status="ongoing"
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="ongoing"
     ).first()
 
     if ongoing_incident:
+        print(f"🔄 FOUND ONGOING: Updating existing incident ID: {ongoing_incident.id}")
         ongoing_incident.last_seen_at = detected_at
         ongoing_incident.severity = severity
         ongoing_incident.details = details
         ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
+        print("="*50 + "\n")
         return {"id": str(ongoing_incident.id), "created": False}
 
-    # 4. Check for a "recovering" incident. 
-    # If the leak stopped briefly but started again, revert it to "ongoing".
+    # 2. Check for recovering
     recovering_incident = Incident.objects.filter(
-        workspace=workspace,
-        gateway_id=gateway_id,
-        incident_type=incident_type,
-        status="recovering"
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="recovering"
     ).first()
 
     if recovering_incident:
+        print(f"🔄 FOUND RECOVERING: Re-opening incident ID: {recovering_incident.id}")
         recovering_incident.status = "ongoing"
         recovering_incident.last_seen_at = detected_at
         recovering_incident.severity = severity
         recovering_incident.details = details
         recovering_incident.save()
+        print("="*50 + "\n")
         return {"id": str(recovering_incident.id), "created": False}
 
-    # 5. If NO ongoing or recovering incidents exist, create a BRAND NEW ONE.
+    # 3. Create Brand New
+    print("✨ NO ACTIVE INCIDENTS FOUND. Creating a brand new DB row...")
     fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    print(f"🔑 Generated Unique Fingerprint: {fingerprint}")
     
     try:
         with transaction.atomic():
@@ -151,26 +159,13 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
                 fingerprint=fingerprint,
                 details=details,
             )
+            print(f"✅ SUCCESS! Created new Incident ID: {incident.id}")
+            print("="*50 + "\n")
             return {"id": str(incident.id), "created": True}
-    except IntegrityError:
-        # Failsafe in case a microsecond race condition occurs with MQTT
+    except Exception as e:
+        print(f"❌ DATABASE ERROR: Failed to insert row! Error: {str(e)}")
+        print("="*50 + "\n")
         return None
-
-
-def _workspace_id_from_request(request):
-    data = getattr(request, "data", None)
-    if hasattr(data, "get"):
-        data_value = data.get("workspace_id") or data.get("workspaceId")
-        if data_value:
-            return str(data_value).strip()
-    if hasattr(request, "query_params"):
-        query_value = request.query_params.get("workspace_id")
-        if query_value:
-            return str(query_value).strip()
-    header_value = request.headers.get("X-Workspace-Id")
-    if header_value:
-        return str(header_value).strip()
-    return ""
 
 
 def _resolve_user_workspace(request, create_if_missing=False):
