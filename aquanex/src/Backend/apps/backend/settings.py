@@ -3,20 +3,24 @@
 import os
 from pathlib import Path
 from datetime import timedelta
-
-from dotenv import load_dotenv
-from corsheaders.defaults import default_headers
-load_dotenv()
-
 import ssl
 import certifi
+from dotenv import load_dotenv
+from corsheaders.defaults import default_headers
+
+# Define BASE_DIR FIRST so we know where we are
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Build the exact path to your custom file
+env_path = BASE_DIR / '.worker.env'
+
+# Load it!
+load_dotenv(dotenv_path=env_path)
+
+# SSL Fixes
 ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
 AUTH_USER_MODEL = 'core.User'
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/

@@ -1,237 +1,91 @@
-@import 'leaflet/dist/leaflet.css';
-@import 'leaflet-draw/dist/leaflet.draw.css';
-@import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css';
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* rest of your file stays the same */
-
-.icon-hover {
-  filter: brightness(1.1);
-}
-
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors should be HSL.
-*/
-
 @layer base {
   :root {
-    /* AquaNex Design System - HSL Colors */
-    
-    /* Base Surfaces */
-    --background: 40 33% 96%;
-    --foreground: 0 0% 20%;
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
 
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 20%;
+    --card-foreground: 222.2 84% 4.9%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 20%;
+    --popover-foreground: 222.2 84% 4.9%;
 
-    /* Primary - Teal */
-    --primary: 196 71% 33%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
 
-    /* Secondary - Muted Teal */
-    --secondary: 196 55% 40%;
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
 
-    /* Success/Healthy - Soft Green */
-    --success: 150 40% 38%;
-    --success-foreground: 0 0% 100%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
 
-    /* Earth/Soil - Brown */
-    --earth: 25 40% 39%;
-    --earth-foreground: 0 0% 100%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
 
-    /* Warning - Golden Soil */
-    --warning: 43 75% 67%;
-    --warning-foreground: 0 0% 20%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
 
-    /* Destructive - Critical Red */
-    --destructive: 355 78% 56%;
-    --destructive-foreground: 0 0% 100%;
-
-    /* Alert Orange */
-    --alert: 28 87% 62%;
-    --alert-foreground: 0 0% 20%;
-
-    /* Info Blue */
-    --info: 191 74% 59%;
-    --info-foreground: 0 0% 100%;
-
-    /* Neutrals */
-    --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 45%;
-    
-    /* Accent - Deep Green (Solutions & CTAs) */
-    --accent: 160 56% 23%;
-    --accent-foreground: 150 30% 92%;
-
-    --border: 0 0% 90%;
-    --input: 0 0% 90%;
-    --ring: 196 100% 36%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
 
     --radius: 0.5rem;
-
-    /* Sidebar */
-    --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 0 0% 20%;
-    --sidebar-primary: 196 100% 36%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 96%;
-    --sidebar-accent-foreground: 0 0% 20%;
-    --sidebar-border: 0 0% 90%;
-    --sidebar-ring: 196 100% 36%;
-
-    /* Custom gradients */
-    --gradient-primary: linear-gradient(135deg, hsl(196 71% 40%), hsl(196 71% 30%));
-    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%), hsl(0 0% 98%));
-    
-    /* Shadows */
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
-
-    /* Page backgrounds */
-    --page-background: 40 33% 96%;
-    --page-gradient-start: 40 33% 98%;
-    --page-gradient-end: 40 33% 94%;
   }
 
   .dark {
-    --background: 0 0% 10%;
-    --foreground: 0 0% 96%;
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
 
-    --card: 0 0% 12%;
-    --card-foreground: 0 0% 96%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
 
-    --popover: 0 0% 12%;
-    --popover-foreground: 0 0% 96%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
 
-    --primary: 196 71% 33%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
 
-    --secondary: 196 55% 40%;
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
 
-    --success: 150 40% 38%;
-    --success-foreground: 0 0% 100%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
 
-    --earth: 25 40% 39%;
-    --earth-foreground: 0 0% 100%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
 
-    --warning: 43 75% 67%;
-    --warning-foreground: 0 0% 20%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
 
-    --destructive: 355 78% 56%;
-    --destructive-foreground: 0 0% 100%;
-
-    --alert: 28 87% 62%;
-    --alert-foreground: 0 0% 20%;
-
-    --info: 191 74% 59%;
-    --info-foreground: 0 0% 100%;
-
-    --muted: 0 0% 15%;
-    --muted-foreground: 0 0% 60%;
-
-    --accent: 160 56% 23%;
-    --accent-foreground: 150 30% 92%;
-
-    --border: 0 0% 20%;
-    --input: 0 0% 20%;
-    --ring: 196 71% 33%;
-
-    --sidebar-background: 0 0% 12%;
-    --sidebar-foreground: 0 0% 96%;
-    --sidebar-primary: 196 100% 36%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 15%;
-    --sidebar-accent-foreground: 0 0% 96%;
-    --sidebar-border: 0 0% 20%;
-    --sidebar-ring: 190 100% 42%;
-
-    --page-background: 0 0% 10%;
-    --page-gradient-start: 0 0% 12%;
-    --page-gradient-end: 0 0% 10%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
   }
 }
 
 @layer base {
-  html {
-    @apply scroll-smooth;
-  }
-
   * {
     @apply border-border;
   }
-
   body {
-    @apply bg-background text-foreground antialiased;
-    font-size: 1rem;
-    line-height: 1.5;
-  }
-
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-bold tracking-tight text-foreground;
+    @apply bg-background text-foreground;
   }
 }
 
-/* Custom page styling */
-@layer utilities {
-  .page-background {
-    background: linear-gradient(135deg, 
-      hsl(var(--page-gradient-start)) 0%, 
-      hsl(var(--page-background)) 50%, 
-      hsl(var(--page-gradient-end)) 100%);
-    min-height: 100vh;
-    position: relative;
-  }
+/* =========================================
+   CUSTOM OVERRIDES
+   ========================================= */
 
-  .page-background::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-image: 
-      radial-gradient(circle at 20% 50%, hsla(196, 100%, 36%, 0.03) 0%, transparent 50%),
-      radial-gradient(circle at 80% 80%, hsla(190, 100%, 42%, 0.03) 0%, transparent 50%),
-      radial-gradient(circle at 40% 20%, hsla(172, 55%, 39%, 0.03) 0%, transparent 50%);
-    pointer-events: none;
-    z-index: 0;
-  }
+/* Fix Leaflet maps overlapping Tailwind/Shadcn modals */
+.leaflet-container {
+  z-index: 0 !important;
+}
 
-  .page-content {
-    position: relative;
-    z-index: 1;
-  }
-
-  .header-glass {
-    @apply bg-white/90 backdrop-blur-md border-b border-border/50 shadow-sm;
-  }
-
-  .card-elevated {
-    @apply bg-card shadow-md hover:shadow-lg transition-shadow duration-200;
-  }
-
-  .section-padding {
-    @apply px-6 md:px-10 lg:px-16;
-  }
-
-  .btn-primary {
-    @apply inline-flex items-center gap-3 rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-md transition-colors hover:bg-primary/90;
-  }
-
-  .btn-ghost {
-    @apply inline-flex items-center gap-3 rounded-full border border-border bg-background px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
-  }
-
-  .btn-pill {
-    @apply inline-flex items-center gap-3 rounded-full px-6 py-3 text-sm font-medium transition-colors;
-  }
+/* Keep Leaflet UI controls (zoom buttons) slightly above the map, but strictly below modals */
+.leaflet-top, 
+.leaflet-bottom {
+  z-index: 40 !important; 
 }

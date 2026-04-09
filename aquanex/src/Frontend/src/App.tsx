@@ -9,8 +9,10 @@ import { useAuth } from "./contexts/AuthContext";
 import { SimulationProvider } from "./contexts/SimulationContext";
 import MainLayout from "./components/layout/MainLayout";
 
+// Lazy Loaded Pages
 const LandingPage             = lazy(() => import("./pages/LandingPage"));
 const Home                    = lazy(() => import("./pages/Home"));
+const InfoPage                = lazy(() => import("./pages/InfoPage")); // ✅ Added InfoPage
 const PipelinesManagementPage = lazy(() => import("./pages/pipeline/PipelinesManagementPage"));
 const IncidentDetails         = lazy(() => import("./pages/pipeline/IncidentDetails"));
 const AlertList               = lazy(() => import("./pages/pipeline/AlertQueue"));
@@ -33,11 +35,16 @@ const NotFound                = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
 
+// Auth Guard
 const ProtectedRoute = () => {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return <div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>;
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
   }
 
   if (!isAuthenticated) {
@@ -51,7 +58,7 @@ const ProtectedRoute = () => {
   );
 };
 
-// Guards a route by checking if the module is in the workspace
+// Module Access Guard
 const ModuleRoute = ({ module }: { module: string }) => {
   const { workspace } = useAuth();
   if (!workspace) {
@@ -71,22 +78,30 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>}>
+            <Suspense 
+              fallback={
+                <div className="flex items-center justify-center min-h-screen">
+                  <div className="text-lg font-medium text-cyan-600">Loading AquaNex...</div>
+                </div>
+              }
+            >
               <Routes>
-                {/* Public routes */}
+                {/* --- Public Routes --- */}
                 <Route path="/"           element={<LandingPage />} />
                 <Route path="/signin"     element={<SignIn />} />
                 <Route path="/signup"     element={<SignUp />} />
                 <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/accept-invite/:token" element={<AcceptInvite />} />
 
-                {/* Protected routes */}
+                {/* --- Protected Dashboard Routes --- */}
                 <Route element={<ProtectedRoute />}>
-                  <Route path="/home"     element={<Home />} />
+                  <Route path="/home"       element={<Home />} />
+                  <Route path="/info"       element={<InfoPage />} /> {/* ✅ Registered Route */}
                   <Route path="/workspaces" element={<Workspaces />} />
-                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/settings"   element={<Settings />} />
                   <Route path="/simulation" element={<Simulation />} />
 
+                  {/* Pipeline Module */}
                   <Route element={<ModuleRoute module="pipeline_management" />}>
                     <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
                     <Route path="/pipeline/incident/:incidentId" element={<IncidentDetails />} />
@@ -94,35 +109,38 @@ const App = () => (
                     <Route path="/pipeline/resources/:incidentId" element={<PipelineResources />} />
                   </Route>
 
+                  {/* Soil Salinity Module */}
                   <Route element={<ModuleRoute module="soil_salinity" />}>
                     <Route path="/soil-salinity"                 element={<SoilSalinity />} />
                     <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
                   </Route>
 
+                  {/* Analytics Module */}
                   <Route element={<ModuleRoute module="incident_analytics" />}>
                     <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
                   </Route>
 
+                  {/* Water Quality Module */}
                   <Route element={<ModuleRoute module="water_quality" />}>
                     <Route path="/water-quality"                 element={<WaterQuality />} />
                     <Route path="/water-quality/recommendation/:zoneId" element={<WaterQualityRecommendation />} />
                   </Route>
 
+                  {/* Forecasting Module */}
                   <Route element={<ModuleRoute module="demand_forecasting" />}>
                     <Route path="/demand-forecasting"            element={<DemandForecasting />} />
                   </Route>
 
+                  {/* History Module */}
                   <Route element={<ModuleRoute module="history_log" />}>
                     <Route path="/history"                       element={<HistoryLog />} />
                   </Route>
                 </Route>
 
-                {/* Redirects */}
+                {/* --- Redirects & Fallbacks --- */}
                 <Route path="/dashboard"         element={<Navigate to="/home" replace />} />
                 <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
-
-                {/* 404 */}
-                <Route path="*" element={<NotFound />} />
+                <Route path="*"                  element={<NotFound />} />
               </Routes>
             </Suspense>
           </BrowserRouter>

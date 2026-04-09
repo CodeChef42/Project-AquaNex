@@ -1,22 +1,20 @@
-import { Search, Settings, User } from "lucide-react";
+import { Search, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Logo from "@/components/Logo";
 import api from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 const GlobalHeader = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  
+  // Bring in auth context to clear the session
+  const { logout } = useAuth();
 
   const handleGlobalSearch = async () => {
     const value = query.trim().replace(/^#/, "");
@@ -37,7 +35,6 @@ const GlobalHeader = () => {
   };
 
   return (
-    // ✅ inline style forces glass bg regardless of sidebar CSS variable overrides
     <header
       className="h-20 border-b border-cyan-200/60 flex items-center justify-between px-4 shrink-0 backdrop-blur-md"
       style={{ background: "rgba(255,255,255,0.6)" }}
@@ -59,8 +56,10 @@ const GlobalHeader = () => {
         />
       </div>
 
-      <div className="flex items-center gap-2">
-        {/* ✅ Removed "Workspaces" text button — replaced with icon only */}
+      {/* RIGHT SIDE CONTAINER */}
+      <div className="flex items-center justify-end gap-3 ml-auto">
+        
+        {/* Workspaces Button */}
         {location.pathname !== "/workspaces" && (
           <Button
             variant="outline"
@@ -70,6 +69,17 @@ const GlobalHeader = () => {
           </Button>
         )}
 
+        {/* Simple Logout Button */}
+        <Button
+          variant="outline"
+          onClick={() => {
+            logout();
+            navigate("/");
+          }}
+          className="border-red-200 text-red-600 bg-white/70 hover:bg-red-600 hover:text-white hover:border-red-600 transition-all duration-200">
+          <LogOut className="w-4 h-4 mr-2" />
+          Logout
+        </Button>
 
       </div>
     </header>

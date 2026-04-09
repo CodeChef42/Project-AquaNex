@@ -80,7 +80,8 @@ class Technician(models.Model):
         return self.name
 
 class Pipe(models.Model):
-    pipe_id = models.BigAutoField(primary_key=True)
+    # THIS IS THE FIX: Changed from BigAutoField to CharField so it accepts text strings
+    pipe_id = models.CharField(max_length=255, primary_key=True) 
     
     # This is the "ID badge" for the workspace. 
     # It ensures this pipe only shows up in the correct project.
@@ -134,7 +135,6 @@ class PipeSpecification(models.Model):
 
     def __str__(self):
         return f"Section {self.section_id}: {self.material} - {self.pipe_category}"
-
 class FlowMeter(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
     flow       = models.DecimalField(max_digits=10, decimal_places=2)

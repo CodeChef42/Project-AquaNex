@@ -1,3 +1,4 @@
+from urllib import request
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -2548,56 +2549,62 @@ class PipelineListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """Fetch pipes filtered by the active workspace."""
-        workspace_id = request.query_params.get('workspace_id')
+        # 1. Get the workspace ID from headers or query params
+        workspace_id = request.headers.get('X-Workspace-Id') or request.GET.get('workspace_id')
         
         if not workspace_id:
-            return Response({"error": "workspace_id query parameter is required"}, status=400)
+            return Response({"error": "workspace_id is required to fetch pipelines"}, status=400)
 
-        # Only fetch pipes belonging to the current workspace
+        # 2. Grab all pipes for this workspace AND their attached specs
         pipes = Pipe.objects.filter(workspace_id=workspace_id).select_related('pipespec')
         
-        data = []
+        # 3. Mash them into the exact flat format React-Leaflet expects
+        results = []
         for pipe in pipes:
-            spec = getattr(pipe, 'pipespec', None)
-            data.append({
+            # Safely get the specs (in case a pipe somehow doesn't have them)
+            spec = getattr(pipe, 'pipespec', None) 
+            
+            results.append({
                 "pipe_id": pipe.pipe_id,
-                "start_lat": float(pipe.start_lat),
+                "start_lat": float(pipe.start_lat), # Force it to be a real number!
                 "start_lng": float(pipe.start_lng),
                 "end_lat": float(pipe.end_lat),
                 "end_lng": float(pipe.end_lng),
-                "pipeline_category": spec.pipe_category if spec else "N/A",
-                "material": spec.material if spec else "N/A",
+                "pipeline_category": spec.pipe_category if spec else "Unknown",
+                "material": spec.material if spec else "Unknown",
                 "nominal_dia": float(spec.nominal_dia) if spec and spec.nominal_dia else 0,
-                "pressure_class": spec.pressure_class if spec else "",
-                "depth": float(spec.depth) if spec and spec.depth else 0,
-                "water_capacity": float(spec.water_capacity) if spec and spec.water_capacity else 0,
             })
             
-        return Response(data, status=status.HTTP_200_OK)
+        return Response(results, status=200)
 
     @transaction.atomic
     def post(self, request):
-        """Save a new pipe and its specs linked to a workspace."""
+        print(">>> INCOMING RAW DATA:", request.data)
         data = request.data
-        workspace_id = data.get('workspace_id')
-
+        workspace_id = request.headers.get('X-Workspace-Id') or data.get('workspace_id')
+        
+        # ✅ Grab the custom descriptor string sent from React!
+        custom_pipe_id = data.get('pipe_id')
+    
         if not workspace_id:
-            return Response({"error": "workspace_id is required in payload"}, status=400)
-
+            return Response({"error": "workspace_id is required"}, status=400)
+            
+        if not custom_pipe_id:
+            return Response({"error": "pipe_id is required"}, status=400)
+    
         try:
-            # 1. Create the Pipe row
+            # ✅ Supply the React string explicitly
             pipe = Pipe.objects.create(
+                pipe_id=custom_pipe_id,           
                 workspace_id=workspace_id,
                 start_lat=data.get('start_lat'),
                 start_lng=data.get('start_lng'),
                 end_lat=data.get('end_lat'),
                 end_lng=data.get('end_lng')
             )
-            
-            # 2. Create the Spec row
+    
             PipeSpecification.objects.create(
-                section=pipe, 
+                section=pipe,
                 pipe_category=data.get('pipeline_category'),
                 material=data.get('material'),
                 pressure_class=data.get('pressure_class'),
@@ -2605,8 +2612,10 @@ class PipelineListCreateView(APIView):
                 depth=data.get('depth') or 0,
                 water_capacity=data.get('water_capacity') or 0
             )
-            
+    
             return Response({"success": True, "pipe_id": pipe.pipe_id}, status=status.HTTP_201_CREATED)
-            
+    
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

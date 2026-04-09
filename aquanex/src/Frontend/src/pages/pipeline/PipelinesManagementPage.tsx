@@ -12,20 +12,17 @@ import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
-// Ray-Casting algorithm to check if a point is inside a polygon (Fixed for numerical accuracy)
 const isPointInPolygon = (lat: number, lng: number, polygon: any[]) => {
-  if (!polygon || polygon.length < 3) return true; 
+  if (!polygon || polygon.length < 3) return true;
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const pI = polygon[i];
     const pJ = polygon[j];
-    const isLngFirst = Number(pI[0]) > 40; 
-    
-    const xi = isLngFirst ? Number(pI[0]) : Number(pI[1]); 
-    const yi = isLngFirst ? Number(pI[1]) : Number(pI[0]); 
+    const isLngFirst = Number(pI[0]) > 40;
+    const xi = isLngFirst ? Number(pI[0]) : Number(pI[1]);
+    const yi = isLngFirst ? Number(pI[1]) : Number(pI[0]);
     const xj = isLngFirst ? Number(pJ[0]) : Number(pJ[1]);
     const yj = isLngFirst ? Number(pJ[1]) : Number(pJ[0]);
-
     const intersect = ((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
     if (intersect) inside = !inside;
   }
@@ -42,7 +39,6 @@ const FitMapToPoints = ({
   maxZoom?: number;
 }) => {
   const map = useMap();
-
   useEffect(() => {
     if (points.length >= 2) {
       map.fitBounds(points, { padding: [36, 36], maxZoom });
@@ -54,7 +50,6 @@ const FitMapToPoints = ({
     }
     map.setView(DUBAI_CENTER, fallbackZoom);
   }, [fallbackZoom, map, maxZoom, points]);
-
   return null;
 };
 
@@ -62,16 +57,13 @@ const PipelinesManagementPage = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
   const [incidents, setIncidents] = useState<any[]>([]);
-  
-  // State to hold officially registered pipelines from the Database
   const [registeredPipelines, setRegisteredPipelines] = useState<any[]>([]);
 
-  // Form State
-  const [pipelineForm, setPipelineForm] = useState<any>({ 
-    pipeline_category: "mainline", 
-    material: "", 
-    pressure_class: "", 
-    nominal_dia: "", 
+  const [pipelineForm, setPipelineForm] = useState<any>({
+    pipeline_category: "mainline",
+    material: "",
+    pressure_class: "",
+    nominal_dia: "",
     depth: "",
     water_capacity: "",
     start_lat: "",
@@ -85,26 +77,22 @@ const PipelinesManagementPage = () => {
 
   const layoutPolygon = Array.isArray(workspace?.layout_polygon) ? workspace.layout_polygon : [];
 
-  // Helper to check for at least 4 decimal places
   const hasValidPrecision = (val: string) => {
     if (!val) return false;
     const parts = String(val).split(".");
     return parts.length === 2 && parts[1].length >= 4;
   };
 
-  // Real-time boundary & precision validation
   const validation = useMemo(() => {
     const startLat = parseFloat(pipelineForm.start_lat);
     const startLng = parseFloat(pipelineForm.start_lng);
     const endLat = parseFloat(pipelineForm.end_lat);
     const endLng = parseFloat(pipelineForm.end_lng);
-    
+
     const startOutOfBounds = !isNaN(startLat) && !isNaN(startLng) && !isPointInPolygon(startLat, startLng, layoutPolygon);
     const endOutOfBounds = !isNaN(endLat) && !isNaN(endLng) && !isPointInPolygon(endLat, endLng, layoutPolygon);
-
     const startLacksPrecision = pipelineForm.start_lat && pipelineForm.start_lng && (!hasValidPrecision(pipelineForm.start_lat) || !hasValidPrecision(pipelineForm.start_lng));
     const endLacksPrecision = pipelineForm.end_lat && pipelineForm.end_lng && (!hasValidPrecision(pipelineForm.end_lat) || !hasValidPrecision(pipelineForm.end_lng));
-
     const hasRequiredData = !!(pipelineForm.material && pipelineForm.start_lat && pipelineForm.end_lat);
 
     return {
@@ -116,25 +104,45 @@ const PipelinesManagementPage = () => {
     };
   }, [pipelineForm, layoutPolygon]);
 
-  // FETCH PIPELINES FROM DB ON LOAD
+  // ✅ FIX 1: use /api/pipelines/ and pass workspace_id as query param
   const fetchPipelines = async () => {
+    if (!workspace?.id) return;
     try {
-      // Adjust this endpoint string to match your Django URL router
-      const res = await api.get("/pipelines/"); 
+      const res = await api.get("/pipelines/", {
+        params: { workspace_id: workspace.id }
+      });
+      
       const data = res.data?.results || res.data || [];
+      
+      // ✅ THE DIAGNOSTIC LOG: We must see exactly what Django is sending
+      console.log(">>> INCOMING DB PIPELINES:", data);
+
       setRegisteredPipelines(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch pipelines from database", err);
     }
   };
 
-  // Async function to save to Database
   const handleSavePipeline = async () => {
+    console.log(">>> WORKSPACE OBJECT:", workspace);
+    console.log(">>> WORKSPACE ID:", workspace?.id);
+    
+    // ✅ FIX 2: guard against missing workspace before attempting save
+    if (!workspace?.id) {
+      setSaveError("No active workspace found. Please select a workspace.");
+      return;
+    }
+
     setIsSaving(true);
     setSaveError("");
-    
-    // Explicitly format the payload. We DO NOT send `pipe_id` anymore because Supabase generates it!
-    const payloadToSave = { 
+
+    // ✅ THE FIX: Generate the string descriptor here
+    const generatedPipeId = `${pipelineForm.pipeline_category || 'mainline'}-${pipelineForm.material || 'UNKN'}-${pipelineForm.nominal_dia || '0'}-${pipelineForm.pressure_class || 'NONE'}-${pipelineForm.depth || '0'}-${pipelineForm.water_capacity || '0'}`;
+
+    // ✅ FIX 3: workspace_id AND pipe_id added to payload
+    const payloadToSave = {
+      pipe_id: generatedPipeId, // <--- THIS IS WHAT DJANGO WAS BEGGING FOR!
+      workspace_id: workspace.id,
       start_lat: parseFloat(pipelineForm.start_lat),
       start_lng: parseFloat(pipelineForm.start_lng),
       end_lat: parseFloat(pipelineForm.end_lat),
@@ -142,23 +150,22 @@ const PipelinesManagementPage = () => {
       pipeline_category: pipelineForm.pipeline_category,
       material: pipelineForm.material,
       pressure_class: pipelineForm.pressure_class,
-      nominal_dia: parseFloat(pipelineForm.nominal_dia),
-      depth: parseFloat(pipelineForm.depth),
-      water_capacity: parseFloat(pipelineForm.water_capacity)
+      nominal_dia: parseFloat(pipelineForm.nominal_dia) || 0,
+      depth: parseFloat(pipelineForm.depth) || 0,
+      water_capacity: parseFloat(pipelineForm.water_capacity) || 0
     };
-    
+
+    console.log(">>> PAYLOAD GOING TO DJANGO:", payloadToSave);
+
     try {
       await api.post("/pipelines/", payloadToSave);
-
-      // Force a fresh fetch from the DB to get the newly generated Postgres pipe_id
-      await fetchPipelines(); 
-
+      await fetchPipelines();
       setPipelineState("success");
-      setPipelineForm({ 
-        pipeline_category: "mainline", material: "", pressure_class: "", nominal_dia: "", depth: "", water_capacity: "", start_lat: "", start_lng: "", end_lat: "", end_lng: "" 
+      setPipelineForm({
+        pipeline_category: "mainline", material: "", pressure_class: "", nominal_dia: "", depth: "", water_capacity: "", start_lat: "", start_lng: "", end_lat: "", end_lng: ""
       });
-    } catch (err) {
-      console.error("Database Save Error:", err);
+    } catch (err: any) {
+      console.error("Database Save Error:", err.response?.data || err);
       setSaveError("Failed to save pipeline to the database. Check console for details.");
     } finally {
       setIsSaving(false);
@@ -175,7 +182,7 @@ const PipelinesManagementPage = () => {
     geolocatedModuleDevices,
     isConfigured,
   } = moduleSetup;
-  
+
   const deviceTypeLabels: Record<string, string> = {
     flowmeter: "Flow Meter",
     pressure_sensor: "Pressure Sensor",
@@ -189,16 +196,17 @@ const PipelinesManagementPage = () => {
       setIncidents(fetched);
     } catch (err) {
       console.error("Failed to fetch incidents", err);
-      setIncidents([]); 
+      setIncidents([]);
     }
   };
 
+  // ✅ FIX 4: re-fetch pipelines when workspace loads/changes
   useEffect(() => {
     fetchIncidents();
-    fetchPipelines(); // Initialize pipelines on load!
+    fetchPipelines();
     const interval = setInterval(fetchIncidents, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [workspace?.id]);
 
   const handleResolve = async (id: string) => {
     try {
@@ -210,7 +218,6 @@ const PipelinesManagementPage = () => {
   };
 
   const geolocatedDevices = geolocatedModuleDevices;
-
   const isPressureDevice = (device: any) => String(device?.type || "").toLowerCase().includes("pressure");
 
   const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number][] => {
@@ -219,14 +226,11 @@ const PipelinesManagementPage = () => {
     return [[lat + size, lng], [lat, lng + lngOffset], [lat - size, lng], [lat, lng - lngOffset]];
   };
 
-  // Ensure map bounds include Layout, Devices, AND Registered Pipelines
   const mapFocusPoints = useMemo<[number, number][]>(() => {
     const fromLayout = layoutPolygon
       .map((point: any) => [point?.[1], point?.[0]] as [number, number])
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
-      
     const fromDevices = geolocatedDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
-    
     const fromPipelines: [number, number][] = [];
     registeredPipelines.forEach(pipe => {
       if (!isNaN(parseFloat(pipe.start_lat))) {
@@ -234,7 +238,6 @@ const PipelinesManagementPage = () => {
         fromPipelines.push([parseFloat(pipe.end_lat), parseFloat(pipe.end_lng)]);
       }
     });
-
     return [...fromLayout, ...fromDevices, ...fromPipelines];
   }, [geolocatedDevices, layoutPolygon, registeredPipelines]);
 
@@ -251,27 +254,26 @@ const PipelinesManagementPage = () => {
     const rawTime = inc.created_at || inc.timestamp;
     let timeStr = "N/A";
     try {
-        if (rawTime) timeStr = new Date(rawTime).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4";
+      if (rawTime) timeStr = new Date(rawTime).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4";
     } catch (e) {
-        timeStr = "Invalid Time";
+      timeStr = "Invalid Time";
     }
-
     return {
-        id: inc.id,
-        severity: String(inc?.severity || "").toLowerCase() || "medium",
-        time: timeStr,
-        location: inc.location || `Gateway ${inc.gateway_id}`,
-        type: inc.incident_type,
-        pipeLength: "N/A",
-        pipeType: "N/A",
-        status: String(inc.status || "").trim().toLowerCase() || "open",
+      id: inc.id,
+      severity: String(inc?.severity || "").toLowerCase() || "medium",
+      time: timeStr,
+      location: inc.location || `Gateway ${inc.gateway_id}`,
+      type: inc.incident_type,
+      pipeLength: "N/A",
+      pipeType: "N/A",
+      status: String(inc.status || "").trim().toLowerCase() || "open",
     };
   });
 
   const sortedAlerts = [...mappedAlerts].sort((a: any, b: any) => {
-     if (a.status === 'recovering' && b.status !== 'recovering') return -1;
-     if (b.status === 'recovering' && a.status !== 'recovering') return 1;
-     return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+    if (a.status === 'recovering' && b.status !== 'recovering') return -1;
+    if (b.status === 'recovering' && a.status !== 'recovering') return 1;
+    return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
   });
 
   const topAlerts = useMemo(() => sortedAlerts.slice(0, 3), [sortedAlerts]);
@@ -330,18 +332,16 @@ const PipelinesManagementPage = () => {
               <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
                 <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
                 <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
-                
+
                 {layoutPolygon.length > 2 && (
                   <Polygon positions={layoutPolygon.map((point: any) => [point[1], point[0]])} pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }} />
                 )}
 
-                {/* Render DB Pipelines */}
                 {registeredPipelines.map((pipe, index) => {
                   const positions: [number, number][] = [
                     [parseFloat(pipe.start_lat), parseFloat(pipe.start_lng)],
                     [parseFloat(pipe.end_lat), parseFloat(pipe.end_lng)]
                   ];
-
                   return (
                     <div key={`pipe-group-${pipe.pipe_id || index}`}>
                       <Polyline positions={positions} pathOptions={{ color: "#0284c7", weight: 12, opacity: 0.3, lineCap: "round" }} />
@@ -366,7 +366,6 @@ const PipelinesManagementPage = () => {
                   );
                 })}
 
-                {/* Render Devices */}
                 {geolocatedDevices.map((device: any) => (
                   <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={7} pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}>
                     <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
@@ -378,7 +377,6 @@ const PipelinesManagementPage = () => {
         </CardContent>
       </Card>
 
-      {/* Top Priority Alerts */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Priority Alerts</h2>
@@ -395,13 +393,12 @@ const PipelinesManagementPage = () => {
         </div>
       </div>
 
-      {/* Pipeline Registry Form */}
       {pipelineState === "form" && (
         <div>
           <h2 className="text-xl font-semibold mb-4">Pipeline Registry</h2>
           <Card>
             <CardContent className="pt-6 space-y-6">
-              
+
               <div className="bg-muted/30 p-4 rounded-lg border border-border flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Pipeline Specifications Descriptor</p>
@@ -452,7 +449,6 @@ const PipelinesManagementPage = () => {
                   <h3 className="text-sm font-semibold text-muted-foreground mb-1 uppercase tracking-wider">Overall Coordinates</h3>
                   <p className="text-xs text-muted-foreground">For accurate boundary validation, please use precise coordinates (minimum 4 decimal places).</p>
                 </div>
-                
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   {[
                     { label: "Start Latitude", placeholder: "25.2048", key: "start_lat" },
@@ -472,7 +468,6 @@ const PipelinesManagementPage = () => {
                   ))}
                 </div>
 
-                {/* Error Messages */}
                 <div className="space-y-1 mt-3">
                   {validation.startOutOfBounds && <p className="text-red-500 text-xs font-medium">⚠️ Start coordinates are outside workspace boundaries.</p>}
                   {validation.endOutOfBounds && <p className="text-red-500 text-xs font-medium">⚠️ End coordinates are outside workspace boundaries.</p>}
@@ -508,7 +503,7 @@ const PipelinesManagementPage = () => {
           </CardContent>
         </Card>
       )}
-    </div> 
+    </div>
   );
 };
 
