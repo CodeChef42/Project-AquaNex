@@ -9,61 +9,67 @@ const api = axios.create({
   },
 });
 
-// Add token to requests
+// 1. Request Interceptor: Attaches the token to every outgoing request
 api.interceptors.request.use((config) => {
-  const publicRoutes = ['/auth/register/', '/auth/login/', '/auth/refresh/'];
-  const isPublic = publicRoutes.some(route => config.url.includes(route));
+  const publicRoutes = ['/auth/register/', '/auth/login/', '/auth/refresh/', '/auth/google/'];
+  
+  // Safety check to ensure config.url exists
+  const isPublic = config.url ? publicRoutes.some(route => config.url.includes(route)) : false;
 
   if (!isPublic) {
-    const token = localStorage.getItem('access_token');
+    // 🔥 CRITICAL: Must match the key saved in your Google Auth ("access")
+    const token = localStorage.getItem('access');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
     const workspaceId = localStorage.getItem('selected_workspace_id');
     if (workspaceId) {
       config.headers['X-Workspace-Id'] = workspaceId;
     }
   }
   return config;
+}, (error) => {
+  return Promise.reject(error);
 });
 
-// Handle token refresh on 401
+// 2. Response Interceptor: Handles 401s and attempts silent token refresh
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    // 🚨 DEBUG TRAP 1: Why did the original request (Onboarding) fail?
+    // If we get a 401 and haven't tried to retry yet
     if (error.response?.status === 401 && !originalRequest._retry) {
-      console.error("🚨 401 CRASH REASON:", error.response?.data);
-      alert(`ONBOARDING REJECTED! Reason: ${JSON.stringify(error.response?.data)}`);
-
       originalRequest._retry = true;
 
       try {
+        // 🔥 CRITICAL: Must match the key saved in your Google Auth ("refresh")
         const refreshToken = localStorage.getItem('refresh');
         
-        // 🚨 DEBUG TRAP 2: What refresh token are we sending?
-        console.log("🔄 Attempting refresh with token:", refreshToken);
+        if (!refreshToken) {
+          throw new Error("No refresh token available");
+        }
 
+        // Use standard axios for refresh to avoid interceptor loops
         const response = await axios.post(`${API_URL}/auth/refresh/`, {
           refresh: refreshToken,
         });
 
         const { access } = response.data;
+        
+        // Update Local Storage with the fresh access token
         localStorage.setItem('access', access);
+
+        // Update the header of the original failed request and retry it
         originalRequest.headers.Authorization = `Bearer ${access}`;
         return api(originalRequest);
         
       } catch (err: any) {
-        // 🚨 DEBUG TRAP 3: Why did the refresh fail?
-        console.error("🚨 400 REFRESH CRASH REASON:", err.response?.data);
-        alert(`REFRESH REJECTED! Reason: ${JSON.stringify(err.response?.data)}`);
-        
-        // 🛑 WE COMMENTED THESE OUT SO THE PAGE FREEZES INSTEAD OF REDIRECTING
-        // localStorage.clear();
-        // window.location.href = '/signin'; 
-        
+        // If refresh fails, the user's session is dead. Clear and redirect.
+        console.error("Session expired. Redirecting to sign-in.");
+        localStorage.clear();
+        window.location.href = '/signin'; 
         return Promise.reject(err);
       }
     }
