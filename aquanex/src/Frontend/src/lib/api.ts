@@ -18,7 +18,7 @@ api.interceptors.request.use((config) => {
 
   if (!isPublic) {
     // 🔥 CRITICAL: Must match the key saved in your Google Auth ("access")
-    const token = localStorage.getItem('access');
+    const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -45,7 +45,7 @@ api.interceptors.response.use(
 
       try {
         // 🔥 CRITICAL: Must match the key saved in your Google Auth ("refresh")
-        const refreshToken = localStorage.getItem('refresh');
+        const refreshToken = localStorage.getItem('refresh_token'); 
         
         if (!refreshToken) {
           throw new Error("No refresh token available");
@@ -59,7 +59,7 @@ api.interceptors.response.use(
         const { access } = response.data;
         
         // Update Local Storage with the fresh access token
-        localStorage.setItem('access', access);
+        localStorage.setItem('access_token', access);
 
         // Update the header of the original failed request and retry it
         originalRequest.headers.Authorization = `Bearer ${access}`;
