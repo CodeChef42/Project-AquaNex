@@ -33,23 +33,37 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // 🚨 DEBUG TRAP 1: Why did the original request (Onboarding) fail?
     if (error.response?.status === 401 && !originalRequest._retry) {
+      console.error("🚨 401 CRASH REASON:", error.response?.data);
+      alert(`ONBOARDING REJECTED! Reason: ${JSON.stringify(error.response?.data)}`);
+
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
+        const refreshToken = localStorage.getItem('refresh');
+        
+        // 🚨 DEBUG TRAP 2: What refresh token are we sending?
+        console.log("🔄 Attempting refresh with token:", refreshToken);
+
         const response = await axios.post(`${API_URL}/auth/refresh/`, {
           refresh: refreshToken,
         });
 
         const { access } = response.data;
-        localStorage.setItem('access_token', access);
-
+        localStorage.setItem('access', access);
         originalRequest.headers.Authorization = `Bearer ${access}`;
         return api(originalRequest);
-      } catch (err) {
-        localStorage.clear();
-        window.location.href = '/signin';
+        
+      } catch (err: any) {
+        // 🚨 DEBUG TRAP 3: Why did the refresh fail?
+        console.error("🚨 400 REFRESH CRASH REASON:", err.response?.data);
+        alert(`REFRESH REJECTED! Reason: ${JSON.stringify(err.response?.data)}`);
+        
+        // 🛑 WE COMMENTED THESE OUT SO THE PAGE FREEZES INSTEAD OF REDIRECTING
+        // localStorage.clear();
+        // window.location.href = '/signin'; 
+        
         return Promise.reject(err);
       }
     }
