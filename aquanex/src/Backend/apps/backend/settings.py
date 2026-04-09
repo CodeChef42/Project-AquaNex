@@ -7,6 +7,7 @@ import ssl
 import certifi
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
+from django.core.exceptions import ImproperlyConfigured
 
 # Define BASE_DIR FIRST so we know where we are
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -89,6 +90,9 @@ EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '20'))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'info@aquanex.app')  # ← was dynamic
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://www.aquanex.app')
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+
+if not GOOGLE_CLIENT_ID:
+    raise ImproperlyConfigured("CRITICAL: GOOGLE_CLIENT_ID is missing from the environment!")
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

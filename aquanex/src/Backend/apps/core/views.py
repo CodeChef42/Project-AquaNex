@@ -1304,22 +1304,31 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
+import logging
+logger = logging.getLogger(__name__)
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def google_auth(request):
     token = request.data.get('token')
 
     if not token:
-        return Response(
-            {'error': 'No token provided'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'No token provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 🛡️ THE BULLETPROOF CAST: Force it to be a string, no matter what OS/Render does.
+    client_id = str(settings.GOOGLE_CLIENT_ID).strip()
+    
+    # 🕵️‍♂️ THE TRAP: This will print to your Render Dashboard Logs
+    print("====== GOOGLE AUTH DEBUG ======")
+    print(f"Raw Token Length: {len(token)}")
+    print(f"Client ID being used: [{client_id}]")
+    print("===============================")
 
     try:
         idinfo = id_token.verify_oauth2_token(
             token,
             google_requests.Request(),
-            settings.GOOGLE_CLIENT_ID
+            audience=client_id # explicitly name the argument just to be safe
         )
 
         email = idinfo.get('email')
