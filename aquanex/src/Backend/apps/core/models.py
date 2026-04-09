@@ -80,13 +80,10 @@ class Technician(models.Model):
         return self.name
 
 class Pipe(models.Model):
-    # THIS IS THE FIX: Changed from BigAutoField to CharField so it accepts text strings
+    # FIXED: Using CharField primary key to accept custom React-generated strings
     pipe_id = models.CharField(max_length=255, primary_key=True) 
     
-    # This is the "ID badge" for the workspace. 
-    # It ensures this pipe only shows up in the correct project.
     workspace = models.ForeignKey('Workspace', on_delete=models.CASCADE, related_name='pipes', null=True)
-    
     start_lng = models.DecimalField(max_digits=10, decimal_places=7)
     start_lat = models.DecimalField(max_digits=9, decimal_places=7)
     end_lng   = models.DecimalField(max_digits=10, decimal_places=7)
@@ -135,6 +132,7 @@ class PipeSpecification(models.Model):
 
     def __str__(self):
         return f"Section {self.section_id}: {self.material} - {self.pipe_category}"
+
 class FlowMeter(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
     flow       = models.DecimalField(max_digits=10, decimal_places=2)
@@ -206,8 +204,7 @@ class Workspace(models.Model):
     demand_forecasting_plants = models.JSONField(default=list, blank=True)
     demand_forecasting_systems = models.JSONField(default=list, blank=True)
     
-    # ✅ LAYOUT MAPPING FIELDS (NEW)
-    layout_polygon          = models.JSONField(default=list, blank=True)  # [[lng,lat], [lng,lat], ...]
+    layout_polygon          = models.JSONField(default=list, blank=True)
     layout_area_m2          = models.FloatField(default=0, blank=True, null=True)
     layout_notes            = models.TextField(blank=True, null=True)
     layout_file_name        = models.CharField(max_length=255, blank=True, null=True)

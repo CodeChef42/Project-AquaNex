@@ -6,12 +6,17 @@ import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import PipelineAlertCard from "@/components/PipelineAlertCard";
-import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon, useMap, LayerGroup } from "react-leaflet";
 import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 
+/**
+ * UTILS
+ */
+
+// Ray-Casting algorithm to check if a point is inside a polygon
 const isPointInPolygon = (lat: number, lng: number, polygon: any[]) => {
   if (!polygon || polygon.length < 3) return true;
   let inside = false;
@@ -53,17 +58,29 @@ const FitMapToPoints = ({
   return null;
 };
 
+const getSeverityPriority = (sev: string) => {
+    const s = String(sev).toLowerCase();
+    if (s === 'critical') return 4;
+    if (s === 'high') return 3;
+    if (s === 'medium') return 2;
+    return 1;
+};
+
+/**
+ * MAIN COMPONENT
+ */
 const PipelinesManagementPage = () => {
   const navigate = useNavigate();
   const { workspace } = useAuth();
   const [incidents, setIncidents] = useState<any[]>([]);
   const [registeredPipelines, setRegisteredPipelines] = useState<any[]>([]);
 
-  const [pipelineForm, setPipelineForm] = useState<any>({
-    pipeline_category: "mainline",
-    material: "",
-    pressure_class: "",
-    nominal_dia: "",
+  // Form State
+  const [pipelineForm, setPipelineForm] = useState<any>({ 
+    pipeline_category: "mainline", 
+    material: "", 
+    pressure_class: "", 
+    nominal_dia: "", 
     depth: "",
     water_capacity: "",
     start_lat: "",
@@ -71,6 +88,7 @@ const PipelinesManagementPage = () => {
     end_lat: "",
     end_lng: ""
   });
+  
   const [pipelineState, setPipelineState] = useState<"form" | "success" | "done">("form");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -104,44 +122,31 @@ const PipelinesManagementPage = () => {
     };
   }, [pipelineForm, layoutPolygon]);
 
-  // ✅ FIX 1: use /api/pipelines/ and pass workspace_id as query param
+  // FETCH PIPELINES FROM DB
   const fetchPipelines = async () => {
     if (!workspace?.id) return;
     try {
       const res = await api.get("/pipelines/", {
-        params: { workspace_id: workspace.id }
-      });
-      
+          params: { workspace_id: workspace.id }
+      }); 
       const data = res.data?.results || res.data || [];
-      
-      // ✅ THE DIAGNOSTIC LOG: We must see exactly what Django is sending
-      console.log(">>> INCOMING DB PIPELINES:", data);
-
       setRegisteredPipelines(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Failed to fetch pipelines from database", err);
+      console.error("Failed to fetch pipelines", err);
     }
   };
 
+  // SAVE PIPELINE TO DB
   const handleSavePipeline = async () => {
-    console.log(">>> WORKSPACE OBJECT:", workspace);
-    console.log(">>> WORKSPACE ID:", workspace?.id);
-    
-    // ✅ FIX 2: guard against missing workspace before attempting save
-    if (!workspace?.id) {
-      setSaveError("No active workspace found. Please select a workspace.");
-      return;
-    }
-
+    if (!workspace?.id) return;
     setIsSaving(true);
     setSaveError("");
+    
+    // Construct the unique pipe_id based on specs
+    const generatedPipeId = `${pipelineForm.pipeline_category || 'mainline'}-${pipelineForm.material || 'mat'}-${pipelineForm.nominal_dia || '0'}-${pipelineForm.pressure_class || 'press'}-${pipelineForm.depth || '0'}-${pipelineForm.water_capacity || '0'}`;
 
-    // ✅ THE FIX: Generate the string descriptor here
-    const generatedPipeId = `${pipelineForm.pipeline_category || 'mainline'}-${pipelineForm.material || 'UNKN'}-${pipelineForm.nominal_dia || '0'}-${pipelineForm.pressure_class || 'NONE'}-${pipelineForm.depth || '0'}-${pipelineForm.water_capacity || '0'}`;
-
-    // ✅ FIX 3: workspace_id AND pipe_id added to payload
-    const payloadToSave = {
-      pipe_id: generatedPipeId, // <--- THIS IS WHAT DJANGO WAS BEGGING FOR!
+    const payloadToSave = { 
+      pipe_id: generatedPipeId,
       workspace_id: workspace.id,
       start_lat: parseFloat(pipelineForm.start_lat),
       start_lng: parseFloat(pipelineForm.start_lng),
@@ -155,18 +160,17 @@ const PipelinesManagementPage = () => {
       water_capacity: parseFloat(pipelineForm.water_capacity) || 0
     };
 
-    console.log(">>> PAYLOAD GOING TO DJANGO:", payloadToSave);
-
     try {
       await api.post("/pipelines/", payloadToSave);
-      await fetchPipelines();
+      await fetchPipelines(); 
+
       setPipelineState("success");
-      setPipelineForm({
-        pipeline_category: "mainline", material: "", pressure_class: "", nominal_dia: "", depth: "", water_capacity: "", start_lat: "", start_lng: "", end_lat: "", end_lng: ""
+      setPipelineForm({ 
+        pipeline_category: "mainline", material: "", pressure_class: "", nominal_dia: "", depth: "", water_capacity: "", start_lat: "", start_lng: "", end_lat: "", end_lng: "" 
       });
     } catch (err: any) {
       console.error("Database Save Error:", err.response?.data || err);
-      setSaveError("Failed to save pipeline to the database. Check console for details.");
+      setSaveError(err.response?.data?.error || "Failed to save pipeline to the database.");
     } finally {
       setIsSaving(false);
     }
@@ -178,16 +182,10 @@ const PipelinesManagementPage = () => {
     setGatewayIdInput,
     scanning,
     error,
-    missingTypes,
     geolocatedModuleDevices,
     isConfigured,
   } = moduleSetup;
-
-  const deviceTypeLabels: Record<string, string> = {
-    flowmeter: "Flow Meter",
-    pressure_sensor: "Pressure Sensor",
-  };
-
+  
   const fetchIncidents = async () => {
     try {
       const res = await api.get("/incidents/");
@@ -200,7 +198,6 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  // ✅ FIX 4: re-fetch pipelines when workspace loads/changes
   useEffect(() => {
     fetchIncidents();
     fetchPipelines();
@@ -217,92 +214,64 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  const geolocatedDevices = geolocatedModuleDevices;
-  const isPressureDevice = (device: any) => String(device?.type || "").toLowerCase().includes("pressure");
-
-  const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number][] => {
-    const lngScale = Math.max(Math.cos((lat * Math.PI) / 180), 0.2);
-    const lngOffset = size / lngScale;
-    return [[lat + size, lng], [lat, lng + lngOffset], [lat - size, lng], [lat, lng - lngOffset]];
-  };
-
+  // Map focus points calculation
   const mapFocusPoints = useMemo<[number, number][]>(() => {
     const fromLayout = layoutPolygon
       .map((point: any) => [point?.[1], point?.[0]] as [number, number])
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
-    const fromDevices = geolocatedDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
+      
+    const fromDevices = geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
+    
     const fromPipelines: [number, number][] = [];
     registeredPipelines.forEach(pipe => {
-      if (!isNaN(parseFloat(pipe.start_lat))) {
-        fromPipelines.push([parseFloat(pipe.start_lat), parseFloat(pipe.start_lng)]);
-        fromPipelines.push([parseFloat(pipe.end_lat), parseFloat(pipe.end_lng)]);
-      }
+      const sl = parseFloat(pipe.start_lat);
+      const el = parseFloat(pipe.end_lat);
+      if (!isNaN(sl)) fromPipelines.push([sl, parseFloat(pipe.start_lng)]);
+      if (!isNaN(el)) fromPipelines.push([el, parseFloat(pipe.end_lng)]);
     });
     return [...fromLayout, ...fromDevices, ...fromPipelines];
-  }, [geolocatedDevices, layoutPolygon, registeredPipelines]);
+  }, [geolocatedModuleDevices, layoutPolygon, registeredPipelines]);
 
-  const getSeverityPriority = (severity: string) => {
-    switch (severity) {
-      case "critical": return 3;
-      case "high": return 2;
-      case "medium": return 1;
-      default: return 0;
-    }
-  };
+  const sortedAlerts = useMemo(() => {
+    const mapped = incidents.map((inc: any) => {
+      const rawTime = inc.created_at || inc.timestamp;
+      let timeStr = "N/A";
+      if (rawTime) timeStr = new Date(rawTime).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }) + " GST";
+      
+      return {
+          id: inc.id,
+          severity: String(inc?.severity || "").toLowerCase() || "medium",
+          time: timeStr,
+          location: inc.location || `Gateway ${inc.gateway_id}`,
+          type: inc.incident_type,
+          status: String(inc.status || "").trim().toLowerCase() || "open",
+      };
+    });
 
-  const mappedAlerts = incidents.map((inc: any) => {
-    const rawTime = inc.created_at || inc.timestamp;
-    let timeStr = "N/A";
-    try {
-      if (rawTime) timeStr = new Date(rawTime).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4";
-    } catch (e) {
-      timeStr = "Invalid Time";
-    }
-    return {
-      id: inc.id,
-      severity: String(inc?.severity || "").toLowerCase() || "medium",
-      time: timeStr,
-      location: inc.location || `Gateway ${inc.gateway_id}`,
-      type: inc.incident_type,
-      pipeLength: "N/A",
-      pipeType: "N/A",
-      status: String(inc.status || "").trim().toLowerCase() || "open",
-    };
-  });
+    return mapped.sort((a: any, b: any) => {
+        if (a.status === 'recovering' && b.status !== 'recovering') return -1;
+        if (b.status === 'recovering' && a.status !== 'recovering') return 1;
+        return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+    });
+  }, [incidents]);
 
-  const sortedAlerts = [...mappedAlerts].sort((a: any, b: any) => {
-    if (a.status === 'recovering' && b.status !== 'recovering') return -1;
-    if (b.status === 'recovering' && a.status !== 'recovering') return 1;
-    return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
-  });
-
-  const topAlerts = useMemo(() => sortedAlerts.slice(0, 3), [sortedAlerts]);
+  const topAlerts = sortedAlerts.slice(0, 3);
 
   if (!isConfigured) {
     return (
       <div className="p-8 space-y-6">
         <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
-        <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">Pipelines Management</h1>
-          <p className="text-muted-foreground">Monitor and manage pipeline alerts and resources</p>
-        </div>
         <Card>
-          <CardHeader>
-            <CardTitle>Devices Not Configured</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Devices Not Configured</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">Configure required pipeline devices to continue.</p>
             <div className="flex flex-col sm:flex-row gap-2">
               <input
-                type="text"
-                value={gatewayIdInput}
-                onChange={(event) => setGatewayIdInput(event.target.value)}
+                type="text" value={gatewayIdInput}
+                onChange={(e) => setGatewayIdInput(e.target.value)}
                 placeholder="Gateway ID"
                 className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
               />
-              <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
-                {scanning ? "Scanning..." : "Configure Devices"}
-              </Button>
+              <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>{scanning ? "Scanning..." : "Configure Devices"}</Button>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
           </CardContent>
@@ -315,68 +284,69 @@ const PipelinesManagementPage = () => {
     <div className="p-8 space-y-6">
       <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
 
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">Pipelines Management</h1>
-        <p className="text-muted-foreground">Monitor and manage pipeline alerts and resources</p>
-      </div>
-
       <Card>
-        <CardHeader>
-          <CardTitle>Pipeline Map</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle>Pipeline Map</CardTitle></CardHeader>
         <CardContent>
-          {geolocatedDevices.length === 0 && layoutPolygon.length < 3 && registeredPipelines.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No pipeline devices or layout found.</p>
-          ) : (
-            <div className="rounded-xl border border-border overflow-hidden relative">
-              <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
-                <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
-                <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
+          <div className="rounded-xl border border-border overflow-hidden relative">
+            <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
+              <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
+              <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
+              
+              {layoutPolygon.length > 2 && (
+                <Polygon positions={layoutPolygon.map((point: any) => [point[1], point[0]])} pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }} />
+              )}
 
-                {layoutPolygon.length > 2 && (
-                  <Polygon positions={layoutPolygon.map((point: any) => [point[1], point[0]])} pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }} />
-                )}
+              {/* ✅ RENDER PIPELINES USING LAYERGROUP */}
+              {registeredPipelines.map((pipe, idx) => {
+                const sLat = parseFloat(pipe.start_lat);
+                const sLng = parseFloat(pipe.start_lng);
+                const eLat = parseFloat(pipe.end_lat);
+                const eLng = parseFloat(pipe.end_lng);
 
-                {registeredPipelines.map((pipe, index) => {
-                  const positions: [number, number][] = [
-                    [parseFloat(pipe.start_lat), parseFloat(pipe.start_lng)],
-                    [parseFloat(pipe.end_lat), parseFloat(pipe.end_lng)]
-                  ];
-                  return (
-                    <div key={`pipe-group-${pipe.pipe_id || index}`}>
-                      <Polyline positions={positions} pathOptions={{ color: "#0284c7", weight: 12, opacity: 0.3, lineCap: "round" }} />
-                      <Polyline positions={positions} pathOptions={{ color: "#38bdf8", weight: 4, dashArray: "10, 8", lineCap: "round" }}>
-                        <Popup className="rounded-lg shadow-lg">
-                          <div className="text-xs space-y-2 min-w-[200px] p-1">
-                            <p className="font-bold text-sm text-primary uppercase border-b pb-1 mb-2">
-                              System ID: {pipe.pipe_id || pipe.section_id || "Processing"}
-                            </p>
-                            <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-                              <span className="text-muted-foreground">Category:</span>
-                              <span className="font-medium capitalize text-right">{pipe.pipeline_category || "N/A"}</span>
-                              <span className="text-muted-foreground">Material:</span>
-                              <span className="font-medium text-right">{pipe.material || "N/A"}</span>
-                              <span className="text-muted-foreground">Diameter:</span>
-                              <span className="font-medium text-right">{pipe.nominal_dia || "0"} mm</span>
-                            </div>
+                if (isNaN(sLat) || isNaN(sLng) || isNaN(eLat) || isNaN(eLng)) return null;
+
+                return (
+                  <LayerGroup key={pipe.pipe_id || idx}>
+                    <Polyline 
+                      positions={[[sLat, sLng], [eLat, eLng]]} 
+                      pathOptions={{ color: "#0284c7", weight: 12, opacity: 0.3, lineCap: "round" }} 
+                    />
+                    <Polyline 
+                      positions={[[sLat, sLng], [eLat, eLng]]} 
+                      pathOptions={{ color: "#38bdf8", weight: 4, dashArray: "10, 8", lineCap: "round" }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-2 min-w-[200px] p-1">
+                          <p className="font-bold text-sm text-primary uppercase border-b pb-1 mb-2">
+                            ID: {pipe.pipe_id}
+                          </p>
+                          <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                            <span className="text-muted-foreground">Category:</span>
+                            <span className="font-medium capitalize text-right">{pipe.pipeline_category || "N/A"}</span>
+                            <span className="text-muted-foreground">Material:</span>
+                            <span className="font-medium text-right">{pipe.material || "N/A"}</span>
+                            <span className="text-muted-foreground">Diameter:</span>
+                            <span className="font-medium text-right">{pipe.nominal_dia || "0"} mm</span>
                           </div>
-                        </Popup>
-                      </Polyline>
-                    </div>
-                  );
-                })}
+                        </div>
+                      </Popup>
+                    </Polyline>
+                  </LayerGroup>
+                );
+              })}
 
-                {geolocatedDevices.map((device: any) => (
-                  <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={7} pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}>
-                    <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
-                  </CircleMarker>
-                ))}
-              </MapContainer>
-            </div>
-          )}
+              {/* Render Devices */}
+              {geolocatedModuleDevices.map((device: any) => (
+                <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={7} pathOptions={{ color: "#ef4444", fillOpacity: 0.9, weight: 1 }}>
+                  <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
+                </CircleMarker>
+              ))}
+            </MapContainer>
+          </div>
         </CardContent>
       </Card>
 
+      {/* Priority Alerts */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Priority Alerts</h2>
@@ -393,118 +363,93 @@ const PipelinesManagementPage = () => {
         </div>
       </div>
 
+      {/* Registry Form */}
       {pipelineState === "form" && (
-        <div>
-          <h2 className="text-xl font-semibold mb-4">Pipeline Registry</h2>
-          <Card>
-            <CardContent className="pt-6 space-y-6">
+        <Card>
+          <CardHeader><CardTitle>Pipeline Registry</CardTitle></CardHeader>
+          <CardContent className="space-y-6">
+            <div className="bg-muted/30 p-4 rounded-lg border border-border">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Descriptor</p>
+              <p className="text-lg font-mono font-medium text-primary">
+                {`${pipelineForm.pipeline_category || 'mainline'}-${pipelineForm.material || '[mat]'}-${pipelineForm.nominal_dia || '[dia]'}-${pipelineForm.pressure_class || '[press]'}-${pipelineForm.depth || '[depth]'}-${pipelineForm.water_capacity || '[cap]'}`}
+              </p>
+            </div>
 
-              <div className="bg-muted/30 p-4 rounded-lg border border-border flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Pipeline Specifications Descriptor</p>
-                  <p className="text-lg font-mono font-medium text-primary">
-                    {`${pipelineForm.pipeline_category || 'mainline'}-${pipelineForm.material || '[mat]'}-${pipelineForm.nominal_dia || '[dia]'}-${pipelineForm.pressure_class || '[press]'}-${pipelineForm.depth || '[depth]'}-${pipelineForm.water_capacity || '[cap]'}`}
-                  </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Category</label>
+                  <select
+                    value={pipelineForm.pipeline_category}
+                    onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, pipeline_category: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                  >
+                    <option value="mainline">Mainline</option>
+                    <option value="subline">Subline</option>
+                  </select>
                 </div>
-              </div>
-
-              <div>
-                <h3 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wider">Specifications</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">Pipeline Category</label>
-                    <select
-                      value={pipelineForm.pipeline_category}
-                      onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, pipeline_category: e.target.value }))}
+                {[
+                  { label: "Material", key: "material" },
+                  { label: "Pressure Class", key: "pressure_class" },
+                  { label: "Diameter (mm)", key: "nominal_dia", type: "number" },
+                  { label: "Depth (m)", key: "depth", type: "number" },
+                  { label: "Capacity (m³/h)", key: "water_capacity", type: "number" },
+                ].map((field) => (
+                  <div key={field.key} className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">{field.label}</label>
+                    <input
+                      type={field.type || "text"}
+                      value={pipelineForm[field.key] || ""}
+                      onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, [field.key]: e.target.value }))}
                       className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
-                    >
-                      <option value="mainline">Mainline</option>
-                      <option value="subline">Subline</option>
-                    </select>
+                    />
                   </div>
-                  {[
-                    { label: "Material", placeholder: "e.g. uPVC", key: "material" },
-                    { label: "Pressure Class", placeholder: "e.g. PN16", key: "pressure_class" },
-                    { label: "Nominal Diameter (mm)", placeholder: "e.g. 110", key: "nominal_dia", type: "number" },
-                    { label: "Depth (m)", placeholder: "e.g. 1.5", key: "depth", type: "number" },
-                    { label: "Water Capacity (m³/h)", placeholder: "e.g. 45.0", key: "water_capacity", type: "number" },
-                  ].map((field) => (
-                    <div key={field.key} className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">{field.label}</label>
-                      <input
-                        type={field.type || "text"} step="any" placeholder={field.placeholder}
-                        value={pipelineForm[field.key as keyof typeof pipelineForm] || ""}
-                        onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, [field.key]: e.target.value }))}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+                ))}
+            </div>
 
-              <hr className="border-border" />
-
-              <div>
-                <div className="mb-4">
-                  <h3 className="text-sm font-semibold text-muted-foreground mb-1 uppercase tracking-wider">Overall Coordinates</h3>
-                  <p className="text-xs text-muted-foreground">For accurate boundary validation, please use precise coordinates (minimum 4 decimal places).</p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t">
+              {[
+                { label: "Start Lat", key: "start_lat" },
+                { label: "Start Lng", key: "start_lng" },
+                { label: "End Lat", key: "end_lat" },
+                { label: "End Lng", key: "end_lng" },
+              ].map((field) => (
+                <div key={field.key} className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">{field.label}</label>
+                  <input
+                    type="number" step="any"
+                    value={pipelineForm[field.key] || ""}
+                    onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, [field.key]: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                  />
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {[
-                    { label: "Start Latitude", placeholder: "25.2048", key: "start_lat" },
-                    { label: "Start Longitude", placeholder: "55.2708", key: "start_lng" },
-                    { label: "End Latitude", placeholder: "25.1972", key: "end_lat" },
-                    { label: "End Longitude", placeholder: "55.2744", key: "end_lng" },
-                  ].map((field) => (
-                    <div key={field.key} className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">{field.label}</label>
-                      <input
-                        type="number" step="any" placeholder={field.placeholder}
-                        value={pipelineForm[field.key as keyof typeof pipelineForm] || ""}
-                        onChange={(e) => setPipelineForm((prev: any) => ({ ...prev, [field.key]: e.target.value }))}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
-                      />
-                    </div>
-                  ))}
-                </div>
+              ))}
+            </div>
 
-                <div className="space-y-1 mt-3">
-                  {validation.startOutOfBounds && <p className="text-red-500 text-xs font-medium">⚠️ Start coordinates are outside workspace boundaries.</p>}
-                  {validation.endOutOfBounds && <p className="text-red-500 text-xs font-medium">⚠️ End coordinates are outside workspace boundaries.</p>}
-                  {validation.startLacksPrecision && <p className="text-amber-500 text-xs font-medium">⚠️ Start coordinates require more precision (min 4 decimals).</p>}
-                  {validation.endLacksPrecision && <p className="text-amber-500 text-xs font-medium">⚠️ End coordinates require more precision (min 4 decimals).</p>}
-                  {saveError && <p className="text-red-500 text-xs font-medium mt-2">❌ {saveError}</p>}
-                </div>
-              </div>
+            <div className="space-y-1">
+                {validation.startOutOfBounds && <p className="text-red-500 text-xs">⚠️ Start coordinates are outside boundary.</p>}
+                {validation.endOutOfBounds && <p className="text-red-500 text-xs">⚠️ End coordinates are outside boundary.</p>}
+                {saveError && <p className="text-red-500 text-xs mt-2">❌ {saveError}</p>}
+            </div>
 
-              <div className="flex justify-end pt-2">
-                <Button disabled={!validation.canSave || isSaving} onClick={handleSavePipeline}>
-                  {isSaving ? "Saving..." : "Save Pipeline Data"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+            <div className="flex justify-end">
+              <Button disabled={!validation.canSave || isSaving} onClick={handleSavePipeline}>
+                {isSaving ? "Saving..." : "Save Pipeline"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {pipelineState === "success" && (
         <Card className="border-green-200 bg-green-50">
-          <CardContent className="pt-6 pb-6 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="text-green-600 text-xl">✓</span>
-              <p className="text-green-700 font-medium">Pipeline successfully registered and saved to database.</p>
-            </div>
-            <button
-              onClick={() => setPipelineState("form")}
-              className="text-green-600 hover:text-green-800 text-sm font-medium border border-green-300 px-3 py-1.5 rounded-lg"
-            >
-              Add Another Pipeline
-            </button>
+          <CardContent className="p-6 flex items-center justify-between">
+            <p className="text-green-700 font-medium">✓ Pipeline saved successfully.</p>
+            <Button variant="outline" onClick={() => setPipelineState("form")}>Add Another</Button>
           </CardContent>
         </Card>
       )}
     </div>
   );
-};
+}; 
 
 export default PipelinesManagementPage;

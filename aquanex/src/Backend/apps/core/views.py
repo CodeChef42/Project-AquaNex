@@ -2561,12 +2561,11 @@ class PipelineListCreateView(APIView):
         # 3. Mash them into the exact flat format React-Leaflet expects
         results = []
         for pipe in pipes:
-            # Safely get the specs (in case a pipe somehow doesn't have them)
             spec = getattr(pipe, 'pipespec', None) 
             
             results.append({
                 "pipe_id": pipe.pipe_id,
-                "start_lat": float(pipe.start_lat), # Force it to be a real number!
+                "start_lat": float(pipe.start_lat),
                 "start_lng": float(pipe.start_lng),
                 "end_lat": float(pipe.end_lat),
                 "end_lng": float(pipe.end_lng),
@@ -2579,30 +2578,27 @@ class PipelineListCreateView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        print(">>> INCOMING RAW DATA:", request.data)
         data = request.data
         workspace_id = request.headers.get('X-Workspace-Id') or data.get('workspace_id')
         
-        # ✅ Grab the custom descriptor string sent from React!
-        custom_pipe_id = data.get('pipe_id')
-    
-        if not workspace_id:
-            return Response({"error": "workspace_id is required"}, status=400)
-            
-        if not custom_pipe_id:
-            return Response({"error": "pipe_id is required"}, status=400)
-    
+        # 🎯 GRAB THE CUSTOM STRING FROM REACT
+        custom_pipe_id = data.get('pipe_id') 
+
+        if not workspace_id or not custom_pipe_id:
+            return Response({"error": "workspace_id and pipe_id are required"}, status=400)
+
         try:
-            # ✅ Supply the React string explicitly
+            # 🚀 CREATE PIPE WITH CUSTOM ID
             pipe = Pipe.objects.create(
-                pipe_id=custom_pipe_id,           
+                pipe_id=custom_pipe_id,  
                 workspace_id=workspace_id,
                 start_lat=data.get('start_lat'),
                 start_lng=data.get('start_lng'),
                 end_lat=data.get('end_lat'),
                 end_lng=data.get('end_lng')
             )
-    
+
+            # 🛠️ CREATE SPECS ATTACHED TO PIPE
             PipeSpecification.objects.create(
                 section=pipe,
                 pipe_category=data.get('pipeline_category'),
@@ -2612,10 +2608,9 @@ class PipelineListCreateView(APIView):
                 depth=data.get('depth') or 0,
                 water_capacity=data.get('water_capacity') or 0
             )
-    
+
             return Response({"success": True, "pipe_id": pipe.pipe_id}, status=status.HTTP_201_CREATED)
     
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("CRITICAL DB ERROR in Pipeline creation")
+            return Response({"error": str(e)}, status=400)
