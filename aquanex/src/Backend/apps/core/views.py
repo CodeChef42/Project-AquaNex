@@ -1371,7 +1371,7 @@ def google_auth(request):
 
         return Response(
             {
-                'user': {'id': user.id, 'email': user.email, 'username': user.username}, # Ensure you serialize this properly
+                'user': UserSerializer(user).data, 
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
                 'google_sub': google_sub,
