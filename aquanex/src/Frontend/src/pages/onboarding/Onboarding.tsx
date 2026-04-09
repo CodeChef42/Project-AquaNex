@@ -296,11 +296,11 @@ const Onboarding = () => {
   const [recommendationSignature, setRecommendationSignature] = useState("");
   const [recommendationModalOpen, setRecommendationModalOpen] = useState(false);
   const [weeklyForecast, setWeeklyForecast] = useState<{
-    time: string[];
-    temperature_2m_max: number[];
-    temperature_2m_min: number[];
+    date: string[];
+    temp_max: number[];
+    temp_min: number[];
     precipitation_sum: number[];
-    windspeed_10m_max: number[];
+    wind_speed_max: number[];
   } | null>(null);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
@@ -420,6 +420,7 @@ const Onboarding = () => {
 
     (async () => {
       try {
+        const baseUrl = import.meta.env.VITE_API_URL || '';
         const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
           String(lat)
         )}&lon=${encodeURIComponent(String(lng))}`;
@@ -444,31 +445,35 @@ const Onboarding = () => {
           .trim();
         setDetectedLayoutPlace(label || fallbackLabel);
 
-        const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(
+        const forecastUrl = `${baseUrl}/api/weather/forecast/?lat=${encodeURIComponent(
           String(lat)
-        )}&longitude=${encodeURIComponent(
+        )}&lng=${encodeURIComponent(
           String(lng)
-        )}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max&timezone=auto&forecast_days=7`;
+        )}`;
         const forecastResp = await fetch(forecastUrl, { signal: controller.signal });
+        if (!forecastResp.ok) {
+          const errData = await forecastResp.json().catch(() => ({}));
+          throw new Error(errData.error || "Weather forecast unavailable for this location.");
+        }
         const forecastJson: any = await forecastResp.json();
 
         const daily = forecastJson?.daily || {};
-        const time = Array.isArray(daily?.time) ? daily.time : [];
-        const temperature_2m_max = Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max : [];
-        const temperature_2m_min = Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min : [];
+        const date = Array.isArray(daily?.date) ? daily.date : [];
+        const temp_max = Array.isArray(daily?.temp_max) ? daily.temp_max : [];
+        const temp_min = Array.isArray(daily?.temp_min) ? daily.temp_min : [];
         const precipitation_sum = Array.isArray(daily?.precipitation_sum) ? daily.precipitation_sum : [];
-        const windspeed_10m_max = Array.isArray(daily?.windspeed_10m_max) ? daily.windspeed_10m_max : [];
+        const wind_speed_max = Array.isArray(daily?.wind_speed_max) ? daily.wind_speed_max : [];
 
-        if (!time.length) {
+        if (!date.length) {
           throw new Error("Weather forecast unavailable for this location.");
         }
 
         setWeeklyForecast({
-          time,
-          temperature_2m_max,
-          temperature_2m_min,
+          date,
+          temp_max,
+          temp_min,
           precipitation_sum,
-          windspeed_10m_max,
+          wind_speed_max,
         });
         setWeatherStatus("ready");
       } catch (e: any) {
@@ -2272,19 +2277,19 @@ const Onboarding = () => {
                           <th className="text-left p-2">Min °C</th>
                           <th className="text-left p-2">Max °C</th>
                           <th className="text-left p-2">Precip (mm)</th>
-                          <th className="text-left p-2">Wind max (km/h)</th>
+                          <th className="text-left p-2">Wind max (m/s)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {weeklyForecast.time.map((day, idx) => (
+                        {weeklyForecast.date.map((day, idx) => (
                           <tr key={day} className="border-t border-border">
                             <td className="p-2 font-mono">
                               {new Date(day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
                             </td>
-                            <td className="p-2">{Number(weeklyForecast.temperature_2m_min[idx] ?? 0).toFixed(1)}</td>
-                            <td className="p-2">{Number(weeklyForecast.temperature_2m_max[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.temp_min[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.temp_max[idx] ?? 0).toFixed(1)}</td>
                             <td className="p-2">{Number(weeklyForecast.precipitation_sum[idx] ?? 0).toFixed(1)}</td>
-                            <td className="p-2">{Number(weeklyForecast.windspeed_10m_max[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.wind_speed_max[idx] ?? 0).toFixed(1)}</td>
                           </tr>
                         ))}
                       </tbody>
