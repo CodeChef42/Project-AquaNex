@@ -302,6 +302,7 @@ const SignUp = () => {
             <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
 
             <div className="mt-4 space-y-4">
+              
               {/* ── Google Auth ── */}
               <div className="w-full flex justify-center [&>div]:w-full mb-0.5">
                 <GoogleLogin
@@ -312,16 +313,26 @@ const SignUp = () => {
                         {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token: credentialResponse.credential }),
+                          body: JSON.stringify({ 
+                            token: credentialResponse.credential,
+                            action: "signup" 
+                          }),
                         },
                       );
+                      
                       const data = await response.json();
+                      
                       if (response.ok) {
                         localStorage.setItem("access", data.access);
                         localStorage.setItem("refresh", data.refresh);
                         localStorage.setItem("user", JSON.stringify(data.user));
                         navigate("/onboarding");
                       } else {
+                        toast({
+                          title: "Error",
+                          description: data.error || "Login failed",
+                          variant: "destructive",
+                        });
                         console.error("Google backend error:", data);
                       }
                     } catch (error) {
@@ -332,14 +343,16 @@ const SignUp = () => {
                 />
               </div>
 
+              {/* ── The "OR" Divider ── */}
               <div className="flex items-center gap-3 my-1">
                 <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
                 <span className="text-sm text-slate-400 dark:text-slate-500 font-medium px-1">or</span>
                 <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
               </div>
 
+              {/* ── THE FORM TAG ── */}
               <form onSubmit={handleSubmit} className="space-y-4">
-
+                
                 {/* ── Username ── */}
                 <div className="space-y-1">
                   <Label htmlFor="username" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">

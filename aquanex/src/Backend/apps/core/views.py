@@ -1311,24 +1311,19 @@ logger = logging.getLogger(__name__)
 @permission_classes([AllowAny])
 def google_auth(request):
     token = request.data.get('token')
+    # 1️⃣ Grab the action (defaults to 'login' if frontend doesn't send it)
+    action = request.data.get('action', 'login') 
 
     if not token:
         return Response({'error': 'No token provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # 🛡️ THE BULLETPROOF CAST: Force it to be a string, no matter what OS/Render does.
-    client_id = str(settings.GOOGLE_CLIENT_ID).strip()
-    
-    # 🕵️‍♂️ THE TRAP: This will print to your Render Dashboard Logs
-    print("====== GOOGLE AUTH DEBUG ======")
-    print(f"Raw Token Length: {len(token)}")
-    print(f"Client ID being used: [{client_id}]")
-    print("===============================")
+    client_id = str(settings.GOOGLE_CLIENT_ID).strip() # (Make sure you removed the VITE_ part here based on our last fix!)
 
     try:
         idinfo = id_token.verify_oauth2_token(
             token,
             google_requests.Request(),
-            audience=client_id # explicitly name the argument just to be safe
+            audience=client_id
         )
 
         email = idinfo.get('email')
@@ -1336,15 +1331,27 @@ def google_auth(request):
         google_sub = idinfo.get('sub')
 
         if not email:
-            return Response(
-                {'error': 'Google account email not available'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'Google account email not available'}, status=status.HTTP_400_BAD_REQUEST)
 
         User = get_user_model()
         user = User.objects.filter(email__iexact=email).first()
 
-        if not user:
+        # 🚨 2️⃣ THE NEW CHECK: If they clicked "Sign Up" but are already in the database
+        if user and action == 'signup':
+            return Response(
+                {'error': 'Account already exists. Please log in instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 🚨 3️⃣ OPTIONAL REVERSE CHECK: If they clicked "Log In" but don't have an account
+        if not user and action == 'login':
+            return Response(
+                {'error': 'Account not found. Please sign up first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # If they don't exist and are trying to sign up, create the user
+        if not user and action == 'signup':
             base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
             username = base_username
             counter = 1
@@ -1364,7 +1371,7 @@ def google_auth(request):
 
         return Response(
             {
-                'user': UserSerializer(user).data,
+                'user': {'id': user.id, 'email': user.email, 'username': user.username}, # Ensure you serialize this properly
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
                 'google_sub': google_sub,
@@ -1373,10 +1380,7 @@ def google_auth(request):
         )
 
     except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
