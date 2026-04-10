@@ -215,7 +215,8 @@ const SignUp = () => {
 
   const handleContinue = () => {
     setGeneratedSecretKey(null);
-    navigate("/onboarding");
+    navigate('/onboarding?new=1');
+
   };
 
   if (googleLoading) return <LoadingScreen variant="onboarding" />;
