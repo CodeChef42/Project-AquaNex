@@ -34,10 +34,10 @@ db.sqlite3
 db.sqlite3-journal
 
 # Environment Variables (Security risk if tracked)
-.env
-.venv
-env/
-venv/
+#.env
+#.venv
+#env/
+#venv/
 
 # macOS
 ._*
