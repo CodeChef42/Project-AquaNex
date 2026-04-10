@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LeafDecor } from "../components/LeafDecor";
 import Logo from "@/components/Logo";
 import api from "@/lib/api";
-const { loginWithTokens } = useAuth();
+import LoadingScreen from "@/components/LoadingScreen"; 
 
 // Init zxcvbn once at module level
 zxcvbnOptions.setOptions({
@@ -83,6 +83,7 @@ const AvailabilityIndicator = ({
 
 const SignUp = () => {
   // ── State ───────────────────────────────────────────────────────
+  
   const [username, setUsername]                       = useState("");
   const [fullName, setFullName]                       = useState("");
   const [email, setEmail]                             = useState("");
@@ -90,6 +91,7 @@ const SignUp = () => {
   const [confirmPassword, setConfirmPassword]         = useState("");
   const [showPassword, setShowPassword]               = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading]                         = useState(false);
   const [generatedSecretKey, setGeneratedSecretKey]   = useState<string | null>(null);
   const [copied, setCopied]                           = useState(false);
@@ -103,7 +105,7 @@ const SignUp = () => {
   const emailTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Hooks ───────────────────────────────────────────────────────
-  const { register } = useAuth();
+  const { register, loginWithTokens } = useAuth();
   const navigate     = useNavigate();
   const { toast }    = useToast();
 
@@ -216,6 +218,7 @@ const SignUp = () => {
     navigate("/onboarding");
   };
 
+  if (googleLoading) return <LoadingScreen variant="onboarding" />;
   // ── Render ──────────────────────────────────────────────────────
   return (
     <div
@@ -323,7 +326,10 @@ const SignUp = () => {
                     const data = await response.json();
 
                     if (response.ok) {
-                      loginWithTokens(data.access, data.refresh, data.user); // replaces localStorage calls
+                      localStorage.clear(); // nuclear clear of any stale tokens
+                      loginWithTokens(data.access, data.refresh, data.user);
+                      setGoogleLoading(true);
+                      await new Promise(resolve => setTimeout(resolve, 1800));
                       navigate("/onboarding");
                     } else {
                       toast({
