@@ -6,13 +6,14 @@ from .views import (
     GatewayRegisterView,
     GatewayTelemetryIngestView,
     LayoutUploadView,
-    LayoutTaskStatus,  # NEW
+    LayoutTaskStatus,  #NEW
     RegisterView,
     CheckAvailabilityView,
     LoginView,
     UserProfileView,
     predict_breakage,
-    OnboardingView,
+    google_auth,
+    OnboardingView, 
     LayoutModuleRecommendationView,
     ChangePasswordView,
     WorkspaceListView,
@@ -20,8 +21,12 @@ from .views import (
     WorkspaceInviteView,
     AcceptInviteView,
     IncidentListView,
+    IncidentDetailView,
     IncidentResolveView,
     IncidentSeedView,
+    PipelineListCreateView,
+    WeatherCurrentView,
+    WeatherForecastView,
 )
 
 def health(request):
@@ -30,11 +35,13 @@ def health(request):
 urlpatterns = [
     path("health/", health),
     path("incidents/", IncidentListView.as_view(), name="incidents-list"),
+    path("incidents/<str:pk>/", IncidentDetailView.as_view(), name="incident-detail"),
     path("incidents/<str:pk>/resolve/", IncidentResolveView.as_view(), name="incident-resolve"),
     path("incidents/seed/", IncidentSeedView.as_view(), name="incident-seed"),
     path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/check-availability/", CheckAvailabilityView.as_view(), name="check-availability"),
     path("auth/login/", LoginView.as_view(), name="login"),
+    path("auth/google/", google_auth, name="google_auth"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/profile/", UserProfileView.as_view(), name="profile"),
     path("auth/change-password/", ChangePasswordView.as_view(), name="change-password"),
@@ -50,4 +57,7 @@ urlpatterns = [
     path("gateway-telemetry/", GatewayTelemetryIngestView.as_view(), name="gateway-telemetry"),
     path("layout-upload/", LayoutUploadView.as_view(), name="layout-upload"),
     path("layout-status/<str:task_id>/", LayoutTaskStatus.as_view(), name="layout-status"),
+    path("pipelines/", PipelineListCreateView.as_view(), name="pipelines-list-create"),
+    path("weather/current/", WeatherCurrentView.as_view(), name="weather-current"),
+    path("weather/forecast/", WeatherForecastView.as_view(), name="weather-forecast"),
 ]

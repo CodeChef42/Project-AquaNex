@@ -119,9 +119,9 @@ const Simulation = () => {
   };
 
   const handleIntervalChange = (val: number) => {
-      const safe = clamp(val, 1, 10);
+      const safe = clamp(val, 1, 60); // Allow up to 60s
       setIntervalSec(safe);
-      localStorage.removeItem("aquanex_sim_interval_sec");
+      localStorage.setItem("aquanex_sim_interval_sec", String(safe));
   };
 
   return (

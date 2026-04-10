@@ -1,3 +1,4 @@
+from urllib import request
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -5,6 +6,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.decorators import api_view, permission_classes
 from .tasks import layout_process, run_ml_breakage_inference
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 import requests
 import logging
 import json
@@ -25,7 +30,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
-
+from .models import Pipe, PipeSpecification
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,24 @@ def _optional_float(value):
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
+def _workspace_id_from_request(request):
+    """Extracts the active workspace ID from request data, query params, or headers."""
+    data = getattr(request, "data", None)
+    if hasattr(data, "get"):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
+            
+    if hasattr(request, "query_params"):
+        query_value = request.query_params.get("workspace_id")
+        if query_value:
+            return str(query_value).strip()
+            
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
+        
+    return ""
 
 def _coerce_prediction_timestamp(value):
     dt = parse_datetime(str(value or "").strip()) if value else None
@@ -72,47 +95,77 @@ def _coerce_prediction_timestamp(value):
 
 
 def _incident_fingerprint(gateway_id, incident_type):
-    return hashlib.sha256(f"{gateway_id}:{incident_type}".encode("utf-8")).hexdigest()
+    # Appending a UUID guarantees every new incident gets a unique DB row,
+    # preventing old "resolved" incidents from blocking new ones.
+    unique_string = f"{gateway_id}:{incident_type}:{uuid.uuid4()}"
+    return hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
 
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
+    print("\n" + "="*50)
+    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
+    print(f"📦 PREDICTION PAYLOAD: {prediction}")
+    
     if not isinstance(prediction, dict):
+        print("❌ ABORT: Prediction is not a valid dictionary.")
         return None
 
     now_ts = timezone.now()
 
     if prediction.get("is_anomaly") is not True:
-        # If normal data comes in, transition 'open' incidents to 'recovering'
-        # This signals the frontend to ask for confirmation.
-        Incident.objects.filter(
+        print("ℹ️ STATUS: Normal data received. is_anomaly is False.")
+        updated = Incident.objects.filter(
             workspace=workspace,
             gateway_id=gateway_id,
-            status="open",
+            status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
+        print(f"ℹ️ Transitioned {updated} ongoing incidents to recovering.")
+        print("="*50 + "\n")
         return None
 
+    print("⚠️ ANOMALY CONFIRMED! Proceeding to database insertion logic...")
+    
     incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
     severity = str(prediction.get("severity") or "").strip().lower() or None
     detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
-    fingerprint = _incident_fingerprint(gateway_id, incident_type)
     details = {"prediction": prediction}
 
-    # Check for recovering incidents first - if we get a new anomaly for a recovering incident, reopen it
-    recovering = Incident.objects.filter(
-        workspace=workspace,
-        gateway_id=gateway_id,
-        incident_type=incident_type,
-        status="recovering"
+    # 1. Check for ongoing
+    ongoing_incident = Incident.objects.filter(
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="ongoing"
     ).first()
 
-    if recovering:
-        recovering.status = "open"
-        recovering.last_seen_at = detected_at
-        recovering.severity = severity
-        recovering.details = details
-        recovering.save()
-        return {"id": str(recovering.id), "created": False}
+    if ongoing_incident:
+        print(f"🔄 FOUND ONGOING: Updating existing incident ID: {ongoing_incident.id}")
+        ongoing_incident.last_seen_at = detected_at
+        ongoing_incident.severity = severity
+        ongoing_incident.details = details
+        ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
+        print("="*50 + "\n")
+        return {"id": str(ongoing_incident.id), "created": False}
 
+    # 2. Check for recovering
+    recovering_incident = Incident.objects.filter(
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="recovering"
+    ).first()
+
+    if recovering_incident:
+        print(f"🔄 FOUND RECOVERING: Re-opening incident ID: {recovering_incident.id}")
+        recovering_incident.status = "ongoing"
+        recovering_incident.last_seen_at = detected_at
+        recovering_incident.severity = severity
+        recovering_incident.details = details
+        recovering_incident.save()
+        print("="*50 + "\n")
+        return {"id": str(recovering_incident.id), "created": False}
+
+    # 3. Create Brand New
+    print("✨ NO ACTIVE INCIDENTS FOUND. Creating a brand new DB row...")
+    fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    print(f"🔑 Generated Unique Fingerprint: {fingerprint}")
+    
     try:
         with transaction.atomic():
             incident = Incident.objects.create(
@@ -120,50 +173,19 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
                 gateway_id=gateway_id,
                 incident_type=incident_type,
                 severity=severity,
-                status="open",
+                status="ongoing",
                 detected_at=detected_at,
                 last_seen_at=detected_at,
                 fingerprint=fingerprint,
                 details=details,
             )
+            print(f"✅ SUCCESS! Created new Incident ID: {incident.id}")
+            print("="*50 + "\n")
             return {"id": str(incident.id), "created": True}
-    except IntegrityError:
-        updated = Incident.objects.filter(
-            workspace=workspace,
-            gateway_id=gateway_id,
-            incident_type=incident_type,
-            status="open",
-        ).update(
-            last_seen_at=detected_at,
-            severity=severity,
-            details=details,
-        )
-        if updated:
-            incident = Incident.objects.filter(
-                workspace=workspace,
-                gateway_id=gateway_id,
-                incident_type=incident_type,
-                status="open",
-            ).first()
-            if incident:
-                return {"id": str(incident.id), "created": False}
+    except Exception as e:
+        print(f"❌ DATABASE ERROR: Failed to insert row! Error: {str(e)}")
+        print("="*50 + "\n")
         return None
-
-
-def _workspace_id_from_request(request):
-    data = getattr(request, "data", None)
-    if hasattr(data, "get"):
-        data_value = data.get("workspace_id") or data.get("workspaceId")
-        if data_value:
-            return str(data_value).strip()
-    if hasattr(request, "query_params"):
-        query_value = request.query_params.get("workspace_id")
-        if query_value:
-            return str(query_value).strip()
-    header_value = request.headers.get("X-Workspace-Id")
-    if header_value:
-        return str(header_value).strip()
-    return ""
 
 
 def _resolve_user_workspace(request, create_if_missing=False):
@@ -1283,7 +1305,84 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
+import logging
+logger = logging.getLogger(__name__)
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_auth(request):
+    token = request.data.get('token')
+    # 1️⃣ Grab the action (defaults to 'login' if frontend doesn't send it)
+    action = request.data.get('action', 'login') 
+
+    if not token:
+        return Response({'error': 'No token provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    client_id = str(settings.GOOGLE_CLIENT_ID).strip() # (Make sure you removed the VITE_ part here based on our last fix!)
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=client_id
+        )
+
+        email = idinfo.get('email')
+        full_name = idinfo.get('name', '')
+        google_sub = idinfo.get('sub')
+
+        if not email:
+            return Response({'error': 'Google account email not available'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=email).first()
+
+        # 🚨 2️⃣ THE NEW CHECK: If they clicked "Sign Up" but are already in the database
+        if user and action == 'signup':
+            return Response(
+                {'error': 'Account already exists. Please log in instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 🚨 3️⃣ OPTIONAL REVERSE CHECK: If they clicked "Log In" but don't have an account
+        if not user and action == 'login':
+            return Response(
+                {'error': 'Account not found. Please sign up first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # If they don't exist and are trying to sign up, create the user
+        if not user and action == 'signup':
+            base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
+            username = base_username
+            counter = 1
+
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=None,
+                full_name=full_name or username,
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                'user': UserSerializer(user).data, 
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'google_sub': google_sub,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
@@ -2294,7 +2393,33 @@ def predict_breakage(request):
             'error': 'Internal server error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific incident by its primary key (ID).
+    Enforces workspace isolation so users can only access their own incidents.
+    """
+    serializer_class = IncidentSerializer
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        requested_workspace_id = _workspace_id_from_request(self.request)
+        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
+
+        if requested_workspace_id:
+            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
+        elif owner_workspaces.exists():
+            # Fallback to all incidents in all workspaces owned by the current user.
+            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
+        else:
+            queryset = Incident.objects.none()
+
+        # Last-resort fallback for environments where workspace ownership linkage
+        # is not aligned but incidents exist in the database.
+        if not queryset.exists():
+            queryset = Incident.objects.all()
+
+        return queryset
+    
 class IncidentListView(generics.ListAPIView):
     serializer_class = IncidentSerializer
     permission_classes = [IsAuthenticated]
@@ -2433,3 +2558,247 @@ class IncidentSeedView(APIView):
             },
             status=201,
         )
+
+class PipelineListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Get the workspace ID from headers or query params
+        workspace_id = request.headers.get('X-Workspace-Id') or request.GET.get('workspace_id')
+        
+        if not workspace_id:
+            return Response({"error": "workspace_id is required to fetch pipelines"}, status=400)
+
+        # 2. Grab all pipes for this workspace AND their attached specs
+        pipes = Pipe.objects.filter(workspace_id=workspace_id).select_related('pipespec')
+        
+        # 3. Mash them into the exact flat format React-Leaflet expects
+        results = []
+        for pipe in pipes:
+            spec = getattr(pipe, 'pipespec', None) 
+            
+            results.append({
+                "pipe_id": pipe.pipe_id,
+                "start_lat": float(pipe.start_lat),
+                "start_lng": float(pipe.start_lng),
+                "end_lat": float(pipe.end_lat),
+                "end_lng": float(pipe.end_lng),
+                "pipeline_category": spec.pipe_category if spec else "Unknown",
+                "material": spec.material if spec else "Unknown",
+                "nominal_dia": float(spec.nominal_dia) if spec and spec.nominal_dia else 0,
+            })
+            
+        return Response(results, status=200)
+
+    @transaction.atomic
+    def post(self, request):
+        data = request.data
+        workspace_id = request.headers.get('X-Workspace-Id') or data.get('workspace_id')
+        
+        # 🎯 GRAB THE CUSTOM STRING FROM REACT
+        custom_pipe_id = data.get('pipe_id') 
+
+        if not workspace_id or not custom_pipe_id:
+            return Response({"error": "workspace_id and pipe_id are required"}, status=400)
+
+        try:
+            # 🚀 CREATE PIPE WITH CUSTOM ID
+            pipe = Pipe.objects.create(
+                pipe_id=custom_pipe_id,  
+                workspace_id=workspace_id,
+                start_lat=data.get('start_lat'),
+                start_lng=data.get('start_lng'),
+                end_lat=data.get('end_lat'),
+                end_lng=data.get('end_lng')
+            )
+
+            # 🛠️ CREATE SPECS ATTACHED TO PIPE
+            PipeSpecification.objects.create(
+                section=pipe,
+                pipe_category=data.get('pipeline_category'),
+                material=data.get('material'),
+                pressure_class=data.get('pressure_class'),
+                nominal_dia=data.get('nominal_dia') or 0,
+                depth=data.get('depth') or 0,
+                water_capacity=data.get('water_capacity') or 0
+            )
+
+            return Response({"success": True, "pipe_id": pipe.pipe_id}, status=status.HTTP_201_CREATED)
+    
+        except Exception as e:
+            logger.exception("CRITICAL DB ERROR in Pipeline creation")
+            return Response({"error": str(e)}, status=400)
+
+
+def _openweather_error_response(status_code, response_text=None):
+    if status_code == 401:
+        return {"error": "Invalid API key", "code": "INVALID_API_KEY", "status": 401}
+    if status_code == 403:
+        return {"error": "API key forbidden", "code": "FORBIDDEN", "status": 403}
+    if status_code == 429:
+        return {"error": "API rate limit exceeded", "code": "RATE_LIMIT_EXCEEDED", "status": 429}
+    if response_text:
+        try:
+            parsed = json.loads(response_text)
+            return parsed
+        except Exception:
+            pass
+    return {"error": "Upstream weather service error", "code": "UPSTREAM_ERROR", "status": status_code}
+
+
+class WeatherCurrentView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        weather_info = data.get("weather", [{}])[0] if data.get("weather") else {}
+        main = data.get("main", {})
+
+        return Response({
+            "current": {
+                "temperature": main.get("temp"),
+                "feels_like": main.get("feels_like"),
+                "humidity": main.get("humidity"),
+                "pressure": main.get("pressure"),
+                "weather_main": weather_info.get("main"),
+                "weather_description": weather_info.get("description"),
+                "weather_icon": weather_info.get("icon"),
+                "wind_speed": data.get("wind", {}).get("speed"),
+                "wind_deg": data.get("wind", {}).get("deg"),
+                "clouds": data.get("clouds", {}).get("all"),
+                "visibility": data.get("visibility"),
+                "dt": data.get("dt"),
+            },
+            "location": {
+                "name": data.get("name"),
+                "country": data.get("sys", {}).get("country"),
+                "lat": data.get("coord", {}).get("lat"),
+                "lng": data.get("coord", {}).get("lon"),
+            },
+        })
+
+
+class WeatherForecastView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        daily_data = {}
+        for item in data.get("list", []):
+            dt_txt = item.get("dt_txt", "")
+            if not dt_txt:
+                continue
+            date_part = dt_txt.split(" ")[0]
+            if date_part not in daily_data:
+                daily_data[date_part] = []
+            daily_data[date_part].append(item)
+
+        daily_forecasts = []
+        for date_str, entries in sorted(daily_data.items()):
+            temps = [e.get("main", {}).get("temp") for e in entries if e.get("main", {}).get("temp") is not None]
+            min_temp = min(temps) if temps else None
+            max_temp = max(temps) if temps else None
+
+            precip_sum = 0.0
+            for e in entries:
+                rain = e.get("rain", {})
+                if rain:
+                    precip_sum += rain.get("3h", 0.0)
+                elif e.get("snow"):
+                    precip_sum += e.get("snow", {}).get("3h", 0.0)
+
+            wind_speeds = [e.get("wind", {}).get("speed", 0) for e in entries]
+            max_wind = max(wind_speeds) if wind_speeds else 0
+
+            midday = next((e for e in entries if "12:00:00" in e.get("dt_txt", "")), entries[0])
+            weather_mid = midday.get("weather", [{}])[0] if midday.get("weather") else {}
+
+            daily_forecasts.append({
+                "date": date_str,
+                "temp_max": max_temp,
+                "temp_min": min_temp,
+                "precipitation_sum": precip_sum,
+                "wind_speed_max": max_wind,
+                "weather_main": weather_mid.get("main"),
+                "weather_description": weather_mid.get("description"),
+                "weather_icon": weather_mid.get("icon"),
+            })
+
+        city_info = data.get("city", {})
+        return Response({
+            "daily": daily_forecasts,
+            "location": {
+                "name": city_info.get("name"),
+                "country": city_info.get("country"),
+                "lat": city_info.get("coord", {}).get("lat"),
+                "lng": city_info.get("coord", {}).get("lon"),
+            },
+        })

@@ -252,7 +252,6 @@ const Onboarding = () => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
-  const [addingEmail, setAddingEmail] = useState(false);
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [uploadingLayout, setUploadingLayout] = useState(false);
@@ -297,11 +296,11 @@ const Onboarding = () => {
   const [recommendationSignature, setRecommendationSignature] = useState("");
   const [recommendationModalOpen, setRecommendationModalOpen] = useState(false);
   const [weeklyForecast, setWeeklyForecast] = useState<{
-    time: string[];
-    temperature_2m_max: number[];
-    temperature_2m_min: number[];
+    date: string[];
+    temp_max: number[];
+    temp_min: number[];
     precipitation_sum: number[];
-    windspeed_10m_max: number[];
+    wind_speed_max: number[];
   } | null>(null);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
@@ -421,6 +420,7 @@ const Onboarding = () => {
 
     (async () => {
       try {
+        const baseUrl = import.meta.env.VITE_API_URL || '';
         const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
           String(lat)
         )}&lon=${encodeURIComponent(String(lng))}`;
@@ -445,31 +445,35 @@ const Onboarding = () => {
           .trim();
         setDetectedLayoutPlace(label || fallbackLabel);
 
-        const forecastUrl = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(
+        const forecastUrl = `${baseUrl}/api/weather/forecast/?lat=${encodeURIComponent(
           String(lat)
-        )}&longitude=${encodeURIComponent(
+        )}&lng=${encodeURIComponent(
           String(lng)
-        )}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max&timezone=auto&forecast_days=7`;
+        )}`;
         const forecastResp = await fetch(forecastUrl, { signal: controller.signal });
+        if (!forecastResp.ok) {
+          const errData = await forecastResp.json().catch(() => ({}));
+          throw new Error(errData.error || "Weather forecast unavailable for this location.");
+        }
         const forecastJson: any = await forecastResp.json();
 
         const daily = forecastJson?.daily || {};
-        const time = Array.isArray(daily?.time) ? daily.time : [];
-        const temperature_2m_max = Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max : [];
-        const temperature_2m_min = Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min : [];
+        const date = Array.isArray(daily?.date) ? daily.date : [];
+        const temp_max = Array.isArray(daily?.temp_max) ? daily.temp_max : [];
+        const temp_min = Array.isArray(daily?.temp_min) ? daily.temp_min : [];
         const precipitation_sum = Array.isArray(daily?.precipitation_sum) ? daily.precipitation_sum : [];
-        const windspeed_10m_max = Array.isArray(daily?.windspeed_10m_max) ? daily.windspeed_10m_max : [];
+        const wind_speed_max = Array.isArray(daily?.wind_speed_max) ? daily.wind_speed_max : [];
 
-        if (!time.length) {
+        if (!date.length) {
           throw new Error("Weather forecast unavailable for this location.");
         }
 
         setWeeklyForecast({
-          time,
-          temperature_2m_max,
-          temperature_2m_min,
+          date,
+          temp_max,
+          temp_min,
           precipitation_sum,
-          windspeed_10m_max,
+          wind_speed_max,
         });
         setWeatherStatus("ready");
       } catch (e: any) {
@@ -673,48 +677,24 @@ const Onboarding = () => {
     });
   };
 
-  const addEmail = async () => {
-    if (!emailInput) return;
-    if (data.inviteEmails.includes(emailInput)) {
-      toast({
-        title: "Already added",
-        description: "This email is already in the list.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setAddingEmail(true);
-    try {
-      const targetWorkspaceId = await ensureTargetWorkspaceId();
-      if (!targetWorkspaceId) {
-        throw new Error("Could not ensure workspace ID.");
-      }
-
-      await api.post(
-        "/workspace-invite/",
-        { email: emailInput },
-        { headers: { "X-Workspace-Id": targetWorkspaceId } }
-      );
-
-      toast({
-        title: "Invitation sent",
-        description: `Invitation email sent to ${emailInput}`,
-      });
-
-      update({ inviteEmails: [...data.inviteEmails, emailInput] });
-      setEmailInput("");
-    } catch (error) {
-      console.error("Failed to send invite:", error);
-      toast({
-        title: "Invitation failed",
-        description: "Could not send invitation email. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setAddingEmail(false);
-    }
-  };
+  const addEmail = () => {
+  if (!emailInput.trim()) return;
+  if (data.inviteEmails.includes(emailInput.trim())) {
+    toast({
+      title: "Already added",
+      description: "This email is already in the list.",
+      variant: "destructive",
+    });
+    return;
+  }
+  // Invites are sent after workspace is created on final step
+  update({ inviteEmails: [...data.inviteEmails, emailInput.trim()] });
+  setEmailInput("");
+  toast({
+    title: "Email added",
+    description: `${emailInput.trim()} will be invited once your workspace is ready.`,
+  });
+};
 
   const buildDemandForecastingPayload = () => {
     const plants = data.demandForecasting.plants
@@ -812,6 +792,7 @@ const Onboarding = () => {
     if (onboardingWorkspaceId) return onboardingWorkspaceId;
     if (!createNewWorkspace) return workspace?.id || null;
 
+    // ── CHANGED: wrapped in try/catch to expose real error ──
     const bootstrap = await api.post("/onboarding/", {
       createNewWorkspace: true,
       workspaceName: data.workspaceName || "New Workspace",
@@ -828,9 +809,25 @@ const Onboarding = () => {
       gatewayId: data.gatewayId,
       gatewayProtocol: data.gatewayProtocol,
       demandForecasting: buildDemandForecastingPayload(),
+    }).catch((err: any) => {
+      // ── ADDED: log exact backend error ──
+      console.error("❌ /onboarding/ failed | Status:", err?.response?.status);
+      console.error("❌ Response:", err?.response?.data);
+      console.error("❌ Message:", err?.message);
+      return null;
     });
+
+    // ── ADDED: guard if request failed ──
+    if (!bootstrap) return null;
+
     const newId = String(bootstrap?.data?.workspace_id || "");
-    if (!newId) return null;
+
+    // ── ADDED: log if response came back but no workspace_id ──
+    if (!newId) {
+      console.error("❌ No workspace_id in response:", bootstrap?.data);
+      return null;
+    }
+
     setOnboardingWorkspaceId(newId);
     return newId;
   }, [onboardingWorkspaceId, createNewWorkspace, workspace?.id, data]);
@@ -897,12 +894,13 @@ const Onboarding = () => {
       });
       if (res.status >= 200 && res.status < 300) {
         await fetchWorkspace();
+        navigate("/workspaces");
       }
     } catch (err) {
       console.error("Onboarding save failed:", err);
     } finally {
       setSaving(false);
-      navigate("/workspaces");
+      //navigate("/workspaces");
     }
   };
 
@@ -1060,6 +1058,8 @@ const Onboarding = () => {
 
   const handleConfirmLayout = async () => {
     if (finalLayoutPolygon.length < 3) return;
+
+    console.log("TOKEN AT CONFIRM:", localStorage.getItem('access_token'));
 
     setSavingLayout(true);
     try {
@@ -1446,85 +1446,81 @@ const Onboarding = () => {
       );
 
     // ─── Step 2 ───
-    if (step === 2)
-      return (
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-bold">Set up your team</h2>
-            <p className="text-muted-foreground mt-1">
-              Invite colleagues to collaborate. You can do this later too.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Team Size</label>
-            <div className="flex flex-wrap gap-3">
-              {TEAM_SIZES.map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => update({ teamSize: size })}
-                  className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
-                    data.teamSize === size
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  {size}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Invite Team Members</label>
-            <div className="flex gap-2">
-              <input
-                type="email"
-                placeholder="colleague@company.com"
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !addingEmail && addEmail()}
-                disabled={addingEmail}
-                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-50"
-              />
+  if (step === 2)
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold">Set up your team</h2>
+          <p className="text-muted-foreground mt-1">
+            Invite colleagues to collaborate. You can do this later too.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Team Size</label>
+          <div className="flex flex-wrap gap-3">
+            {TEAM_SIZES.map((size) => (
               <button
+                key={size}
                 type="button"
-                onClick={addEmail}
-                disabled={addingEmail}
-                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-70"
+                onClick={() => update({ teamSize: size })}
+                className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
+                  data.teamSize === size
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
               >
-                {addingEmail ? "Sending..." : "Add"}
+                {size}
               </button>
-            </div>
-            {data.inviteEmails.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                {data.inviteEmails.map((email) => (
-                  <span
-                    key={email}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm"
-                  >
-                    {email}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        update({
-                          inviteEmails: data.inviteEmails.filter(
-                            (e) => e !== email
-                          ),
-                        })
-                      }
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Press Enter or click Add.
-            </p>
+            ))}
           </div>
         </div>
-      );
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Invite Team Members</label>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              placeholder="colleague@company.com"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addEmail()}
+              className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+            />
+            <button
+              type="button"
+              onClick={addEmail}
+              className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+            >
+              Add
+            </button>
+          </div>
+          {data.inviteEmails.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {data.inviteEmails.map((email) => (
+                <span
+                  key={email}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm"
+                >
+                  {email}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      update({
+                        inviteEmails: data.inviteEmails.filter((e) => e !== email),
+                      })
+                    }
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Press Enter or click Add. Invites will be sent once your workspace is ready.
+          </p>
+        </div>
+      </div>
+    );
 
     // ─── Step 3 ───
     if (step === 3)
@@ -2284,19 +2280,19 @@ const Onboarding = () => {
                           <th className="text-left p-2">Min °C</th>
                           <th className="text-left p-2">Max °C</th>
                           <th className="text-left p-2">Precip (mm)</th>
-                          <th className="text-left p-2">Wind max (km/h)</th>
+                          <th className="text-left p-2">Wind max (m/s)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {weeklyForecast.time.map((day, idx) => (
+                        {weeklyForecast.date.map((day, idx) => (
                           <tr key={day} className="border-t border-border">
                             <td className="p-2 font-mono">
                               {new Date(day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
                             </td>
-                            <td className="p-2">{Number(weeklyForecast.temperature_2m_min[idx] ?? 0).toFixed(1)}</td>
-                            <td className="p-2">{Number(weeklyForecast.temperature_2m_max[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.temp_min[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.temp_max[idx] ?? 0).toFixed(1)}</td>
                             <td className="p-2">{Number(weeklyForecast.precipitation_sum[idx] ?? 0).toFixed(1)}</td>
-                            <td className="p-2">{Number(weeklyForecast.windspeed_10m_max[idx] ?? 0).toFixed(1)}</td>
+                            <td className="p-2">{Number(weeklyForecast.wind_speed_max[idx] ?? 0).toFixed(1)}</td>
                           </tr>
                         ))}
                       </tbody>
