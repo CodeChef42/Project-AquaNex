@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
+from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
