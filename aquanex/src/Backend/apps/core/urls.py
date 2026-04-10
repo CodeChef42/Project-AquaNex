@@ -25,6 +25,8 @@ from .views import (
     IncidentResolveView,
     IncidentSeedView,
     PipelineListCreateView,
+    WeatherCurrentView,
+    WeatherForecastView,
 )
 
 def health(request):
@@ -56,4 +58,6 @@ urlpatterns = [
     path("layout-upload/", LayoutUploadView.as_view(), name="layout-upload"),
     path("layout-status/<str:task_id>/", LayoutTaskStatus.as_view(), name="layout-status"),
     path("pipelines/", PipelineListCreateView.as_view(), name="pipelines-list-create"),
+    path("weather/current/", WeatherCurrentView.as_view(), name="weather-current"),
+    path("weather/forecast/", WeatherForecastView.as_view(), name="weather-forecast"),
 ]

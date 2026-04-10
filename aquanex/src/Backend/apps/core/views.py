@@ -2627,3 +2627,177 @@ class PipelineListCreateView(APIView):
         except Exception as e:
             logger.exception("CRITICAL DB ERROR in Pipeline creation")
             return Response({"error": str(e)}, status=400)
+
+
+def _openweather_error_response(status_code, response_text=None):
+    if status_code == 401:
+        return {"error": "Invalid API key", "code": "INVALID_API_KEY", "status": 401}
+    if status_code == 403:
+        return {"error": "API key forbidden", "code": "FORBIDDEN", "status": 403}
+    if status_code == 429:
+        return {"error": "API rate limit exceeded", "code": "RATE_LIMIT_EXCEEDED", "status": 429}
+    if response_text:
+        try:
+            parsed = json.loads(response_text)
+            return parsed
+        except Exception:
+            pass
+    return {"error": "Upstream weather service error", "code": "UPSTREAM_ERROR", "status": status_code}
+
+
+class WeatherCurrentView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        weather_info = data.get("weather", [{}])[0] if data.get("weather") else {}
+        main = data.get("main", {})
+
+        return Response({
+            "current": {
+                "temperature": main.get("temp"),
+                "feels_like": main.get("feels_like"),
+                "humidity": main.get("humidity"),
+                "pressure": main.get("pressure"),
+                "weather_main": weather_info.get("main"),
+                "weather_description": weather_info.get("description"),
+                "weather_icon": weather_info.get("icon"),
+                "wind_speed": data.get("wind", {}).get("speed"),
+                "wind_deg": data.get("wind", {}).get("deg"),
+                "clouds": data.get("clouds", {}).get("all"),
+                "visibility": data.get("visibility"),
+                "dt": data.get("dt"),
+            },
+            "location": {
+                "name": data.get("name"),
+                "country": data.get("sys", {}).get("country"),
+                "lat": data.get("coord", {}).get("lat"),
+                "lng": data.get("coord", {}).get("lon"),
+            },
+        })
+
+
+class WeatherForecastView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        daily_data = {}
+        for item in data.get("list", []):
+            dt_txt = item.get("dt_txt", "")
+            if not dt_txt:
+                continue
+            date_part = dt_txt.split(" ")[0]
+            if date_part not in daily_data:
+                daily_data[date_part] = []
+            daily_data[date_part].append(item)
+
+        daily_forecasts = []
+        for date_str, entries in sorted(daily_data.items()):
+            temps = [e.get("main", {}).get("temp") for e in entries if e.get("main", {}).get("temp") is not None]
+            min_temp = min(temps) if temps else None
+            max_temp = max(temps) if temps else None
+
+            precip_sum = 0.0
+            for e in entries:
+                rain = e.get("rain", {})
+                if rain:
+                    precip_sum += rain.get("3h", 0.0)
+                elif e.get("snow"):
+                    precip_sum += e.get("snow", {}).get("3h", 0.0)
+
+            wind_speeds = [e.get("wind", {}).get("speed", 0) for e in entries]
+            max_wind = max(wind_speeds) if wind_speeds else 0
+
+            midday = next((e for e in entries if "12:00:00" in e.get("dt_txt", "")), entries[0])
+            weather_mid = midday.get("weather", [{}])[0] if midday.get("weather") else {}
+
+            daily_forecasts.append({
+                "date": date_str,
+                "temp_max": max_temp,
+                "temp_min": min_temp,
+                "precipitation_sum": precip_sum,
+                "wind_speed_max": max_wind,
+                "weather_main": weather_mid.get("main"),
+                "weather_description": weather_mid.get("description"),
+                "weather_icon": weather_mid.get("icon"),
+            })
+
+        city_info = data.get("city", {})
+        return Response({
+            "daily": daily_forecasts,
+            "location": {
+                "name": city_info.get("name"),
+                "country": city_info.get("country"),
+                "lat": city_info.get("coord", {}).get("lat"),
+                "lng": city_info.get("coord", {}).get("lon"),
+            },
+        })
