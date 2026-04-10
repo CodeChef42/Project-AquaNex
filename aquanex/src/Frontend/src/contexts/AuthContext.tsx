@@ -56,6 +56,7 @@ interface AuthContextType {
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
   login: (username: string, password: string) => Promise<void>;
+  loginWithTokens: (accessToken: string, refreshToken: string, userData: User) => void; // NEW
   register: (username: string, password: string, fullName: string, email: string) => Promise<string>;
   logout: () => void;
   fetchWorkspace: () => Promise<void>;
@@ -98,13 +99,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
 
-  // ✅ Stable reference — empty deps because only uses React state setters (always stable) and api (module constant)
   const fetchWorkspaces = useCallback(async () => {
     try {
       const response = await api.get('/onboarding/');
       const listed = Array.isArray(response.data?.workspaces) ? response.data.workspaces : [];
 
-      // Deduplicate by id in case backend returns duplicates
       const unique: Workspace[] = listed.filter(
         (w: Workspace, i: number, arr: Workspace[]) => arr.findIndex((x) => x.id === w.id) === i
       );
@@ -113,7 +112,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (response.data.exists && response.data.workspace) {
         const currentId = String(response.data.workspace.id || "");
         setWorkspace(response.data.workspace);
-        // ✅ Functional update avoids needing selectedWorkspaceId in deps
         setSelectedWorkspaceId((prev) => {
           if (!prev || !unique.some((w: Workspace) => w.id === prev)) {
             localStorage.setItem('selected_workspace_id', currentId);
@@ -128,14 +126,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setWorkspace(null);
       setWorkspaces([]);
     }
-  }, []); // empty — only uses stable setters + api
+  }, []);
 
 
-  // ✅ Stable alias
   const fetchWorkspace = fetchWorkspaces;
 
 
-  // ✅ Depends on fetchWorkspaces which is now stable
   const fetchUser = useCallback(async () => {
     try {
       const response = await api.get('/auth/profile/');
@@ -151,7 +147,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [fetchWorkspaces]);
 
 
-  // ✅ Runs exactly once on mount because fetchUser is stable
   useEffect(() => {
     const token = localStorage.getItem('access_token');
     if (token) {
@@ -193,6 +188,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await fetchWorkspaces();
   };
 
+  // NEW — called after Google signup/login so AuthContext knows about the user immediately
+  const loginWithTokens = useCallback((accessToken: string, refreshToken: string, userData: User) => {
+    localStorage.setItem('access_token', accessToken);
+    localStorage.setItem('refresh_token', refreshToken);
+    setUser(userData);
+    setLoading(false);
+    enableSimulationSession();
+  }, []);
+
 
   const register = async (username: string, password: string, fullName: string, email: string): Promise<string> => {
     const response = await api.post('/auth/register/', {
@@ -229,6 +233,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       workspaces,
       selectedWorkspaceId,
       login,
+      loginWithTokens, // NEW
       register,
       logout,
       fetchWorkspace,

@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LeafDecor } from "../components/LeafDecor";
 import Logo from "@/components/Logo";
 import api from "@/lib/api";
-
+const { loginWithTokens } = useAuth();
 
 // Init zxcvbn once at module level
 zxcvbnOptions.setOptions({
@@ -307,40 +307,38 @@ const SignUp = () => {
               <div className="w-full flex justify-center [&>div]:w-full mb-0.5">
                 <GoogleLogin
                   onSuccess={async (credentialResponse) => {
-                    try {
-                      const response = await fetch(
-                        `${import.meta.env.VITE_API_URL}/auth/google/`,
-                        {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ 
-                            token: credentialResponse.credential,
-                            action: "signup" 
-                          }),
-                        },
-                      );
-                      
-                      const data = await response.json();
-                      
-                      console.log("GOOGLE AUTH RESPONSE:", data); // ADD THIS
-                      
-                      if (response.ok) {
-                        localStorage.setItem("access_token", data.access);
-                        localStorage.setItem("refresh_token", data.refresh);
-                        localStorage.setItem("user", JSON.stringify(data.user));
-                        navigate("/onboarding");
-                      } else {
-                        toast({
-                          title: "Error",
-                          description: data.error || "Login failed",
-                          variant: "destructive",
-                        });
-                        console.error("Google backend error:", data);
-                      }
-                    } catch (error) {
-                      console.error("Google auth error:", error);
+                  try {
+                    const response = await fetch(
+                      `${import.meta.env.VITE_API_URL}/auth/google/`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ 
+                          token: credentialResponse.credential,
+                          action: "signup" 
+                        }),
+                      },
+                    );
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                      loginWithTokens(data.access, data.refresh, data.user); // replaces localStorage calls
+                      navigate("/onboarding");
+                    } else {
+                      toast({
+                        title: "Error",
+                        description: data.error || "Login failed",
+                        variant: "destructive",
+                      });
+                      console.error("Google backend error:", data);
                     }
-                  }}
+                  } catch (error) {
+                    console.error("Google auth error:", error);
+                  }
+                
+                  }}                
+                  
                   onError={() => { console.log("Login Failed"); }}
                 />
               </div>
