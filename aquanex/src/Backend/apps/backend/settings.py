@@ -54,7 +54,11 @@ CORS_ALLOWED_ORIGINS = [
     "https://aquanex-deployment-2-mbilal-1120s-projects.vercel.app",
     "https://project-aquanex-xtn5.onrender.com",
 ]
-
+CSRF_TRUSTED_ORIGINS = [
+    "https://www.aquanex.app",
+    "https://aquanex.app",
+    "https://project-aquanex-xtn5.onrender.com",
+]
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
     r"^https://.*\.onrender\.com$",
@@ -255,7 +259,7 @@ REST_FRAMEWORK = {
 
 # JWT Configuration
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=2),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id'

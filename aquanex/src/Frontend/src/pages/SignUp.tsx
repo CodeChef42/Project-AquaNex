@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LeafDecor } from "../components/LeafDecor";
 import Logo from "@/components/Logo";
 import api from "@/lib/api";
-
+import LoadingScreen from "@/components/LoadingScreen"; 
 
 // Init zxcvbn once at module level
 zxcvbnOptions.setOptions({
@@ -83,6 +83,7 @@ const AvailabilityIndicator = ({
 
 const SignUp = () => {
   // ── State ───────────────────────────────────────────────────────
+  
   const [username, setUsername]                       = useState("");
   const [fullName, setFullName]                       = useState("");
   const [email, setEmail]                             = useState("");
@@ -90,6 +91,7 @@ const SignUp = () => {
   const [confirmPassword, setConfirmPassword]         = useState("");
   const [showPassword, setShowPassword]               = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading]                         = useState(false);
   const [generatedSecretKey, setGeneratedSecretKey]   = useState<string | null>(null);
   const [copied, setCopied]                           = useState(false);
@@ -103,7 +105,7 @@ const SignUp = () => {
   const emailTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Hooks ───────────────────────────────────────────────────────
-  const { register } = useAuth();
+  const { register, loginWithTokens } = useAuth();
   const navigate     = useNavigate();
   const { toast }    = useToast();
 
@@ -213,9 +215,11 @@ const SignUp = () => {
 
   const handleContinue = () => {
     setGeneratedSecretKey(null);
-    navigate("/onboarding");
+    navigate('/onboarding?new=1');
+
   };
 
+  if (googleLoading) return <LoadingScreen variant="onboarding" />;
   // ── Render ──────────────────────────────────────────────────────
   return (
     <div
@@ -302,44 +306,60 @@ const SignUp = () => {
             <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
 
             <div className="mt-4 space-y-4">
+              
               {/* ── Google Auth ── */}
               <div className="w-full flex justify-center [&>div]:w-full mb-0.5">
                 <GoogleLogin
                   onSuccess={async (credentialResponse) => {
-                    try {
-                      const response = await fetch(
-                        `${import.meta.env.VITE_API_URL}/auth/google/`,
-                        {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token: credentialResponse.credential }),
-                        },
-                      );
-                      const data = await response.json();
-                      if (response.ok) {
-                        localStorage.setItem("access", data.access);
-                        localStorage.setItem("refresh", data.refresh);
-                        localStorage.setItem("user", JSON.stringify(data.user));
-                        navigate("/onboarding");
-                      } else {
-                        console.error("Google backend error:", data);
-                      }
-                    } catch (error) {
-                      console.error("Google auth error:", error);
+                  try {
+                    const response = await fetch(
+                      `${import.meta.env.VITE_API_URL}/auth/google/`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ 
+                          token: credentialResponse.credential,
+                          action: "signup" 
+                        }),
+                      },
+                    );
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                      localStorage.clear(); // nuclear clear of any stale tokens
+                      loginWithTokens(data.access, data.refresh, data.user);
+                      setGoogleLoading(true);
+                      await new Promise(resolve => setTimeout(resolve, 1800));
+                      navigate("/onboarding");
+                    } else {
+                      toast({
+                        title: "Error",
+                        description: data.error || "Login failed",
+                        variant: "destructive",
+                      });
+                      console.error("Google backend error:", data);
                     }
-                  }}
+                  } catch (error) {
+                    console.error("Google auth error:", error);
+                  }
+                
+                  }}                
+                  
                   onError={() => { console.log("Login Failed"); }}
                 />
               </div>
 
+              {/* ── The "OR" Divider ── */}
               <div className="flex items-center gap-3 my-1">
                 <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
                 <span className="text-sm text-slate-400 dark:text-slate-500 font-medium px-1">or</span>
                 <div className="h-px flex-1 bg-slate-300 dark:bg-slate-700" />
               </div>
 
+              {/* ── THE FORM TAG ── */}
               <form onSubmit={handleSubmit} className="space-y-4">
-
+                
                 {/* ── Username ── */}
                 <div className="space-y-1">
                   <Label htmlFor="username" className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">

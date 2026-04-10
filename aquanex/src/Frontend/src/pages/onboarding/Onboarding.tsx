@@ -894,12 +894,13 @@ const Onboarding = () => {
       });
       if (res.status >= 200 && res.status < 300) {
         await fetchWorkspace();
+        navigate("/workspaces");
       }
     } catch (err) {
       console.error("Onboarding save failed:", err);
     } finally {
       setSaving(false);
-      navigate("/workspaces");
+      //navigate("/workspaces");
     }
   };
 
@@ -1057,6 +1058,8 @@ const Onboarding = () => {
 
   const handleConfirmLayout = async () => {
     if (finalLayoutPolygon.length < 3) return;
+
+    console.log("TOKEN AT CONFIRM:", localStorage.getItem('access_token'));
 
     setSavingLayout(true);
     try {
