@@ -15,16 +15,10 @@ const SignIn = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [showGoogleSuggestion, setShowGoogleSuggestion] = useState(false);
   const { login, loginWithTokens } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Show Google suggestion popup after 2 seconds
-  useEffect(() => {
-    const timer = setTimeout(() => setShowGoogleSuggestion(true), 2000);
-    return () => clearTimeout(timer);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,7 +26,9 @@ const SignIn = () => {
     try {
       await login(username, password);
       toast({ title: 'Success', description: 'Logged in successfully!' });
-      window.location.href = '/workspaces';
+      setTimeout(() => {
+        navigate('/workspaces');
+      }, 600);
     } catch (error: any) {
       setLoading(false);
       toast({
@@ -44,6 +40,7 @@ const SignIn = () => {
   };
 
   const handleGoogleLogin = async (credentialResponse: any) => {
+    setLoading(true);
     try {
       const response = await fetch(
         `${import.meta.env.VITE_API_URL}/auth/google/`,
@@ -60,8 +57,11 @@ const SignIn = () => {
       if (response.ok) {
         localStorage.clear(); // clear any stale tokens
         loginWithTokens(data.access, data.refresh, data.user);
-        window.location.href = '/workspaces';
+        setTimeout(() => {
+          navigate('/workspaces');
+        }, 600);
       } else {
+        setLoading(false);
         toast({
           title: "Error",
           description: data.error || "Google login failed",
@@ -92,25 +92,7 @@ const SignIn = () => {
     >
       <LeafDecor />
 
-      {/* Google suggestion popup */}
-      {showGoogleSuggestion && (
-        <div className="fixed top-4 right-4 z-50 bg-white border border-cyan-200 rounded-2xl shadow-xl p-4 w-72 animate-in slide-in-from-right-4 duration-300">
-          <button
-            onClick={() => setShowGoogleSuggestion(false)}
-            className="absolute top-2 right-3 text-slate-400 hover:text-slate-600 text-lg leading-none"
-          >
-            ×
-          </button>
-          <p className="text-sm font-semibold text-slate-700 mb-1">Sign in faster</p>
-          <p className="text-xs text-slate-500 mb-3">Use your Google account for quick access.</p>
-          <div className="w-full flex justify-center [&>div]:w-full">
-            <GoogleLogin
-              onSuccess={handleGoogleLogin}
-              onError={() => console.log("Google login failed")}
-            />
-          </div>
-        </div>
-      )}
+
 
       <header className="relative z-10 border-b border-cyan-200/60 bg-white/50 backdrop-blur-md">
         <div className="container mx-auto px-6 max-w-7xl h-20 flex items-center justify-between">
