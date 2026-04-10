@@ -322,6 +322,8 @@ const SignUp = () => {
                       
                       const data = await response.json();
                       
+                      console.log("GOOGLE AUTH RESPONSE:", data); // ADD THIS
+                      
                       if (response.ok) {
                         localStorage.setItem("access_token", data.access);
                         localStorage.setItem("refresh_token", data.refresh);
