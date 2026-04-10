@@ -35,7 +35,8 @@ const Header = () => {
       style={{ backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
       transition={{ duration: 0.4, ease: "easeInOut" }}
     >
-      <div className="section-padding flex items-center justify-between py-4">
+      {/* 🛠️ ONLY CHANGE HERE: Swapped section-padding for px-10 md:px-20 */}
+      <div className="px-10 md:px-20 flex items-center justify-between py-4">
 
         <motion.div
           animate={{ scale: scrolled ? 0.92 : 1 }}

@@ -27,3 +27,4 @@ if worker_pool:
 
 # Auto-discover tasks
 app.autodiscover_tasks()
+

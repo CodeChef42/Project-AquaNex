@@ -1,11 +1,11 @@
 # Environment
-.env
+#.env
 
 # Virtual Environments
-venv/
-.venv/
-env/
-ENV/
+#venv/
+#.venv/
+#env/
+#ENV/
 
 # Dependencies
 node_modules/

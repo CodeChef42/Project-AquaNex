@@ -1,3 +1,4 @@
+from urllib import request
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -5,6 +6,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.decorators import api_view, permission_classes
 from .tasks import layout_process, run_ml_breakage_inference
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 import requests
 import logging
 import json
@@ -19,12 +24,13 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
+from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
-
+from .models import Pipe, PipeSpecification
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,24 @@ def _optional_float(value):
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
+def _workspace_id_from_request(request):
+    """Extracts the active workspace ID from request data, query params, or headers."""
+    data = getattr(request, "data", None)
+    if hasattr(data, "get"):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
+            
+    if hasattr(request, "query_params"):
+        query_value = request.query_params.get("workspace_id")
+        if query_value:
+            return str(query_value).strip()
+            
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
+        
+    return ""
 
 def _coerce_prediction_timestamp(value):
     dt = parse_datetime(str(value or "").strip()) if value else None
@@ -71,47 +95,77 @@ def _coerce_prediction_timestamp(value):
 
 
 def _incident_fingerprint(gateway_id, incident_type):
-    return hashlib.sha256(f"{gateway_id}:{incident_type}".encode("utf-8")).hexdigest()
+    # Appending a UUID guarantees every new incident gets a unique DB row,
+    # preventing old "resolved" incidents from blocking new ones.
+    unique_string = f"{gateway_id}:{incident_type}:{uuid.uuid4()}"
+    return hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
 
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
+    print("\n" + "="*50)
+    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
+    print(f"📦 PREDICTION PAYLOAD: {prediction}")
+    
     if not isinstance(prediction, dict):
+        print("❌ ABORT: Prediction is not a valid dictionary.")
         return None
 
     now_ts = timezone.now()
 
     if prediction.get("is_anomaly") is not True:
-        # If normal data comes in, transition 'open' incidents to 'recovering'
-        # This signals the frontend to ask for confirmation.
-        Incident.objects.filter(
+        print("ℹ️ STATUS: Normal data received. is_anomaly is False.")
+        updated = Incident.objects.filter(
             workspace=workspace,
             gateway_id=gateway_id,
-            status="open",
+            status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
+        print(f"ℹ️ Transitioned {updated} ongoing incidents to recovering.")
+        print("="*50 + "\n")
         return None
 
+    print("⚠️ ANOMALY CONFIRMED! Proceeding to database insertion logic...")
+    
     incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
     severity = str(prediction.get("severity") or "").strip().lower() or None
     detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
-    fingerprint = _incident_fingerprint(gateway_id, incident_type)
     details = {"prediction": prediction}
 
-    # Check for recovering incidents first - if we get a new anomaly for a recovering incident, reopen it
-    recovering = Incident.objects.filter(
-        workspace=workspace,
-        gateway_id=gateway_id,
-        incident_type=incident_type,
-        status="recovering"
+    # 1. Check for ongoing
+    ongoing_incident = Incident.objects.filter(
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="ongoing"
     ).first()
 
-    if recovering:
-        recovering.status = "open"
-        recovering.last_seen_at = detected_at
-        recovering.severity = severity
-        recovering.details = details
-        recovering.save()
-        return {"id": str(recovering.id), "created": False}
+    if ongoing_incident:
+        print(f"🔄 FOUND ONGOING: Updating existing incident ID: {ongoing_incident.id}")
+        ongoing_incident.last_seen_at = detected_at
+        ongoing_incident.severity = severity
+        ongoing_incident.details = details
+        ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
+        print("="*50 + "\n")
+        return {"id": str(ongoing_incident.id), "created": False}
 
+    # 2. Check for recovering
+    recovering_incident = Incident.objects.filter(
+        workspace=workspace, gateway_id=gateway_id,
+        incident_type=incident_type, status="recovering"
+    ).first()
+
+    if recovering_incident:
+        print(f"🔄 FOUND RECOVERING: Re-opening incident ID: {recovering_incident.id}")
+        recovering_incident.status = "ongoing"
+        recovering_incident.last_seen_at = detected_at
+        recovering_incident.severity = severity
+        recovering_incident.details = details
+        recovering_incident.save()
+        print("="*50 + "\n")
+        return {"id": str(recovering_incident.id), "created": False}
+
+    # 3. Create Brand New
+    print("✨ NO ACTIVE INCIDENTS FOUND. Creating a brand new DB row...")
+    fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    print(f"🔑 Generated Unique Fingerprint: {fingerprint}")
+    
     try:
         with transaction.atomic():
             incident = Incident.objects.create(
@@ -119,50 +173,19 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
                 gateway_id=gateway_id,
                 incident_type=incident_type,
                 severity=severity,
-                status="open",
+                status="ongoing",
                 detected_at=detected_at,
                 last_seen_at=detected_at,
                 fingerprint=fingerprint,
                 details=details,
             )
+            print(f"✅ SUCCESS! Created new Incident ID: {incident.id}")
+            print("="*50 + "\n")
             return {"id": str(incident.id), "created": True}
-    except IntegrityError:
-        updated = Incident.objects.filter(
-            workspace=workspace,
-            gateway_id=gateway_id,
-            incident_type=incident_type,
-            status="open",
-        ).update(
-            last_seen_at=detected_at,
-            severity=severity,
-            details=details,
-        )
-        if updated:
-            incident = Incident.objects.filter(
-                workspace=workspace,
-                gateway_id=gateway_id,
-                incident_type=incident_type,
-                status="open",
-            ).first()
-            if incident:
-                return {"id": str(incident.id), "created": False}
+    except Exception as e:
+        print(f"❌ DATABASE ERROR: Failed to insert row! Error: {str(e)}")
+        print("="*50 + "\n")
         return None
-
-
-def _workspace_id_from_request(request):
-    data = getattr(request, "data", None)
-    if hasattr(data, "get"):
-        data_value = data.get("workspace_id") or data.get("workspaceId")
-        if data_value:
-            return str(data_value).strip()
-    if hasattr(request, "query_params"):
-        query_value = request.query_params.get("workspace_id")
-        if query_value:
-            return str(query_value).strip()
-    header_value = request.headers.get("X-Workspace-Id")
-    if header_value:
-        return str(header_value).strip()
-    return ""
 
 
 def _resolve_user_workspace(request, create_if_missing=False):
@@ -1236,14 +1259,38 @@ class ChangePasswordView(APIView):
             serializer.save()
             return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            'user': UserSerializer(user).data,
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }, status=status.HTTP_201_CREATED)
 
 
+class CheckAvailabilityView(APIView):
+    permission_classes = []
+
+    def post(self, request):
+        from django.contrib.auth import get_user_model
+        import random
+        User = get_user_model()
+        data = request.data
+        result = {}
+
+        if 'username' in data:
+            uname = data['username'].strip()
+            taken = User.objects.filter(username__iexact=uname).exists()
+            result['username_taken'] = taken
+            if taken:
+                # Generate 3 suggestions
+                suggestions = []
+                for suffix in [str(random.randint(10, 99)), str(random.randint(100, 999)), f"_{random.randint(1, 99)}"]:
+                    candidate = f"{uname}{suffix}"
+                    if not User.objects.filter(username__iexact=candidate).exists():
+                        suggestions.append(candidate)
+                result['suggestions'] = suggestions[:3]
+
+        if 'email' in data:
+            result['email_taken'] = User.objects.filter(
+                email__iexact=data['email'].strip()
+            ).exists()
+
+        return Response(result, status=200)
+    
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -1258,7 +1305,84 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
         })
 
+import logging
+logger = logging.getLogger(__name__)
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_auth(request):
+    token = request.data.get('token')
+    # 1️⃣ Grab the action (defaults to 'login' if frontend doesn't send it)
+    action = request.data.get('action', 'login') 
+
+    if not token:
+        return Response({'error': 'No token provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    client_id = str(settings.GOOGLE_CLIENT_ID).strip() # (Make sure you removed the VITE_ part here based on our last fix!)
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=client_id
+        )
+
+        email = idinfo.get('email')
+        full_name = idinfo.get('name', '')
+        google_sub = idinfo.get('sub')
+
+        if not email:
+            return Response({'error': 'Google account email not available'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=email).first()
+
+        # 🚨 2️⃣ THE NEW CHECK: If they clicked "Sign Up" but are already in the database
+        if user and action == 'signup':
+            return Response(
+                {'error': 'Account already exists. Please log in instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 🚨 3️⃣ OPTIONAL REVERSE CHECK: If they clicked "Log In" but don't have an account
+        if not user and action == 'login':
+            return Response(
+                {'error': 'Account not found. Please sign up first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # If they don't exist and are trying to sign up, create the user
+        if not user and action == 'signup':
+            base_username = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0]) or 'user'
+            username = base_username
+            counter = 1
+
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=None,
+                full_name=full_name or username,
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                'user': UserSerializer(user).data, 
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'google_sub': google_sub,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
@@ -1290,13 +1414,13 @@ class OnboardingView(APIView):
         if workspace is None:
             incomplete = Workspace.objects.filter(
                 owner=user,
-                workspace_name='',
+                workspace_name__in=['', None],
                 status='active'
             ).first()
 
             if incomplete and not create_new_workspace:
                 workspace = incomplete
-                workspace.workspace_name = data.get('workspaceName', '') or 'New Workspace'
+                workspace.workspace_name = data.get('workspaceName') or ''
                 workspace.company_name = resolved_company_name
                 workspace.company_type = data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else '')
                 workspace.location = data.get('location', '') or (fallback_workspace.location if fallback_workspace else '')
@@ -1320,7 +1444,61 @@ class OnboardingView(APIView):
                 workspace.status = 'active'
                 workspace.save()
             else:
-                workspace = Workspace.objects.create()
+                workspace = Workspace.objects.create(
+                    owner=user,
+                    workspace_name=data.get('workspaceName', ''),
+                    company_name=resolved_company_name,
+                    company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
+                    location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
+                    team_size=data.get('teamSize', ''),
+                    modules=data.get('modules', []),
+                    gateway_id=data.get('gatewayId', ''),
+                    devices=data.get('devices', []),
+                    invite_emails=data.get('inviteEmails', []),
+                    threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
+                    threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
+                    threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
+                    notifications=data.get('notifications', []),
+                    demand_forecasting_plants=data.get('demandForecasting', {}).get('plants', []),
+                    demand_forecasting_systems=data.get('demandForecasting', {}).get('waterSystems', []),
+                    layout_polygon=data.get('layout_polygon', []),
+                    layout_area_m2=float(data.get('layout_area_m2', 0)),
+                    layout_notes=data.get('layout_notes', ''),
+                    layout_file_name=data.get('layout_file_name'),
+                    layout_status='processing' if data.get('layout_file_name') else 'idle',
+                    layout_job_error=None,
+                    status='active',
+                )
+        else:
+            workspace.workspace_name = data.get('workspaceName') or ''
+            if fallback_workspace and str(workspace.id) != str(fallback_workspace.id):
+                workspace.company_name = fallback_company_name or workspace.company_name
+            elif incoming_company_name:
+                workspace.company_name = incoming_company_name
+            elif not workspace.company_name and fallback_company_name:
+                workspace.company_name = fallback_company_name
+            workspace.company_type = data.get('companyType', workspace.company_type)
+            workspace.location = data.get('location', workspace.location)
+            workspace.team_size = data.get('teamSize', workspace.team_size)
+            workspace.modules = data.get('modules', workspace.modules)
+            workspace.gateway_id = data.get('gatewayId', workspace.gateway_id)
+            workspace.devices = data.get('devices', workspace.devices)
+            workspace.invite_emails = data.get('inviteEmails', workspace.invite_emails)
+            workspace.threshold_soil_moisture = data.get('thresholds', {}).get('soilMoisture', workspace.threshold_soil_moisture)
+            workspace.threshold_ph = data.get('thresholds', {}).get('ph', workspace.threshold_ph)
+            workspace.threshold_pressure = data.get('thresholds', {}).get('pressure', workspace.threshold_pressure)
+            workspace.notifications = data.get('notifications', workspace.notifications)
+            workspace.demand_forecasting_plants = data.get('demandForecasting', {}).get('plants', workspace.demand_forecasting_plants)
+            workspace.demand_forecasting_systems = data.get('demandForecasting', {}).get('waterSystems', workspace.demand_forecasting_systems)
+            workspace.layout_polygon = data.get('layout_polygon', workspace.layout_polygon)
+            workspace.layout_area_m2 = float(data.get('layout_area_m2', workspace.layout_area_m2))
+            workspace.layout_notes = data.get('layout_notes', workspace.layout_notes)
+            workspace.layout_file_name = data.get('layout_file_name', workspace.layout_file_name)
+            workspace.layout_status = 'processing' if data.get('layout_file_name') else workspace.layout_status
+            workspace.layout_job_error = None
+            workspace.status = 'active'
+            workspace.save()
+
 
         for email in data.get('inviteEmails', []):
             WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
@@ -1368,14 +1546,23 @@ class WorkspaceInviteView(APIView):
             workspace.invite_emails = current_invites + [email]
             workspace.save(update_fields=["invite_emails"])
 
-        WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
+        invite, _ = WorkspaceInvite.objects.update_or_create(
+            workspace=workspace, email=email,
+            defaults={
+                'token': uuid.uuid4(),
+                'expires_at': timezone.now() + timedelta(hours=72),
+                'status': 'pending',
+            }
+        )
 
         inviter_name = request.user.full_name or request.user.username or "A colleague"
         workspace_name = workspace.workspace_name or workspace.company_name or "AquaNex Workspace"
+        frontend_url = settings.FRONTEND_URL.rstrip('/')
+        invite_link = f"{frontend_url}/accept-invite/{invite.token}"
 
         try:
             from .utils import send_workspace_invite
-            success = send_workspace_invite(email, workspace_name, inviter_name)
+            success = send_workspace_invite(email, workspace_name, inviter_name, invite_link)
             if success:
                 return Response({"success": True, "message": f"Invitation sent to {email}"})
             else:
@@ -1383,6 +1570,75 @@ class WorkspaceInviteView(APIView):
         except Exception as e:
             logger.error(f"Failed to send invite email: {e}")
             return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AcceptInviteView(APIView):
+    permission_classes = [AllowAny]
+
+    def _get_valid_invite(self, token):
+        """Look up invite by token and validate it is still usable."""
+        try:
+            invite = WorkspaceInvite.objects.select_related('workspace').get(token=token)
+        except WorkspaceInvite.DoesNotExist:
+            return None, "Invalid invitation link."
+        if invite.status != 'pending':
+            return None, "This invitation has already been used."
+        if invite.expires_at and invite.expires_at < timezone.now():
+            return None, "This invitation link has expired."
+        return invite, None
+
+    def get(self, request, token):
+        invite, error = self._get_valid_invite(token)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+        workspace_name = invite.workspace.workspace_name or invite.workspace.company_name or "AquaNex Workspace"
+        return Response({"email": invite.email, "workspace_name": workspace_name})
+
+    def post(self, request, token):
+        invite, error = self._get_valid_invite(token)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        full_name = str(request.data.get('full_name', '')).strip()
+        password = str(request.data.get('password', '')).strip()
+
+        if not full_name:
+            return Response({"error": "Full name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(password) < 8:
+            return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(email=invite.email).exists():
+            return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Derive a unique username from the email local-part
+        base = re.sub(r'[^a-zA-Z0-9_]', '', invite.email.split('@')[0]) or 'user'
+        username = base
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base}{counter}"
+            counter += 1
+
+        import secrets as _secrets
+        from django.contrib.auth.hashers import make_password as _make_password
+
+        user = User.objects.create_user(
+            username=username,
+            password=password,
+            full_name=full_name,
+            email=invite.email,
+        )
+        user.secret_key_hash = _make_password(_secrets.token_urlsafe(16))
+        user.save(update_fields=['secret_key_hash'])
+
+        invite.status = 'accepted'
+        invite.save(update_fields=['status'])
+
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'user': UserSerializer(user).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 class WorkspaceListView(APIView):
@@ -2137,7 +2393,33 @@ def predict_breakage(request):
             'error': 'Internal server error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific incident by its primary key (ID).
+    Enforces workspace isolation so users can only access their own incidents.
+    """
+    serializer_class = IncidentSerializer
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        requested_workspace_id = _workspace_id_from_request(self.request)
+        owner_workspaces = Workspace.objects.filter(owner=self.request.user)
+
+        if requested_workspace_id:
+            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
+        elif owner_workspaces.exists():
+            # Fallback to all incidents in all workspaces owned by the current user.
+            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
+        else:
+            queryset = Incident.objects.none()
+
+        # Last-resort fallback for environments where workspace ownership linkage
+        # is not aligned but incidents exist in the database.
+        if not queryset.exists():
+            queryset = Incident.objects.all()
+
+        return queryset
+    
 class IncidentListView(generics.ListAPIView):
     serializer_class = IncidentSerializer
     permission_classes = [IsAuthenticated]
@@ -2276,3 +2558,247 @@ class IncidentSeedView(APIView):
             },
             status=201,
         )
+
+class PipelineListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Get the workspace ID from headers or query params
+        workspace_id = request.headers.get('X-Workspace-Id') or request.GET.get('workspace_id')
+        
+        if not workspace_id:
+            return Response({"error": "workspace_id is required to fetch pipelines"}, status=400)
+
+        # 2. Grab all pipes for this workspace AND their attached specs
+        pipes = Pipe.objects.filter(workspace_id=workspace_id).select_related('pipespec')
+        
+        # 3. Mash them into the exact flat format React-Leaflet expects
+        results = []
+        for pipe in pipes:
+            spec = getattr(pipe, 'pipespec', None) 
+            
+            results.append({
+                "pipe_id": pipe.pipe_id,
+                "start_lat": float(pipe.start_lat),
+                "start_lng": float(pipe.start_lng),
+                "end_lat": float(pipe.end_lat),
+                "end_lng": float(pipe.end_lng),
+                "pipeline_category": spec.pipe_category if spec else "Unknown",
+                "material": spec.material if spec else "Unknown",
+                "nominal_dia": float(spec.nominal_dia) if spec and spec.nominal_dia else 0,
+            })
+            
+        return Response(results, status=200)
+
+    @transaction.atomic
+    def post(self, request):
+        data = request.data
+        workspace_id = request.headers.get('X-Workspace-Id') or data.get('workspace_id')
+        
+        # 🎯 GRAB THE CUSTOM STRING FROM REACT
+        custom_pipe_id = data.get('pipe_id') 
+
+        if not workspace_id or not custom_pipe_id:
+            return Response({"error": "workspace_id and pipe_id are required"}, status=400)
+
+        try:
+            # 🚀 CREATE PIPE WITH CUSTOM ID
+            pipe = Pipe.objects.create(
+                pipe_id=custom_pipe_id,  
+                workspace_id=workspace_id,
+                start_lat=data.get('start_lat'),
+                start_lng=data.get('start_lng'),
+                end_lat=data.get('end_lat'),
+                end_lng=data.get('end_lng')
+            )
+
+            # 🛠️ CREATE SPECS ATTACHED TO PIPE
+            PipeSpecification.objects.create(
+                section=pipe,
+                pipe_category=data.get('pipeline_category'),
+                material=data.get('material'),
+                pressure_class=data.get('pressure_class'),
+                nominal_dia=data.get('nominal_dia') or 0,
+                depth=data.get('depth') or 0,
+                water_capacity=data.get('water_capacity') or 0
+            )
+
+            return Response({"success": True, "pipe_id": pipe.pipe_id}, status=status.HTTP_201_CREATED)
+    
+        except Exception as e:
+            logger.exception("CRITICAL DB ERROR in Pipeline creation")
+            return Response({"error": str(e)}, status=400)
+
+
+def _openweather_error_response(status_code, response_text=None):
+    if status_code == 401:
+        return {"error": "Invalid API key", "code": "INVALID_API_KEY", "status": 401}
+    if status_code == 403:
+        return {"error": "API key forbidden", "code": "FORBIDDEN", "status": 403}
+    if status_code == 429:
+        return {"error": "API rate limit exceeded", "code": "RATE_LIMIT_EXCEEDED", "status": 429}
+    if response_text:
+        try:
+            parsed = json.loads(response_text)
+            return parsed
+        except Exception:
+            pass
+    return {"error": "Upstream weather service error", "code": "UPSTREAM_ERROR", "status": status_code}
+
+
+class WeatherCurrentView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        weather_info = data.get("weather", [{}])[0] if data.get("weather") else {}
+        main = data.get("main", {})
+
+        return Response({
+            "current": {
+                "temperature": main.get("temp"),
+                "feels_like": main.get("feels_like"),
+                "humidity": main.get("humidity"),
+                "pressure": main.get("pressure"),
+                "weather_main": weather_info.get("main"),
+                "weather_description": weather_info.get("description"),
+                "weather_icon": weather_info.get("icon"),
+                "wind_speed": data.get("wind", {}).get("speed"),
+                "wind_deg": data.get("wind", {}).get("deg"),
+                "clouds": data.get("clouds", {}).get("all"),
+                "visibility": data.get("visibility"),
+                "dt": data.get("dt"),
+            },
+            "location": {
+                "name": data.get("name"),
+                "country": data.get("sys", {}).get("country"),
+                "lat": data.get("coord", {}).get("lat"),
+                "lng": data.get("coord", {}).get("lon"),
+            },
+        })
+
+
+class WeatherForecastView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        if not lat or not lng:
+            return Response({"error": "lat and lng are required query parameters"}, status=400)
+
+        try:
+            lat_val = float(lat)
+            lng_val = float(lng)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid lat/lng values"}, status=400)
+
+        if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
+            return Response({"error": "Coordinates out of range"}, status=400)
+
+        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {"lat": lat_val, "lon": lng_val, "appid": api_key, "units": "metric"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to weather service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            data = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from weather service"}, status=502)
+
+        daily_data = {}
+        for item in data.get("list", []):
+            dt_txt = item.get("dt_txt", "")
+            if not dt_txt:
+                continue
+            date_part = dt_txt.split(" ")[0]
+            if date_part not in daily_data:
+                daily_data[date_part] = []
+            daily_data[date_part].append(item)
+
+        daily_forecasts = []
+        for date_str, entries in sorted(daily_data.items()):
+            temps = [e.get("main", {}).get("temp") for e in entries if e.get("main", {}).get("temp") is not None]
+            min_temp = min(temps) if temps else None
+            max_temp = max(temps) if temps else None
+
+            precip_sum = 0.0
+            for e in entries:
+                rain = e.get("rain", {})
+                if rain:
+                    precip_sum += rain.get("3h", 0.0)
+                elif e.get("snow"):
+                    precip_sum += e.get("snow", {}).get("3h", 0.0)
+
+            wind_speeds = [e.get("wind", {}).get("speed", 0) for e in entries]
+            max_wind = max(wind_speeds) if wind_speeds else 0
+
+            midday = next((e for e in entries if "12:00:00" in e.get("dt_txt", "")), entries[0])
+            weather_mid = midday.get("weather", [{}])[0] if midday.get("weather") else {}
+
+            daily_forecasts.append({
+                "date": date_str,
+                "temp_max": max_temp,
+                "temp_min": min_temp,
+                "precipitation_sum": precip_sum,
+                "wind_speed_max": max_wind,
+                "weather_main": weather_mid.get("main"),
+                "weather_description": weather_mid.get("description"),
+                "weather_icon": weather_mid.get("icon"),
+            })
+
+        city_info = data.get("city", {})
+        return Response({
+            "daily": daily_forecasts,
+            "location": {
+                "name": city_info.get("name"),
+                "country": city_info.get("country"),
+                "lat": city_info.get("coord", {}).get("lat"),
+                "lng": city_info.get("coord", {}).get("lon"),
+            },
+        })

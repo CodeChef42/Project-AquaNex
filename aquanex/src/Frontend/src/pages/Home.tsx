@@ -98,9 +98,9 @@ const Dashboard = () => {
     const timer = window.setInterval(() => {
       fetchWorkspace();
       fetchIncidents();
-    }, 8000);
+    }, 30000);
     return () => window.clearInterval(timer);
-  }, [fetchWorkspace]);
+  }, []);
 
   return (
     <div className="p-8 space-y-8">

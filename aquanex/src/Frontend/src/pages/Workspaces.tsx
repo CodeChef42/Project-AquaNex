@@ -10,6 +10,7 @@ import { divIcon } from "leaflet";
 import Logo from "@/components/Logo";
 
 
+
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
 const workspacePinIcon = divIcon({
   html: '<div style="font-size:30px;line-height:30px;">📍</div>',
@@ -17,6 +18,7 @@ const workspacePinIcon = divIcon({
   iconSize: [30, 30],
   iconAnchor: [15, 30],
 });
+
 
 
 const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
@@ -35,10 +37,15 @@ const FitMapToPoints = ({ points }: { points: [number, number][] }) => {
 };
 
 
+
 const Workspaces = () => {
   const navigate = useNavigate();
   const { workspaces, workspace, fetchWorkspaces, selectWorkspace, logout, deleteWorkspace } = useAuth();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteInput, setDeleteInput] = useState("");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
 
   const formatArea = (areaM2: number) => {
     const area = Number.isFinite(areaM2) ? Math.max(0, areaM2) : 0;
@@ -47,7 +54,9 @@ const Workspaces = () => {
     return `${Math.round(area).toLocaleString()} m²`;
   };
 
+
   useEffect(() => { fetchWorkspaces(); }, [fetchWorkspaces]);
+
 
   const polygons = useMemo(() =>
     workspaces.map((item) => {
@@ -63,9 +72,11 @@ const Workspaces = () => {
     [workspaces]
   );
 
+
   const mapPoints = useMemo<[number, number][]>(() =>
     polygons.flatMap((item) => item.positions), [polygons]
   );
+
 
   const mapPins = useMemo(() =>
     polygons.map((item) => {
@@ -83,20 +94,25 @@ const Workspaces = () => {
     [polygons]
   );
 
+
   const handleOpenWorkspace = (workspaceId: string) => {
     selectWorkspace(workspaceId);
     navigate("/home");
   };
 
-  const handleDelete = async (workspaceId: string) => {
-    if (!confirm("Are you sure you want to delete this workspace? This cannot be undone.")) return;
-    setDeletingId(workspaceId);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
+    setDeleteTarget(null);
+    setDeleteInput("");
     try {
-      await deleteWorkspace(workspaceId);
+      await deleteWorkspace(deleteTarget.id);
     } finally {
       setDeletingId(null);
     }
   };
+
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -109,13 +125,14 @@ const Workspaces = () => {
         <Logo withText={true} size="md" />
         <Button
           variant="ghost"
-          onClick={() => logout()}
+          onClick={() => setShowLogoutConfirm(true)}
           className="text-slate-500 hover:text-red-500 hover:bg-red-50 gap-2"
         >
           <LogOut className="h-4 w-4" />
           <span>Logout</span>
         </Button>
       </header>
+
 
       {/* Page content */}
       <div className="flex-1 p-6 space-y-6 max-w-screen-2xl mx-auto w-full">
@@ -204,7 +221,7 @@ const Workspaces = () => {
                       size="sm"
                       disabled={deletingId === item.id}
                       className="text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                      onClick={() => handleDelete(item.id)}
+                      onClick={() => { setDeleteTarget({ id: item.id, name: title }); setDeleteInput(""); }}
                     >
                       {deletingId === item.id ? "Deleting..." : "Delete"}
                     </Button>
@@ -216,8 +233,69 @@ const Workspaces = () => {
         </div>
 
       </div>
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 space-y-4">
+            <h2 className="text-lg font-bold text-slate-800">Logout</h2>
+            <p className="text-sm text-slate-500">Are you sure you want to log out?</p>
+            <div className="flex gap-3 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setShowLogoutConfirm(false)}>
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                onClick={() => { logout(); setShowLogoutConfirm(false); }}
+              >
+                Logout
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 space-y-4">
+            <h2 className="text-lg font-bold text-slate-800">Delete Workspace</h2>
+            <p className="text-sm text-slate-500">
+              This action <span className="font-semibold text-red-500">cannot be undone</span>. This will permanently delete the workspace and all associated data.
+            </p>
+            <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-sm text-slate-700">
+              Please type <span className="font-mono font-bold text-red-600">DELETE {deleteTarget.name.toUpperCase()}</span> to confirm.
+            </div>
+            <input
+              type="text"
+              value={deleteInput}
+              onChange={(e) => setDeleteInput(e.target.value)}
+              placeholder={`DELETE ${deleteTarget.name.toUpperCase()}`}
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+            <div className="flex gap-3 pt-1">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => { setDeleteTarget(null); setDeleteInput(""); }}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                disabled={deleteInput !== `DELETE ${deleteTarget.name.toUpperCase()}` || deletingId === deleteTarget.id}
+                onClick={handleDelete}
+              >
+                {deletingId === deleteTarget.id ? "Deleting..." : "Delete Workspace"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
+
 
 export default Workspaces;

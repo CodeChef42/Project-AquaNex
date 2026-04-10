@@ -114,25 +114,37 @@ const insights = [
   }
 ];
 
-const weatherCodeLabel = (code?: number | null) => {
-  const map: Record<number, string> = {
-    0: "Clear",
-    1: "Mostly Clear",
-    2: "Partly Cloudy",
-    3: "Overcast",
-    45: "Fog",
-    48: "Rime Fog",
-    51: "Light Drizzle",
-    53: "Drizzle",
-    55: "Dense Drizzle",
-    61: "Light Rain",
-    63: "Rain",
-    65: "Heavy Rain",
-    80: "Rain Showers",
-    95: "Thunderstorm",
+const weatherCodeLabel = (code?: string | null) => {
+  const map: Record<string, string> = {
+    "Clear": "Clear",
+    "Clouds": "Cloudy",
+    "Few clouds": "Few Clouds",
+    "Scattered clouds": "Scattered",
+    "Broken clouds": "Broken",
+    "Overcast": "Overcast",
+    "Mist": "Mist",
+    "Fog": "Fog",
+    "Haze": "Haze",
+    "Smoke": "Smoke",
+    "Dust": "Dust",
+    "Sand": "Sand",
+    "Ash": "Ash",
+    "Squall": "Squall",
+    "Tornado": "Tornado",
+    "Rain": "Rain",
+    "Drizzle": "Drizzle",
+    "Shower rain": "Rain Showers",
+    "Thunderstorm": "Thunderstorm",
+    "Snow": "Snow",
+    "Light snow": "Light Snow",
+    "Heavy snow": "Heavy Snow",
+    "Sleet": "Sleet",
+    "Light rain": "Light Rain",
+    "Moderate rain": "Moderate Rain",
+    "Heavy rain": "Heavy Rain",
   };
-  if (typeof code !== "number") return "Unknown";
-  return map[code] || `Weather Code ${code}`;
+  if (typeof code !== "string") return "Unknown";
+  return map[code] || code;
 };
 
 const normalizeLocationQueries = (rawLocation: string): string[] => {
@@ -297,7 +309,6 @@ const DemandForecasting = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
-      // Prioritize layout centroid if available, otherwise fallback to workspace text location
       let lat: number | null = null;
       let lng: number | null = null;
       let resolvedName = workspaceLocation || "Unknown Location";
@@ -305,7 +316,6 @@ const DemandForecasting = () => {
       if (layoutCentroid) {
         lat = layoutCentroid.lat;
         lng = layoutCentroid.lng;
-        // Reverse geocode to get a nice name if we have coordinates
         try {
             const revGeo = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
             const revData = await revGeo.json();
@@ -319,7 +329,6 @@ const DemandForecasting = () => {
             resolvedName = "Layout Location";
         }
       } else if (workspaceLocation) {
-         // Text search fallback
           const queries = normalizeLocationQueries(workspaceLocation);
           for (const query of queries) {
             try {
@@ -348,37 +357,44 @@ const DemandForecasting = () => {
       setWeatherLoading(true);
       setWeatherError("");
       try {
-        const weatherResp = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`
-        );
-        if (!weatherResp.ok) throw new Error("Failed to fetch weather data");
-        const data = await weatherResp.json();
-        
-        // Map 7-day forecast
-        const daily = data.daily || {};
-        const days = daily.time || [];
-        const sevenDay = days.map((dateStr: string, i: number) => ({
-            date: new Date(dateStr).toLocaleDateString('en-US', { weekday: 'short' }),
-            maxTemp: daily.temperature_2m_max?.[i],
-            minTemp: daily.temperature_2m_min?.[i],
-            weatherCode: daily.weather_code?.[i],
-            precip: daily.precipitation_sum?.[i]
+        const baseUrl = import.meta.env.VITE_API_URL || '';
+        const currentResp = await fetch(`${baseUrl}/api/weather/current/?lat=${lat}&lng=${lng}`);
+        if (!currentResp.ok) {
+          const errData = await currentResp.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to fetch current weather");
+        }
+        const currentData = await currentResp.json();
+
+        const forecastResp = await fetch(`${baseUrl}/api/weather/forecast/?lat=${lat}&lng=${lng}`);
+        if (!forecastResp.ok) {
+          const errData = await forecastResp.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to fetch forecast");
+        }
+        const forecastData = await forecastResp.json();
+
+        const daily = forecastData.daily || [];
+        const sevenDay = daily.map((day: any) => ({
+            date: new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' }),
+            maxTemp: day.temp_max,
+            minTemp: day.temp_min,
+            weatherCode: day.weather_main,
+            precip: day.precipitation_sum
         })).slice(0, 7);
 
         setWeatherData({
-          ...data,
-          locationName: resolvedName,
+          current: currentData.current,
+          locationName: currentData.location?.name || resolvedName,
           sevenDayForecast: sevenDay
         });
-      } catch (err) {
-        setWeatherError("Failed to load weather data.");
+      } catch (err: any) {
+        setWeatherError(err.message || "Failed to load weather data.");
       } finally {
         setWeatherLoading(false);
       }
     };
 
     fetchWeather();
-  }, [workspaceLocation, layoutCentroid]); // Re-run if text location or layout changes
+  }, [workspaceLocation, layoutCentroid]);
 
   const getTrendIcon = (trend: any) => {
     if (trend === "increase") return <TrendingUp className="w-5 h-5 text-red-500" />;
@@ -530,19 +546,19 @@ const DemandForecasting = () => {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="rounded-lg border p-4">
                     <p className="text-xs text-muted-foreground">Condition</p>
-                    <p className="text-lg font-semibold">{weatherCodeLabel(weatherData.current.weather_code)}</p>
+                    <p className="text-lg font-semibold">{weatherCodeLabel(weatherData.current.weather_main)}</p>
                     </div>
                     <div className="rounded-lg border p-4">
                     <p className="text-xs text-muted-foreground">Temperature</p>
-                    <p className="text-lg font-semibold">{weatherData.current.temperature_2m}°C</p>
+                    <p className="text-lg font-semibold">{Math.round(weatherData.current.temperature)}°C</p>
                     </div>
                     <div className="rounded-lg border p-4">
                     <p className="text-xs text-muted-foreground">Humidity</p>
-                    <p className="text-lg font-semibold">{weatherData.current.relative_humidity_2m}%</p>
+                    <p className="text-lg font-semibold">{weatherData.current.humidity}%</p>
                     </div>
                     <div className="rounded-lg border p-4">
                     <p className="text-xs text-muted-foreground">Wind Speed</p>
-                    <p className="text-lg font-semibold">{weatherData.current.wind_speed_10m} km/h</p>
+                    <p className="text-lg font-semibold">{weatherData.current.wind_speed} m/s</p>
                     </div>
                 </div>
 
