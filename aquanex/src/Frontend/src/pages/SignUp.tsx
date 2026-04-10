@@ -164,7 +164,7 @@ const SignUp = () => {
 
   const handleContinue = () => {
     setGeneratedSecretKey(null);
-    navigate('/onboarding');
+    navigate('/onboarding?new=1');
   };
 
 
