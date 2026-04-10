@@ -1053,6 +1053,8 @@ const Onboarding = () => {
   const handleConfirmLayout = async () => {
     if (finalLayoutPolygon.length < 3) return;
 
+    console.log("TOKEN AT CONFIRM:", localStorage.getItem('access_token'));
+    
     setSavingLayout(true);
     try {
       const targetWorkspaceId = await ensureTargetWorkspaceId();
