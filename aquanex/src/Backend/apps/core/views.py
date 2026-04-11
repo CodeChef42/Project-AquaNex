@@ -2038,295 +2038,312 @@ class GatewayTelemetryIngestView(APIView):
             prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
         elif _is_truthy(request.data.get("allow_async_ml")):
             prefer_sync_ml = False
+            
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(gateway_id=gateway_id).first()
-        if not workspace:
-            return Response({"error": "gateway_id not registered"}, status=status.HTTP_404_NOT_FOUND)
-        gateway = Gateway.objects.filter(id=gateway_id, workspace=workspace).first()
+        # 🚀 BROADCAST FIX: Fetch ALL workspaces using this gateway instead of just the first one
+        workspaces = list(Workspace.objects.filter(gateway_id=gateway_id))
+        if not workspaces:
+            return Response({"error": "gateway_id not registered to any workspace"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ensure the Gateway object exists in the DB (bound to the first workspace just to satisfy the FK)
+        gateway = Gateway.objects.filter(id=gateway_id).first()
         if not gateway:
-            gateway, _ = Gateway.objects.get_or_create(
-                id=gateway_id,
-                defaults={"workspace": workspace, "status": "online", "last_seen": timezone.now()},
-            )
-
-        known_devices = {}
-        for device in workspace.devices or []:
-            if not isinstance(device, dict):
-                continue
-            dev_id = str(device.get("id") or "").strip()
-            if dev_id:
-                known_devices[dev_id] = device
-
-        if not known_devices:
-            return Response({"error": "No devices registered for gateway"}, status=status.HTTP_400_BAD_REQUEST)
+            gateway = Gateway.objects.create(id=gateway_id, workspace=workspaces[0], status="online", last_seen=timezone.now())
+        else:
+            gateway.status = "online"
+            gateway.last_seen = timezone.now()
+            gateway.save(update_fields=["status", "last_seen"])
 
         records = request.data.get("telemetry")
         if not isinstance(records, list):
             records = [request.data]
 
-        accepted = 0
-        rejected = []
-        anomalies = []
-        ml_records = []
         now_label = timezone.now().isoformat()
+        
+        # We will keep track of response metrics for the FIRST workspace to return back to the simulator
+        response_payload = None
 
-        for idx, row in enumerate(records):
-            if not isinstance(row, dict):
-                rejected.append({"index": idx, "error": "invalid telemetry row"})
-                continue
+        # 🚀 Loop through EVERY workspace and apply the telemetry updates independently
+        for workspace in workspaces:
+            known_devices = {}
+            for device in workspace.devices or []:
+                if not isinstance(device, dict):
+                    continue
+                dev_id = str(device.get("id") or "").strip()
+                if dev_id:
+                    # Deep copy to ensure isolated JSON updates
+                    known_devices[dev_id] = dict(device)
 
-            device_id = str(row.get("device_id") or "").strip()
-            mcu_id = str(row.get("mcu_id") or "").strip()
-            lat = row.get("lat")
-            lng = row.get("lng")
-            values = row.get("values") if isinstance(row.get("values"), dict) else {}
-            metric = str(row.get("metric") or "").strip()
-            reading = row.get("reading")
-            ts = _parse_ts(row.get("ts"))
+            accepted = 0
+            rejected = []
+            anomalies = []
+            ml_records = []
+            devices_mutated = False
 
-            if not device_id or device_id not in known_devices:
-                rejected.append({"index": idx, "error": "unknown device_id", "device_id": device_id})
-                continue
+            for idx, row in enumerate(records):
+                if not isinstance(row, dict):
+                    rejected.append({"index": idx, "error": "invalid telemetry row"})
+                    continue
 
-            device = known_devices[device_id]
-            if mcu_id and device.get("microcontroller_id") != mcu_id:
-                rejected.append({
-                    "index": idx,
-                    "error": "mcu_id mismatch",
-                    "device_id": device_id,
-                    "expected": device.get("microcontroller_id"),
-                    "received": mcu_id,
-                })
-                continue
+                device_id = str(row.get("device_id") or "").strip()
+                mcu_id = str(row.get("mcu_id") or "").strip()
+                lat = row.get("lat")
+                lng = row.get("lng")
+                values = row.get("values") if isinstance(row.get("values"), dict) else {}
+                metric = str(row.get("metric") or "").strip()
+                reading = row.get("reading")
+                ts = _parse_ts(row.get("ts"))
 
-            if metric:
-                device["metric"] = metric
+                if not device_id:
+                    rejected.append({"index": idx, "error": "missing device_id"})
+                    continue
 
-            if reading is not None:
-                device["reading"] = reading
-            elif values:
-                if device.get("metric") in values:
-                    device["reading"] = values[device.get("metric")]
-                else:
-                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph", "turbidity_ntu"]
-                    chosen_key = next((key for key in preferred if key in values), None)
-                    if not chosen_key:
-                        chosen_key = next(iter(values.keys()), None)
-                    if chosen_key:
-                        device["metric"] = chosen_key
-                        device["reading"] = values[chosen_key]
+                # AUTO-REGISTRATION
+                if device_id not in known_devices:
+                    inferred_type = "sensor"
+                    if "ph" in device_id.lower() or "ph" in values:
+                        inferred_type = "ph_sensor"
+                    elif "turb" in device_id.lower() or "turbidity" in values or "turbidity_ntu" in values:
+                        inferred_type = "turbidity_sensor"
+                    elif "flow" in device_id.lower():
+                        inferred_type = "flowmeter"
+                    elif "pressure" in device_id.lower():
+                        inferred_type = "pressure_sensor"
 
-            if lat is not None:
-                device["lat"] = round(_safe_float(lat, device.get("lat", 0.0)), 7)
-            if lng is not None:
-                device["lng"] = round(_safe_float(lng, device.get("lng", 0.0)), 7)
-
-            device["status"] = "online"
-            device["last_seen"] = now_label
-            # Rule-based per-device anomaly flags are disabled; ML service is source of truth.
-            device["anomaly"] = False
-            device["anomaly_meta"] = None
-
-            # Water quality rule-based threshold check (runs independently of ML pipeline).
-            device_type_canonical = _tb_canonical_type(device.get("type") or "")
-            if device_type_canonical in {"ph_sensor", "turbidity_sensor"}:
-                reading_val = device.get("reading")
-                if reading_val is not None:
-                    wq_result = _check_water_quality_thresholds(
-                        workspace=workspace,
-                        gateway_id=gateway_id,
-                        device_id=device_id,
-                        device_type=device_type_canonical,
-                        value=reading_val,
-                        ts=ts,
-                    )
-                    if wq_result:
-                        device["anomaly"] = True
-                        anomalies.append({
-                            "source": "water_quality_threshold",
-                            "device_id": device_id,
-                            "gateway_id": gateway_id,
-                            "device_type": device_type_canonical,
-                            "incident_id": wq_result.get("id"),
-                        })
-
-            resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
-            resolved_lat = _optional_float(device.get("lat"))
-            resolved_lng = _optional_float(device.get("lng"))
-            resolved_sensor_index = _infer_sensor_index(
-                row.get("sensor_index"),
-                row.get("position"),
-                device_id,
-                device.get("id"),
-                device.get("type"),
-                device.get("metric"),
-            )
-            readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
-            # Skip time-series persistence for water quality devices — their latest
-            # reading is already cached in workspace.devices and the history table
-            # adds significant latency for every telemetry call.
-            _is_wq_device = _tb_canonical_type(device.get("type") or "") in {"ph_sensor", "turbidity_sensor"}
-            if not _is_wq_device:
-                _persist_telemetry_row(
-                    workspace=workspace,
-                    gateway=gateway,
-                    device_id=device_id,
-                    mcu_id=resolved_mcu_id,
-                    ts=ts,
-                    lat=resolved_lat,
-                    lng=resolved_lng,
-                    readings=readings_payload,
-                )
-            ml_records.append({
-                "device_id": device_id,
-                "metric": device.get("metric"),
-                "reading": device.get("reading"),
-                "values": values if isinstance(values, dict) else {},
-                "mcu_id": resolved_mcu_id,
-                "type": str(device.get("type") or ""),
-                "sensor_index": resolved_sensor_index,
-                "position": "upstream"
-                if resolved_sensor_index == 1
-                else "downstream"
-                if resolved_sensor_index == 2
-                else None,
-                "ts": ts.isoformat() if ts else None,
-            })
-            accepted += 1
-
-        workspace.devices = list(known_devices.values())
-        workspace.save(update_fields=["devices"])
-
-        Gateway.objects.filter(id=gateway_id).update(status="online", last_seen=timezone.now())
-
-        ml_job = None
-        if ml_records:
-            # Skip ML entirely when every record is a water quality device —
-            # they are already handled by rule-based threshold checks above.
-            _wq_types = {"ph_sensor", "turbidity_sensor"}
-            _all_wq = all(
-                _tb_canonical_type(str(rec.get("type") or "")) in _wq_types
-                for rec in ml_records
-            )
-            if _all_wq:
-                ml_job = {"queued": False, "reason": "water_quality_threshold_checks_used", "records": len(ml_records)}
-
-        if ml_records and ml_job is None:
-            use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
-            force_sync_on_celery_error = _is_truthy(
-                os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
-            )
-            if use_celery_ml and not prefer_sync_ml:
-                try:
-                    task = run_ml_breakage_inference.delay(
-                        telemetry=ml_records,
-                        gateway_id=gateway_id,
-                        workspace_id=str(workspace.id),
-                        devices=list(known_devices.values()),
-                    )
-                    ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
-                except Exception as exc:
-                    logger.warning("Failed to queue ML inference task for gateway=%s: %s", gateway_id, str(exc))
-                    if force_sync_on_celery_error:
-                        try:
-                            sync_result = _ml_ingest_sync(
-                                gateway_id=gateway_id,
-                                workspace_id=str(workspace.id),
-                                telemetry=ml_records,
-                                devices=list(known_devices.values()),
-                            )
-                            prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
-                            ml_job = {
-                                "queued": False,
-                                "mode": "sync_fallback",
-                                "queue_error": str(exc),
-                                "records": len(ml_records),
-                                "prediction_ready": bool(prediction),
-                                "prediction": prediction,
-                                "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
-                            }
-                        except requests.exceptions.RequestException as sync_exc:
-                            logger.warning(
-                                "Sync ML fallback failed after queue error for gateway=%s: %s",
-                                gateway_id,
-                                str(sync_exc),
-                            )
-                            ml_job = {
-                                "queued": False,
-                                "mode": "sync_fallback",
-                                "queue_error": str(exc),
-                                "error": str(sync_exc),
-                                "records": len(ml_records),
-                            }
-                    else:
-                        ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
-            else:
-                try:
-                    sync_result = _ml_ingest_sync(
-                        gateway_id=gateway_id,
-                        workspace_id=str(workspace.id),
-                        telemetry=ml_records,
-                        devices=list(known_devices.values()),
-                    )
-                    prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
-                    if not prediction:
-                        snapshot = _extract_predict_snapshot(ml_records)
-                        if snapshot:
-                            try:
-                                prediction = _ml_predict_sync(snapshot)
-                            except requests.exceptions.RequestException:
-                                prediction = None
-                    ml_job = {
-                        "queued": False,
-                        "mode": "sync" if not prefer_sync_ml else "sync_preferred",
-                        "records": len(ml_records),
-                        "prediction_ready": bool(prediction),
-                        "prediction": prediction,
-                        "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                    known_devices[device_id] = {
+                        "id": device_id,
+                        "microcontroller_id": mcu_id or f"{gateway_id}-MCU-AUTO",
+                        "type": inferred_type,
+                        "status": "online",
+                        "last_seen": now_label,
+                        "lat": _optional_float(lat) or 25.2048,
+                        "lng": _optional_float(lng) or 55.2708,
                     }
-                except requests.exceptions.RequestException as exc:
-                    logger.warning("Synchronous ML inference failed for gateway=%s: %s", gateway_id, str(exc))
-                    ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
-        else:
-            ml_job = {
-                "queued": False,
-                "reason": "no_accepted_records",
-            }
+                    devices_mutated = True
 
-        ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
-        incident_summary = None
-        if isinstance(ml_prediction, dict):
-            # Pass prediction to record incident OR resolve existing ones
-            incident_summary = _record_incident_from_prediction(workspace, gateway_id, ml_prediction)
-            
-            if ml_prediction.get("is_anomaly") is True:
-                deltas = ml_prediction.get("deltas") or {}
-                anomalies.append({
-                    "source": "ml",
-                    "device_id": gateway_id,
+                device = known_devices[device_id]
+                dev_type_canonical = _tb_canonical_type(device.get("type", ""))
+
+                # STRICT EXTRACTION
+                extracted_val = None
+                if reading is not None:
+                    extracted_val = reading
+                elif values:
+                    if dev_type_canonical == "ph_sensor":
+                        extracted_val = values.get("ph", values.get("value"))
+                    elif dev_type_canonical == "turbidity_sensor":
+                        extracted_val = values.get("turbidity_ntu", values.get("turbidity", values.get("value")))
+                    
+                    if extracted_val is None:
+                        if metric in values:
+                            extracted_val = values[metric]
+                        elif device.get("metric") in values:
+                            extracted_val = values[device.get("metric")]
+                        else:
+                            extracted_val = next(iter(values.values()), None)
+
+                # VALIDATION & HARD CAPPING
+                validated_val = None
+                if extracted_val is not None:
+                    try:
+                        fval = float(extracted_val)
+                        if dev_type_canonical == "ph_sensor" and (0.0 <= fval <= 14.0):
+                            validated_val = fval
+                            device["metric"] = "ph" 
+                        elif dev_type_canonical == "turbidity_sensor" and (0.0 <= fval <= 15.0):
+                            validated_val = fval
+                            device["metric"] = "turbidity" 
+                        elif dev_type_canonical not in {"ph_sensor", "turbidity_sensor"}:
+                            validated_val = fval
+                            if metric:
+                                device["metric"] = metric
+                    except (TypeError, ValueError):
+                        pass
+
+                # ONLY process and save to DB if the reading was VALID
+                if validated_val is not None:
+                    device["reading"] = validated_val
+                    values = {device.get("metric", "value"): validated_val}
+                    devices_mutated = True
+
+                    if lat is not None:
+                        device["lat"] = round(_safe_float(lat, device.get("lat", 0.0)), 7)
+                    if lng is not None:
+                        device["lng"] = round(_safe_float(lng, device.get("lng", 0.0)), 7)
+
+                    device["status"] = "online"
+                    device["last_seen"] = now_label
+                    device["anomaly"] = False
+                    device["anomaly_meta"] = None
+
+                    # Check for rule-based anomalies in THIS specific workspace
+                    if dev_type_canonical in {"ph_sensor", "turbidity_sensor"}:
+                        wq_result = _check_water_quality_thresholds(
+                            workspace=workspace,
+                            gateway_id=gateway_id,
+                            device_id=device_id,
+                            device_type=dev_type_canonical,
+                            value=validated_val,
+                            ts=ts,
+                        )
+                        if wq_result:
+                            device["anomaly"] = True
+                            anomalies.append({
+                                "source": "water_quality_threshold",
+                                "device_id": device_id,
+                                "gateway_id": gateway_id,
+                                "device_type": dev_type_canonical,
+                                "incident_id": wq_result.get("id"),
+                            })
+
+                    resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
+                    
+                    # Persist DB row isolated to THIS workspace
+                    _persist_telemetry_row(
+                        workspace=workspace,
+                        gateway=gateway,
+                        device_id=device_id,
+                        mcu_id=resolved_mcu_id,
+                        ts=ts,
+                        lat=_optional_float(device.get("lat")),
+                        lng=_optional_float(device.get("lng")),
+                        readings=values,
+                    )
+
+                    resolved_sensor_index = _infer_sensor_index(
+                        row.get("sensor_index"),
+                        row.get("position"),
+                        device_id,
+                        device.get("id"),
+                        device.get("type"),
+                        device.get("metric"),
+                    )
+                    
+                    ml_records.append({
+                        "device_id": device_id,
+                        "metric": device.get("metric"),
+                        "reading": device.get("reading"),
+                        "values": values,
+                        "mcu_id": resolved_mcu_id,
+                        "type": str(device.get("type") or ""),
+                        "sensor_index": resolved_sensor_index,
+                        "position": "upstream" if resolved_sensor_index == 1 else "downstream" if resolved_sensor_index == 2 else None,
+                        "ts": ts.isoformat() if ts else None,
+                    })
+                    accepted += 1
+                else:
+                    rejected.append({"index": idx, "error": "value out of bounds or invalid", "device_id": device_id})
+
+            if devices_mutated or not workspace.devices:
+                updated_devices_list = list(known_devices.values())
+                workspace.devices = updated_devices_list
+                workspace.save(update_fields=["devices"])
+
+            ml_job = None
+            if ml_records:
+                _wq_types = {"ph_sensor", "turbidity_sensor"}
+                _all_wq = all(_tb_canonical_type(str(rec.get("type") or "")) in _wq_types for rec in ml_records)
+                if _all_wq:
+                    ml_job = {"queued": False, "reason": "water_quality_threshold_checks_used", "records": len(ml_records)}
+
+            if ml_records and ml_job is None:
+                use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
+                force_sync_on_celery_error = _is_truthy(
+                    os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
+                )
+                if use_celery_ml and not prefer_sync_ml:
+                    try:
+                        task = run_ml_breakage_inference.delay(
+                            telemetry=ml_records,
+                            gateway_id=gateway_id,
+                            workspace_id=str(workspace.id),
+                            devices=list(known_devices.values()),
+                        )
+                        ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
+                    except Exception as exc:
+                        logger.warning("Failed to queue ML task for gateway=%s, workspace=%s: %s", gateway_id, workspace.id, str(exc))
+                        if force_sync_on_celery_error:
+                            try:
+                                sync_result = _ml_ingest_sync(
+                                    gateway_id=gateway_id,
+                                    workspace_id=str(workspace.id),
+                                    telemetry=ml_records,
+                                    devices=list(known_devices.values()),
+                                )
+                                prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                                ml_job = {
+                                    "queued": False,
+                                    "mode": "sync_fallback",
+                                    "records": len(ml_records),
+                                    "prediction_ready": bool(prediction),
+                                    "prediction": prediction,
+                                }
+                            except Exception as sync_exc:
+                                ml_job = {"queued": False, "mode": "sync_fallback", "error": str(sync_exc), "records": len(ml_records)}
+                        else:
+                            ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
+                else:
+                    try:
+                        sync_result = _ml_ingest_sync(
+                            gateway_id=gateway_id,
+                            workspace_id=str(workspace.id),
+                            telemetry=ml_records,
+                            devices=list(known_devices.values()),
+                        )
+                        prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                        if not prediction:
+                            snapshot = _extract_predict_snapshot(ml_records)
+                            if snapshot:
+                                try:
+                                    prediction = _ml_predict_sync(snapshot)
+                                except requests.exceptions.RequestException:
+                                    prediction = None
+                        ml_job = {
+                            "queued": False,
+                            "mode": "sync" if not prefer_sync_ml else "sync_preferred",
+                            "records": len(ml_records),
+                            "prediction_ready": bool(prediction),
+                            "prediction": prediction,
+                        }
+                    except Exception as exc:
+                        ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
+            else:
+                ml_job = ml_job or {"queued": False, "reason": "no_accepted_records"}
+
+            ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
+            incident_summary = None
+            if isinstance(ml_prediction, dict):
+                incident_summary = _record_incident_from_prediction(workspace, gateway_id, ml_prediction)
+                
+                if ml_prediction.get("is_anomaly") is True:
+                    deltas = ml_prediction.get("deltas") or {}
+                    anomalies.append({
+                        "source": "ml",
+                        "device_id": gateway_id,
+                        "gateway_id": gateway_id,
+                        "metric": str(ml_prediction.get("anomaly_type") or "anomaly"),
+                        "delta": deltas.get("flow_delta"),
+                        "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                    })
+
+            # Setup the response payload using the results from the first workspace
+            if response_payload is None:
+                response_payload = {
+                    "success": True,
                     "gateway_id": gateway_id,
-                    "metric": str(ml_prediction.get("anomaly_type") or "anomaly"),
-                    "delta": deltas.get("flow_delta"),
-                    "reason": f"ml_confidence={ml_prediction.get('confidence')}",
-                    "deltas": deltas,
-                    "timestamp": ml_prediction.get("timestamp"),
-                    "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
-                })
+                    "accepted": accepted,
+                    "rejected": rejected,
+                    "anomalies": anomalies,
+                    "counts": {
+                        "devices": len(known_devices),
+                        "microcontrollers": len(_microcontrollers_from_devices(list(known_devices.values()))),
+                    },
+                    "ml_inference": ml_job,
+                }
 
-        return Response({
-            "success": True,
-            "gateway_id": gateway_id,
-            "accepted": accepted,
-            "rejected": rejected,
-            "anomalies": anomalies,
-            "counts": {
-                "devices": len(known_devices),
-                "microcontrollers": len(_microcontrollers_from_devices(workspace.devices or [])),
-            },
-            "ml_inference": ml_job,
-        }, status=status.HTTP_200_OK)
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 
 class LayoutUploadView(APIView):
@@ -2722,7 +2739,6 @@ class WaterQualityReadingsView(APIView):
         if not workspace:
             return Response({"error": "No workspace"}, status=400)
 
-        # All water quality devices stored in workspace
         wq_devices = [
             d for d in (workspace.devices or [])
             if isinstance(d, dict) and _tb_canonical_type(str(d.get("type") or "")) in self.WQ_DEVICE_TYPES
@@ -2731,7 +2747,6 @@ class WaterQualityReadingsView(APIView):
         gateway_id = str(workspace.gateway_id or "")
         device_ids = [str(d["id"]) for d in wq_devices if d.get("id")]
 
-        # Fetch latest readings from DB
         latest_by_device = {}
         if gateway_id and device_ids:
             try:
@@ -2749,12 +2764,6 @@ class WaterQualityReadingsView(APIView):
             except DatabaseError as exc:
                 logger.warning("WaterQualityReadingsView: DB error fetching latest readings: %s", exc)
 
-        # Build sensor list.
-        # Priority for reading value:
-        #   1. DeviceReadingLatest DB row (most accurate, has full readings dict)
-        #   2. device["reading"] in workspace.devices (updated on every telemetry call)
-        #   3. None  (no telemetry received yet)
-        # A value of 0 from the registration default is treated as no-data.
         sensors = []
         for device in wq_devices:
             device_id  = str(device.get("id") or "")
@@ -2762,22 +2771,39 @@ class WaterQualityReadingsView(APIView):
             db_row     = latest_by_device.get(device_id)
             readings   = db_row.get("readings", {}) if db_row else {}
 
+            raw = None
+            
             if device_type == "ph_sensor":
                 metric_key = "ph"
-                raw = readings.get("ph") or readings.get("value")
+                raw = readings.get("ph", readings.get("value"))
             elif device_type == "turbidity_sensor":
-                metric_key = "turbidity_ntu"
-                raw = readings.get("turbidity_ntu") or readings.get("turbidity") or readings.get("value")
+                metric_key = "turbidity"
+                raw = readings.get("turbidity", readings.get("turbidity_ntu", readings.get("value")))
             else:
                 metric_key = str(device.get("metric") or "value")
                 raw = readings.get(metric_key)
 
-            # Fall back to workspace.devices cached reading (updated by telemetry ingest).
-            # Exclude 0 — that is the registration placeholder, not a real sensor reading.
+            # Fall back to workspace.devices cached reading
             if raw is None:
                 cached = device.get("reading")
-                if cached is not None and cached != 0:
-                    raw = cached
+                last_seen_str = str(device.get("last_seen") or "")
+                cache_is_fresh = False
+                if last_seen_str:
+                    try:
+                        ls = datetime.fromisoformat(last_seen_str)
+                        if timezone.is_naive(ls):
+                            ls = timezone.make_aware(ls)
+                        cache_is_fresh = (timezone.now() - ls).total_seconds() < 300  
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Ignore 0s and physically impossible cache artifacts
+                if cached is not None and cache_is_fresh:
+                    if cached != 0:
+                        if device_type == "turbidity_sensor" and cached > 15.0:
+                            pass # Ignore random 50+ discovery artifact
+                        else:
+                            raw = cached
 
             value = None
             if raw is not None:
@@ -2799,7 +2825,6 @@ class WaterQualityReadingsView(APIView):
                 "status":      str(device.get("status") or "online"),
             })
 
-        # Active WQ incidents (per-device gateway_id scope used in _check_water_quality_thresholds)
         wq_incidents_qs = Incident.objects.filter(
             workspace=workspace,
             incident_type__in=list(WQ_INCIDENT_TYPES),

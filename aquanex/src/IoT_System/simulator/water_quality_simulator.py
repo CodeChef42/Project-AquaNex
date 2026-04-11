@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """
-AquaNex Water Quality Simulator
-================================
-Simulates 2 pH sensors and 2 turbidity sensors with realistic long-duration
-anomalies. Each full cycle takes ~14 minutes, with anomalies persisting for
-2–3 minutes at a time (as they would in real irrigation systems).
+AquaNex Water Quality Simulator  (state-based, smooth trajectories)
+====================================================================
+Values carry state between readings — no sudden jumps. Each sensor has a
+current value that drifts toward a phase-dependent target at a physically
+bounded rate. Noise is tiny relative to the movement.
 
 Scenario cycle (~840 seconds / 14 minutes):
   0–120s    Normal          — optimal readings across all sensors
   120–270s  Alkaline Drift  — slow pH rise (algae bloom / lime leaching)
   270–315s  pH Recovery     — gradual return toward normal
   315–405s  Normal          — stable window
-  405–585s  Turbidity Event — sustained sediment / rain runoff
-  585–645s  Turb Recovery   — clearing
-  645–765s  Combined Stress — multiple parameters elevated simultaneously
+  405–585s  Turbidity Event — sustained sediment / rain runoff ramp + plateau
+  585–645s  Turb Recovery   — natural settling
+  645–765s  Combined Stress — pH + turbidity both elevated simultaneously
   765–840s  Full Recovery   — all sensors normalising
+
+Why state-based?
+  Without carrying state, each reading is computed independently from the
+  phase/progress which causes sudden jumps whenever the formula produces a
+  large value before noise smoothing kicks in. With persistent state:
+    - The sensor can never move faster than `max_rate` per tick
+    - Small Gaussian noise rides on top of the smooth trajectory
+    - Phase transitions are invisible — the sensor just starts chasing a
+      new target at the same bounded rate
 
 Send interval: 15 seconds (configurable via SEND_INTERVAL env var)
 
@@ -25,8 +34,6 @@ Environment variables:
     BACKEND_URL    Backend base URL  (default: http://127.0.0.1:8000)
     GATEWAY_ID     Gateway identifier (default: WQ-GATEWAY-01)
     SEND_INTERVAL  Seconds between sends (default: 15)
-
-Note: configure devices in the Water Quality page before running.
 """
 
 import math
@@ -52,17 +59,16 @@ DEVICES = [
 ]
 
 # ── Scenario phases ───────────────────────────────────────────────────────────
-# (start_sec, end_sec, phase_name)
 SCENARIO_DURATION = 840.0   # 14 minutes per full cycle
 
 PHASES = [
     (0,   120,  "normal"),
-    (120, 270,  "alkaline_drift"),   # sustained pH rise — 2.5 min
+    (120, 270,  "alkaline_drift"),   # 2.5 min sustained pH rise
     (270, 315,  "ph_recovery"),
     (315, 405,  "normal"),
-    (405, 585,  "turbidity_event"),  # sustained runoff — 3 min
+    (405, 585,  "turbidity_event"),  # 3 min sustained runoff
     (585, 645,  "turb_recovery"),
-    (645, 765,  "combined_stress"),  # multiple params — 2 min
+    (645, 765,  "combined_stress"),  # 2 min — pH + turbidity together
     (765, 840,  "full_recovery"),
 ]
 
@@ -76,7 +82,7 @@ def get_phase(elapsed: float) -> str:
 
 
 def phase_progress(elapsed: float) -> float:
-    """0.0 → 1.0 progress within the current phase (for smooth transitions)."""
+    """0.0 → 1.0 progress within the current phase."""
     e = elapsed % SCENARIO_DURATION
     for start, end, name in PHASES:
         if start <= e < end:
@@ -84,106 +90,123 @@ def phase_progress(elapsed: float) -> float:
     return 0.0
 
 
-# ── Value generators ──────────────────────────────────────────────────────────
-def _noise(sigma: float) -> float:
-    return random.gauss(0.0, sigma)
+# ── Persistent sensor state ───────────────────────────────────────────────────
+# This is the core of smooth simulation — values carry over between ticks.
+_state: dict[str, float] = {
+    "WQ-PH-01":   7.10,
+    "WQ-PH-02":   7.05,
+    "WQ-TURB-01": 0.90,
+    "WQ-TURB-02": 0.85,
+}
 
-def _diurnal() -> float:
-    """Slow daily sinusoidal baseline drift."""
-    return math.sin(time.time() / 7200.0 * math.pi) * 0.06
+
+def _diurnal_ph() -> float:
+    """Very slow sinusoidal pH background drift (±0.05 over hours)."""
+    return math.sin(time.time() / 7200.0 * math.pi) * 0.05
 
 
-def _generate_ph(sensor_index: int, phase: str, progress: float) -> float:
-    base = 7.1 + _diurnal() + _noise(0.04)
+def _target_ph(device_id: str, phase: str, progress: float) -> tuple[float, float]:
+    """
+    Return (target_value, max_change_per_step) for a pH sensor.
+
+    max_rate is how many pH units the sensor is allowed to move in one
+    SEND_INTERVAL tick.  Keeping this bounded is what prevents sudden jumps.
+    """
+    base = 7.10 + _diurnal_ph()
 
     if phase == "normal":
-        ph = base
+        return base, 0.04
 
     elif phase == "alkaline_drift":
-        # Gradual rise — mimics algae bloom consuming CO₂
-        # Sensor A rises higher; sensor B follows with lag
-        if sensor_index == 1:
-            peak = 8.9 + _noise(0.12)
-            ph = base + (peak - base) * min(progress * 1.3, 1.0)
-        else:
-            peak = 8.3 + _noise(0.10)
-            ph = base + (peak - base) * min(progress * 1.0, 1.0)
+        # Sensor A rises to 8.9, Sensor B follows to 8.3 (simulates upstream/downstream lag)
+        peak = 8.90 if device_id == "WQ-PH-01" else 8.30
+        target = base + (peak - base) * progress
+        return target, 0.22  # algae bloom consumes CO₂ fairly quickly
 
     elif phase == "ph_recovery":
-        # Gradual return; sensor B recovers faster
-        if sensor_index == 1:
-            ph = 8.9 - (8.9 - base) * min(progress * 1.1, 1.0) + _noise(0.08)
-        else:
-            ph = 8.3 - (8.3 - base) * min(progress * 1.3, 1.0) + _noise(0.07)
+        peak = 8.90 if device_id == "WQ-PH-01" else 8.30
+        target = peak - (peak - base) * progress
+        return target, 0.16  # recovery a touch slower than onset
 
     elif phase == "combined_stress":
-        # Moderate alkaline drift + noise (compound event)
-        if sensor_index == 1:
-            ph = 8.2 + _noise(0.15) + progress * 0.3
+        if device_id == "WQ-PH-01":
+            return 8.20 + progress * 0.30, 0.18
         else:
-            ph = 6.1 + _noise(0.12) - progress * 0.2  # mild acidic
-        ph = max(5.0, min(10.0, ph))
+            return 6.10 - progress * 0.20, 0.12  # slight acid shift on downstream sensor
 
     elif phase == "full_recovery":
-        # Both sensors normalise
-        ph = base + _noise(0.06) * (1.0 - progress)
+        return base, 0.10
 
-    else:
-        ph = base
-
-    return round(max(2.0, min(14.0, ph)), 2)
+    return base, 0.04
 
 
-def _generate_turbidity(sensor_index: int, phase: str, progress: float) -> float:
-    base = 0.9 + abs(_diurnal() * 0.4) + abs(_noise(0.08))
+def _target_turbidity(device_id: str, phase: str, progress: float) -> tuple[float, float]:
+    """
+    Return (target_value, max_change_per_step) for a turbidity sensor.
+    """
+    base = 0.90
 
     if phase == "normal":
-        turb = base
+        return base, 0.05
 
     elif phase == "turbidity_event":
-        # Sustained runoff — ramps up then plateaus
-        ramp = min(progress * 2.0, 1.0)
-        if sensor_index == 1:
-            # Upstream sensor hit harder
-            peak = 14.5 + _noise(1.0)
-            turb = base + (peak - base) * ramp + _noise(0.5)
-        else:
-            peak = 9.2 + _noise(0.8)
-            turb = base + (peak - base) * ramp + _noise(0.4)
+        # Ramp up in first ~55 % of the phase, then plateau (mimics runoff peak)
+        ramp = min(progress * 1.8, 1.0)
+        peak = 14.5 if device_id == "WQ-TURB-01" else 9.2
+        target = base + (peak - base) * ramp
+        return target, 1.6  # fast onset — sediment hits quickly
 
     elif phase == "turb_recovery":
-        # Exponential-style clearing
-        if sensor_index == 1:
-            turb = 14.5 * (1.0 - progress) ** 1.5 + base + _noise(0.4)
+        # Exponential-style settling
+        if device_id == "WQ-TURB-01":
+            target = 14.5 * (1.0 - progress) ** 1.4 + base
         else:
-            turb = 9.2 * (1.0 - progress) ** 1.5 + base + _noise(0.3)
+            target = 9.2 * (1.0 - progress) ** 1.4 + base
+        return target, 1.2  # gravity-driven settling, slightly slower than onset
 
     elif phase == "combined_stress":
-        # Moderately elevated turbidity alongside pH stress
-        if sensor_index == 1:
-            turb = 5.8 + _noise(0.5) + progress * 0.8
+        if device_id == "WQ-TURB-01":
+            return 5.8 + progress * 0.8, 0.7
         else:
-            turb = 4.1 + _noise(0.4) + progress * 0.5
+            return 4.1 + progress * 0.5, 0.5
 
     elif phase == "full_recovery":
-        if sensor_index == 1:
-            turb = 5.8 * (1.0 - progress) ** 2.0 + base + _noise(0.3)
+        if device_id == "WQ-TURB-01":
+            target = 5.8 * (1.0 - progress) ** 2.0 + base
         else:
-            turb = 4.1 * (1.0 - progress) ** 2.0 + base + _noise(0.2)
+            target = 4.1 * (1.0 - progress) ** 2.0 + base
+        return target, 0.5
 
-    else:
-        turb = base
-
-    return round(max(0.0, turb), 2)
+    return base, 0.05
 
 
-def generate_reading(device: dict, phase: str, progress: float) -> dict:
-    idx = int(device["id"][-2:]) if device["id"][-2:].isdigit() else 1
-    if device["type"] == "ph_sensor":
-        return {"ph": _generate_ph(idx, phase, progress)}
-    elif device["type"] == "turbidity_sensor":
-        return {"turbidity_ntu": _generate_turbidity(idx, phase, progress)}
-    return {}
+def _smooth_step(current: float, target: float, max_rate: float, noise_sigma: float) -> float:
+    """
+    Move `current` toward `target` by at most `max_rate`, plus tiny Gaussian noise.
+
+    The noise_sigma here is much smaller than in the old random-recompute approach —
+    it only represents sensor measurement jitter, not the value change itself.
+    """
+    diff = target - current
+    step = math.copysign(min(abs(diff), max_rate), diff)
+    return current + step + random.gauss(0.0, noise_sigma)
+
+
+def update_state(phase: str, progress: float) -> None:
+    """Advance all sensor states one tick toward their phase targets."""
+    for d in DEVICES:
+        did = d["id"]
+        cur = _state[did]
+
+        if d["type"] == "ph_sensor":
+            target, rate = _target_ph(did, phase, progress)
+            nxt = _smooth_step(cur, target, rate, 0.012)   # ±0.012 measurement jitter
+            _state[did] = round(max(2.0, min(14.0, nxt)), 2)
+
+        elif d["type"] == "turbidity_sensor":
+            target, rate = _target_turbidity(did, phase, progress)
+            nxt = _smooth_step(cur, target, rate, 0.055)   # slightly noisier (particle counts)
+            _state[did] = round(max(0.0, nxt), 2)
 
 
 # ── Status helpers ────────────────────────────────────────────────────────────
@@ -203,13 +226,13 @@ def _status_str(device_type: str, value: float) -> str:
 _session = requests.Session()
 
 
-def send_telemetry(phase: str, progress: float) -> None:
+def send_telemetry() -> None:
     now_iso = datetime.now(timezone.utc).isoformat()
     telemetry = [
         {
             "device_id": d["id"],
             "mcu_id":    d["mcu_id"],
-            "values":    generate_reading(d, phase, progress),
+            "values":    {d["metric"]: _state[d["id"]]},
             "lat":       d["lat"],
             "lng":       d["lng"],
             "ts":        now_iso,
@@ -250,7 +273,7 @@ _PHASE_LABELS = {
 }
 
 
-def print_tick(phase: str, elapsed: float, progress: float) -> None:
+def print_tick(phase: str, elapsed: float) -> None:
     e = elapsed % SCENARIO_DURATION
     bar_w = 32
     bar   = int(bar_w * e / SCENARIO_DURATION)
@@ -265,16 +288,15 @@ def print_tick(phase: str, elapsed: float, progress: float) -> None:
     print(f"  {prog}  {mins:02d}:{secs:02d} / {total_mins:02d}:00")
     print(f"{'='*64}")
     for d in DEVICES:
-        vals = generate_reading(d, phase, progress)
-        metric, val = next(iter(vals.items()))
-        st = _status_str(d["type"], val)
-        print(f"  {d['label']:<34s}  {metric}={val:>6.2f}  [{st}]")
+        val = _state[d["id"]]
+        st  = _status_str(d["type"], val)
+        print(f"  {d['label']:<34s}  {d['metric']}={val:>6.2f}  [{st}]")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     print("=" * 64)
-    print("  AquaNex Water Quality Simulator")
+    print("  AquaNex Water Quality Simulator  (smooth / state-based)")
     print(f"  Backend  : {BACKEND_URL}")
     print(f"  Gateway  : {GATEWAY_ID}")
     print(f"  Devices  : {len(DEVICES)}  (2×pH + 2×turbidity)")
@@ -290,8 +312,9 @@ def main() -> None:
             elapsed  = time.time() - start
             phase    = get_phase(elapsed)
             progress = phase_progress(elapsed)
-            print_tick(phase, elapsed, progress)
-            send_telemetry(phase, progress)
+            update_state(phase, progress)   # advance state before display/send
+            print_tick(phase, elapsed)
+            send_telemetry()
             time.sleep(SEND_INTERVAL)
     except KeyboardInterrupt:
         print("\n\n  Simulator stopped.")
