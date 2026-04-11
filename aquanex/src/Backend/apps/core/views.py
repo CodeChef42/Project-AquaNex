@@ -188,6 +188,68 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
         return None
 
 
+WQ_INCIDENT_TYPES = {
+    "ph_warning", "ph_anomaly", "ph_critical",
+    "turbidity_warning", "turbidity_spike", "turbidity_critical",
+}
+
+def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_type, value, ts):
+    """Rule-based anomaly detection for water quality sensors. Returns incident summary or None."""
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    incident_type = None
+    severity = None
+
+    if device_type == "ph_sensor":
+        if fval < 5.5 or fval > 9.5:
+            incident_type = "ph_critical"
+            severity = "critical"
+        elif fval < 6.0 or fval > 8.5:
+            incident_type = "ph_anomaly"
+            severity = "high"
+        elif fval < 6.5 or fval > 8.0:
+            incident_type = "ph_warning"
+            severity = "medium"
+
+    elif device_type == "turbidity_sensor":
+        if fval > 10.0:
+            incident_type = "turbidity_critical"
+            severity = "critical"
+        elif fval > 5.0:
+            incident_type = "turbidity_spike"
+            severity = "high"
+        elif fval > 3.0:
+            incident_type = "turbidity_warning"
+            severity = "medium"
+
+    now_ts = timezone.now()
+
+    if incident_type:
+        prediction = {
+            "is_anomaly": True,
+            "anomaly_type": incident_type,
+            "severity": severity,
+            "timestamp": ts.isoformat() if ts else now_ts.isoformat(),
+            "device_id": device_id,
+            "device_type": device_type,
+            "value": fval,
+            "source": "water_quality_threshold",
+        }
+        return _record_incident_from_prediction(workspace, device_id, prediction)
+    else:
+        # Normal reading — transition any ongoing incidents for this device to recovering.
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=device_id,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status="ongoing",
+        ).update(status="recovering", last_seen_at=now_ts)
+        return None
+
+
 def _resolve_user_workspace(request, create_if_missing=False):
     requested_id = _workspace_id_from_request(request)
     owner_workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
@@ -550,19 +612,26 @@ def _ml_predict_sync(snapshot):
 def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
     ml_service_url = f"{ml_base_url}/telemetry/ingest"
-    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
-    response = requests.post(
-        ml_service_url,
-        json={
-            "gateway_id": gateway_id,
-            "workspace_id": workspace_id,
-            "telemetry": telemetry or [],
-            "devices": devices or [],
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "15"))  # was "5"
+    try:
+        response = requests.post(
+            ml_service_url,
+            json={
+                "gateway_id": gateway_id,
+                "workspace_id": workspace_id,
+                "telemetry": telemetry or [],
+                "devices": devices or [],
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.ConnectionError:
+        logger.warning("ML service unreachable at %s — skipping inference", ml_base_url)
+        return {}
+    except requests.exceptions.Timeout:
+        logger.warning("ML service timed out after %ss for gateway=%s", timeout, gateway_id)
+        return {}
 
 
 def _normalize_device(raw, fallback_mcu_id, index):
@@ -1809,21 +1878,52 @@ class GatewayDiscoverView(APIView):
             seed = int(hashlib.sha256(gateway_id.encode()).hexdigest()[:8], 16)
             rng = random.Random(seed)
             center_lat, center_lng = 25.2048, 55.2708
+
+            # Build typed device list: honour required_types if provided, else use a
+            # default mix that covers pipeline and water-quality scenarios.
+            if required_types:
+                type_slots = []
+                per_type = max(1, 6 // max(len(required_types), 1))
+                for t in required_types:
+                    type_slots.extend([t] * per_type)
+                # Pad/trim to exactly 6 slots
+                while len(type_slots) < 6:
+                    type_slots.append(required_types[0])
+                type_slots = type_slots[:6]
+            else:
+                type_slots = [
+                    "flowmeter", "pressure_sensor",
+                    "flowmeter", "pressure_sensor",
+                    "ph_sensor", "turbidity_sensor",
+                ]
+
+            _metric_for_type = {
+                "flowmeter": "flow_lpm",
+                "pressure_sensor": "pressure_bar",
+                "ph_sensor": "ph",
+                "turbidity_sensor": "turbidity_ntu",
+                "soil_salinity_sensor": "ec_ds_m",
+                "soil_moisture_sensor": "soil_moisture_pct",
+            }
+
             devices = []
-            for idx in range(1, 7):
+            lat_offsets = [0.002, -0.002, 0.004, -0.004, 0.001, -0.003]
+            lng_offsets = [0.002, -0.002, -0.004, 0.004, 0.003, -0.001]
+            for idx, dev_type in enumerate(type_slots, start=1):
+                metric = _metric_for_type.get(dev_type, "value")
                 devices.append({
                     "id": f"{gateway_id}-DEV-{idx:02d}",
                     "microcontroller_id": f"{gateway_id}-MCU-{((idx - 1) // 2) + 1:02d}",
-                    "type": "sensor",
-                    "lat": None,
-                    "lng": None,
+                    "type": dev_type,
+                    "lat": round(center_lat + lat_offsets[idx - 1], 6),
+                    "lng": round(center_lng + lng_offsets[idx - 1], 6),
                     "status": "online",
-                    "metric": "value",
+                    "metric": metric,
                     "reading": round(rng.uniform(1.0, 99.0), 2),
                     "last_seen": "just now",
                 })
             source = "simulated_fallback"
-            missing_coordinates = [device["id"] for device in devices]
+            missing_coordinates = []
 
         devices = _filter_devices_by_types(devices, required_types)
 
@@ -2007,7 +2107,7 @@ class GatewayTelemetryIngestView(APIView):
                 if device.get("metric") in values:
                     device["reading"] = values[device.get("metric")]
                 else:
-                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
+                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph", "turbidity_ntu"]
                     chosen_key = next((key for key in preferred if key in values), None)
                     if not chosen_key:
                         chosen_key = next(iter(values.keys()), None)
@@ -2025,6 +2125,29 @@ class GatewayTelemetryIngestView(APIView):
             # Rule-based per-device anomaly flags are disabled; ML service is source of truth.
             device["anomaly"] = False
             device["anomaly_meta"] = None
+
+            # Water quality rule-based threshold check (runs independently of ML pipeline).
+            device_type_canonical = _tb_canonical_type(device.get("type") or "")
+            if device_type_canonical in {"ph_sensor", "turbidity_sensor"}:
+                reading_val = device.get("reading")
+                if reading_val is not None:
+                    wq_result = _check_water_quality_thresholds(
+                        workspace=workspace,
+                        gateway_id=gateway_id,
+                        device_id=device_id,
+                        device_type=device_type_canonical,
+                        value=reading_val,
+                        ts=ts,
+                    )
+                    if wq_result:
+                        device["anomaly"] = True
+                        anomalies.append({
+                            "source": "water_quality_threshold",
+                            "device_id": device_id,
+                            "gateway_id": gateway_id,
+                            "device_type": device_type_canonical,
+                            "incident_id": wq_result.get("id"),
+                        })
 
             resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
             resolved_lat = _optional_float(device.get("lat"))
@@ -2558,6 +2681,100 @@ class IncidentSeedView(APIView):
             },
             status=201,
         )
+
+class WaterQualityReadingsView(APIView):
+    """Returns latest water quality sensor readings and active WQ incidents."""
+    permission_classes = [IsAuthenticated]
+
+    WQ_DEVICE_TYPES = {"ph_sensor", "turbidity_sensor"}
+
+    def get(self, request):
+        workspace = _resolve_user_workspace(request)
+        if not workspace:
+            return Response({"error": "No workspace"}, status=400)
+
+        # All water quality devices stored in workspace
+        wq_devices = [
+            d for d in (workspace.devices or [])
+            if isinstance(d, dict) and _tb_canonical_type(str(d.get("type") or "")) in self.WQ_DEVICE_TYPES
+        ]
+
+        gateway_id = str(workspace.gateway_id or "")
+        device_ids = [str(d["id"]) for d in wq_devices if d.get("id")]
+
+        # Fetch latest readings from DB
+        latest_by_device = {}
+        if gateway_id and device_ids:
+            for row in DeviceReadingLatest.objects.filter(
+                workspace=workspace,
+                gateway_id=gateway_id,
+                device_id__in=device_ids,
+            ):
+                latest_by_device[row.device_id] = {
+                    "readings": row.readings or {},
+                    "ts": row.ts.isoformat() if row.ts else None,
+                    "lat": row.lat,
+                    "lng": row.lng,
+                }
+
+        # Build sensor list — merge workspace device metadata with latest readings
+        sensors = []
+        for device in wq_devices:
+            device_id = str(device.get("id") or "")
+            device_type = _tb_canonical_type(str(device.get("type") or ""))
+            db_row = latest_by_device.get(device_id, {})
+            readings = db_row.get("readings", {})
+
+            # Pick the canonical metric value
+            if device_type == "ph_sensor":
+                metric_key = "ph"
+                value = readings.get("ph") or readings.get("value") or device.get("reading")
+            elif device_type == "turbidity_sensor":
+                metric_key = "turbidity_ntu"
+                value = readings.get("turbidity_ntu") or readings.get("turbidity") or readings.get("value") or device.get("reading")
+            else:
+                metric_key = str(device.get("metric") or "value")
+                value = readings.get(metric_key) or device.get("reading")
+
+            sensors.append({
+                "device_id": device_id,
+                "device_type": device_type,
+                "metric": metric_key,
+                "value": value,
+                "ts": db_row.get("ts") or str(device.get("last_seen") or ""),
+                "lat": device.get("lat") or db_row.get("lat"),
+                "lng": device.get("lng") or db_row.get("lng"),
+                "mcu_id": str(device.get("microcontroller_id") or ""),
+                "status": str(device.get("status") or "online"),
+            })
+
+        # Active WQ incidents (per-device gateway_id scope used in _check_water_quality_thresholds)
+        wq_incidents_qs = Incident.objects.filter(
+            workspace=workspace,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status__in=["open", "ongoing"],
+        ).order_by("-last_seen_at")[:50]
+
+        alerts = [
+            {
+                "id": str(inc.id),
+                "incident_type": inc.incident_type,
+                "severity": inc.severity,
+                "status": inc.status,
+                "device_id": inc.gateway_id,
+                "detected_at": inc.detected_at.isoformat() if inc.detected_at else None,
+                "last_seen_at": inc.last_seen_at.isoformat() if inc.last_seen_at else None,
+                "details": inc.details,
+            }
+            for inc in wq_incidents_qs
+        ]
+
+        return Response({
+            "gateway_id": gateway_id,
+            "sensors": sensors,
+            "alerts": alerts,
+        })
+
 
 class PipelineListCreateView(APIView):
     permission_classes = [IsAuthenticated]
