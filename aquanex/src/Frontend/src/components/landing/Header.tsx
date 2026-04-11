@@ -41,17 +41,14 @@ const Header = () => {
     >
       <div className="px-10 md:px-20 flex items-center justify-between py-4">
 
-        {/* LOGO WRAPPER: Now uses the consolidated logoColor variable */}
+        {/* LOGO WRAPPER: Removed the extra span so it doesn't duplicate */}
         <motion.div
           animate={{ scale: scrolled ? 0.92 : 1 }}
           transition={{ duration: 0.3 }}
-          className="flex items-center gap-2 cursor-pointer transition-colors duration-300"
+          className="flex items-center cursor-pointer transition-colors duration-300"
           style={{ color: logoColor }}
         >
           <Logo size="md" />
-          <span className="text-xl font-black tracking-tighter" style={{ color: logoColor }}>
-            AquaNex
-          </span>
         </motion.div>
 
         <nav className="hidden items-center gap-1 md:flex">
