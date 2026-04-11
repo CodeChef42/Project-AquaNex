@@ -861,7 +861,8 @@ def _tb_get_device(token, device_id):
 
 def _tb_get_latest_values(token, device_id):
     keys = ",".join([
-        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph",
+        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm",
+        "ph", "turbidity_ntu", "turbidity",
         "temperature", "humidity", "flow", "pressure",
     ])
     try:
@@ -906,6 +907,8 @@ def _tb_pick_metric_reading(timeseries, device_type_hint=None):
         preferred = ["q_m3h", "flow_lpm", "flow", "pressure_bar", "pressure", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
     elif hint == "ph_sensor":
         preferred = ["ph", "pressure_bar", "q_m3h", "flow_lpm", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "flow", "pressure"]
+    elif hint == "turbidity_sensor":
+        preferred = ["turbidity_ntu", "turbidity", "ph", "pressure_bar", "q_m3h", "flow_lpm", "flow", "pressure"]
     elif hint == "soil_salinity_sensor":
         preferred = ["ec_ds_m", "ec_ms_cm", "soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
     elif hint == "soil_moisture_sensor":
@@ -1000,7 +1003,7 @@ def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
         return "flowmeter"
     if "ph" in name or metric == "ph":
         return "ph_sensor"
-    if "turbidity" in name or metric in {"turbidity", "turbidity_ntu"}:
+    if "turbidity" in name or "turb" in name or metric in {"turbidity", "turbidity_ntu"}:
         return "turbidity_sensor"
     return "sensor"
 
@@ -2161,16 +2164,21 @@ class GatewayTelemetryIngestView(APIView):
                 device.get("metric"),
             )
             readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
-            _persist_telemetry_row(
-                workspace=workspace,
-                gateway=gateway,
-                device_id=device_id,
-                mcu_id=resolved_mcu_id,
-                ts=ts,
-                lat=resolved_lat,
-                lng=resolved_lng,
-                readings=readings_payload,
-            )
+            # Skip time-series persistence for water quality devices — their latest
+            # reading is already cached in workspace.devices and the history table
+            # adds significant latency for every telemetry call.
+            _is_wq_device = _tb_canonical_type(device.get("type") or "") in {"ph_sensor", "turbidity_sensor"}
+            if not _is_wq_device:
+                _persist_telemetry_row(
+                    workspace=workspace,
+                    gateway=gateway,
+                    device_id=device_id,
+                    mcu_id=resolved_mcu_id,
+                    ts=ts,
+                    lat=resolved_lat,
+                    lng=resolved_lng,
+                    readings=readings_payload,
+                )
             ml_records.append({
                 "device_id": device_id,
                 "metric": device.get("metric"),
@@ -2195,6 +2203,17 @@ class GatewayTelemetryIngestView(APIView):
 
         ml_job = None
         if ml_records:
+            # Skip ML entirely when every record is a water quality device —
+            # they are already handled by rule-based threshold checks above.
+            _wq_types = {"ph_sensor", "turbidity_sensor"}
+            _all_wq = all(
+                _tb_canonical_type(str(rec.get("type") or "")) in _wq_types
+                for rec in ml_records
+            )
+            if _all_wq:
+                ml_job = {"queued": False, "reason": "water_quality_threshold_checks_used", "records": len(ml_records)}
+
+        if ml_records and ml_job is None:
             use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
             force_sync_on_celery_error = _is_truthy(
                 os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
@@ -2564,10 +2583,20 @@ class IncidentListView(generics.ListAPIView):
         if not queryset.exists():
             queryset = Incident.objects.all()
 
-        # Return all incidents regardless of status.
-        return queryset.order_by(
-            "-last_seen_at", "-detected_at", "-created_at"
-        )
+        # Optional filters via query params
+        types_param = self.request.query_params.get("incident_types")
+        if types_param:
+            types = [t.strip() for t in types_param.split(",") if t.strip()]
+            if types:
+                queryset = queryset.filter(incident_type__in=types)
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+
+        return queryset.order_by("-last_seen_at", "-detected_at", "-created_at")
 
 
 class IncidentResolveView(APIView):
@@ -2705,47 +2734,69 @@ class WaterQualityReadingsView(APIView):
         # Fetch latest readings from DB
         latest_by_device = {}
         if gateway_id and device_ids:
-            for row in DeviceReadingLatest.objects.filter(
-                workspace=workspace,
-                gateway_id=gateway_id,
-                device_id__in=device_ids,
-            ):
-                latest_by_device[row.device_id] = {
-                    "readings": row.readings or {},
-                    "ts": row.ts.isoformat() if row.ts else None,
-                    "lat": row.lat,
-                    "lng": row.lng,
-                }
+            try:
+                for row in DeviceReadingLatest.objects.filter(
+                    workspace=workspace,
+                    gateway_id=gateway_id,
+                    device_id__in=device_ids,
+                ):
+                    latest_by_device[row.device_id] = {
+                        "readings": row.readings or {},
+                        "ts": row.ts.isoformat() if row.ts else None,
+                        "lat": row.lat,
+                        "lng": row.lng,
+                    }
+            except DatabaseError as exc:
+                logger.warning("WaterQualityReadingsView: DB error fetching latest readings: %s", exc)
 
-        # Build sensor list — merge workspace device metadata with latest readings
+        # Build sensor list.
+        # Priority for reading value:
+        #   1. DeviceReadingLatest DB row (most accurate, has full readings dict)
+        #   2. device["reading"] in workspace.devices (updated on every telemetry call)
+        #   3. None  (no telemetry received yet)
+        # A value of 0 from the registration default is treated as no-data.
         sensors = []
         for device in wq_devices:
-            device_id = str(device.get("id") or "")
+            device_id  = str(device.get("id") or "")
             device_type = _tb_canonical_type(str(device.get("type") or ""))
-            db_row = latest_by_device.get(device_id, {})
-            readings = db_row.get("readings", {})
+            db_row     = latest_by_device.get(device_id)
+            readings   = db_row.get("readings", {}) if db_row else {}
 
-            # Pick the canonical metric value
             if device_type == "ph_sensor":
                 metric_key = "ph"
-                value = readings.get("ph") or readings.get("value") or device.get("reading")
+                raw = readings.get("ph") or readings.get("value")
             elif device_type == "turbidity_sensor":
                 metric_key = "turbidity_ntu"
-                value = readings.get("turbidity_ntu") or readings.get("turbidity") or readings.get("value") or device.get("reading")
+                raw = readings.get("turbidity_ntu") or readings.get("turbidity") or readings.get("value")
             else:
                 metric_key = str(device.get("metric") or "value")
-                value = readings.get(metric_key) or device.get("reading")
+                raw = readings.get(metric_key)
+
+            # Fall back to workspace.devices cached reading (updated by telemetry ingest).
+            # Exclude 0 — that is the registration placeholder, not a real sensor reading.
+            if raw is None:
+                cached = device.get("reading")
+                if cached is not None and cached != 0:
+                    raw = cached
+
+            value = None
+            if raw is not None:
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    value = None
 
             sensors.append({
-                "device_id": device_id,
+                "device_id":   device_id,
                 "device_type": device_type,
-                "metric": metric_key,
-                "value": value,
-                "ts": db_row.get("ts") or str(device.get("last_seen") or ""),
-                "lat": device.get("lat") or db_row.get("lat"),
-                "lng": device.get("lng") or db_row.get("lng"),
-                "mcu_id": str(device.get("microcontroller_id") or ""),
-                "status": str(device.get("status") or "online"),
+                "metric":      metric_key,
+                "value":       value,
+                "has_reading": value is not None,
+                "ts":          db_row.get("ts") if db_row else str(device.get("last_seen") or ""),
+                "lat":         device.get("lat") or (db_row.get("lat") if db_row else None),
+                "lng":         device.get("lng") or (db_row.get("lng") if db_row else None),
+                "mcu_id":      str(device.get("microcontroller_id") or ""),
+                "status":      str(device.get("status") or "online"),
             })
 
         # Active WQ incidents (per-device gateway_id scope used in _check_water_quality_thresholds)

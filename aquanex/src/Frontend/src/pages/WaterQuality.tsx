@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle, Droplet, Activity, RefreshCw, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle, Droplet, Activity, RefreshCw, XCircle, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { MapContainer, Polygon, TileLayer, useMap, CircleMarker, Popup } from "react-leaflet";
@@ -171,10 +171,12 @@ const WaterQualityMonitoring = () => {
     if (!isConfigured) return;
     try {
       const res = await api.get("/water-quality/readings/");
+      console.debug("[WQ] readings response:", res.data);
       setReadings(res.data as WqReadings);
       setLastFetched(new Date());
-    } catch {
-      // silent — keep stale data
+    } catch (err: any) {
+      console.error("[WQ] readings fetch failed:", err?.response?.data || err?.message);
+      // keep stale data
     } finally {
       setLoadingReadings(false);
     }
@@ -225,11 +227,15 @@ const WaterQualityMonitoring = () => {
   const sensors = readings?.sensors ?? [];
   const alerts = readings?.alerts ?? [];
 
-  const optimal = sensors.filter((s) => sensorStatus(s) === "optimal").length;
-  const warning = sensors.filter((s) => sensorStatus(s) === "warning").length;
-  const critical = sensors.filter((s) => sensorStatus(s) === "critical").length;
+  const sensorsWithReadings = sensors.filter((s) => s.value !== null && s.value !== undefined);
+  const optimal  = sensorsWithReadings.filter((s) => sensorStatus(s) === "optimal").length;
+  const warning  = sensorsWithReadings.filter((s) => sensorStatus(s) === "warning").length;
+  const critical = sensorsWithReadings.filter((s) => sensorStatus(s) === "critical").length;
 
   const activeAlerts = alerts.filter((a) => a.status === "ongoing" || a.status === "open");
+
+  // True all-clear: has readings, none are warning/critical, and no active alerts
+  const allClear = sensorsWithReadings.length > 0 && warning === 0 && critical === 0 && activeAlerts.length === 0;
 
   // ── not configured view ────────────────────────────────────────────────────
   if (!isConfigured) {
@@ -323,12 +329,23 @@ const WaterQualityMonitoring = () => {
               <h1 className="text-3xl font-bold text-gray-900 mb-2">Water Quality Monitoring</h1>
               <p className="text-gray-600">Real-time water quality analysis and management</p>
             </div>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
+                onClick={() => navigate("/water-quality/alerts")}
+              >
+                <ShieldAlert className="w-4 h-4" />
+                View All Alerts
+              </Button>
             <div className="flex items-center gap-2 text-sm text-gray-400">
               <Activity className="w-4 h-4 animate-pulse text-teal-500" />
               {lastFetched ? `Updated ${timeAgo(lastFetched.toISOString())}` : "Loading…"}
               <button onClick={fetchReadings} className="ml-1 text-teal-600 hover:text-teal-800">
                 <RefreshCw className="w-4 h-4" />
               </button>
+            </div>
             </div>
           </div>
         </div>
@@ -363,11 +380,19 @@ const WaterQualityMonitoring = () => {
           </div>
         )}
 
-        {/* No alerts banner */}
-        {activeAlerts.length === 0 && sensors.length > 0 && (
+        {/* No alerts banner — only when sensors actually have readings and all are clean */}
+        {allClear && (
           <div className="rounded-xl border border-green-200 bg-green-50 px-5 py-3 flex items-center gap-2 text-green-700">
             <CheckCircle className="w-5 h-5" />
             <span className="text-sm font-medium">All water quality parameters within acceptable ranges</span>
+          </div>
+        )}
+
+        {/* Waiting for first reading */}
+        {sensors.length > 0 && sensorsWithReadings.length === 0 && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 flex items-center gap-2 text-blue-700">
+            <Activity className="w-5 h-5 animate-pulse" />
+            <span className="text-sm font-medium">Devices registered — waiting for first telemetry. Start the simulator to begin streaming data.</span>
           </div>
         )}
 
@@ -388,7 +413,9 @@ const WaterQualityMonitoring = () => {
               <CardTitle className="text-sm font-medium text-gray-600">Optimal</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-green-600">{optimal}</div>
+              <div className="text-3xl font-bold text-green-600">
+                {sensorsWithReadings.length > 0 ? optimal : "—"}
+              </div>
               <p className="text-xs text-gray-500 mt-1">Within range</p>
             </CardContent>
           </Card>
@@ -398,7 +425,9 @@ const WaterQualityMonitoring = () => {
               <CardTitle className="text-sm font-medium text-gray-600">Warnings</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-yellow-600">{warning}</div>
+              <div className="text-3xl font-bold text-yellow-600">
+                {sensorsWithReadings.length > 0 ? warning : "—"}
+              </div>
               <p className="text-xs text-gray-500 mt-1">Needs attention</p>
             </CardContent>
           </Card>
@@ -408,7 +437,9 @@ const WaterQualityMonitoring = () => {
               <CardTitle className="text-sm font-medium text-gray-600">Critical</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-red-600">{critical}</div>
+              <div className="text-3xl font-bold text-red-600">
+                {sensorsWithReadings.length > 0 ? critical : "—"}
+              </div>
               <p className="text-xs text-gray-500 mt-1">Immediate action</p>
             </CardContent>
           </Card>
@@ -480,12 +511,11 @@ const WaterQualityMonitoring = () => {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {sensors.map((sensor) => {
-              const st = sensorStatus(sensor);
+              const hasValue = sensor.value !== null && sensor.value !== undefined;
+              const st = hasValue ? sensorStatus(sensor) : "unknown";
               const isPh = sensor.device_type === "ph_sensor";
               const isTurb = sensor.device_type === "turbidity_sensor";
-              const val = sensor.value !== null && sensor.value !== undefined
-                ? Number(sensor.value).toFixed(2)
-                : "—";
+              const val = hasValue ? Number(sensor.value).toFixed(2) : "—";
 
               // Human-readable label based on device ID
               const label = sensor.device_id;
@@ -604,11 +634,23 @@ const WaterQualityMonitoring = () => {
         {alerts.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-orange-500" />
-                Recent Alerts
-              </CardTitle>
-              <CardDescription>Water quality incidents detected by threshold monitoring</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-orange-500" />
+                    Recent Alerts
+                  </CardTitle>
+                  <CardDescription className="mt-1">Water quality incidents detected by threshold monitoring</CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs text-orange-600 border-orange-300 hover:bg-orange-50"
+                  onClick={() => navigate("/water-quality/alerts")}
+                >
+                  View All
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">

@@ -2,25 +2,31 @@
 """
 AquaNex Water Quality Simulator
 ================================
-Simulates 2 pH sensors and 2 turbidity sensors sending realistic readings
-to the AquaNex backend, including periodic anomalies for demonstration.
+Simulates 2 pH sensors and 2 turbidity sensors with realistic long-duration
+anomalies. Each full cycle takes ~14 minutes, with anomalies persisting for
+2–3 minutes at a time (as they would in real irrigation systems).
 
-Scenario cycle (70 seconds):
-  0–30s   Normal      — all parameters within optimal range
-  30–45s  pH Spike    — sensor 1 alkaline, sensor 2 acidic
-  45–55s  Turbidity   — both turbidity sensors spike (rain/runoff event)
-  55–65s  Combined    — mild pH drift + elevated turbidity
-  65–70s  Recovery    — values returning toward normal
+Scenario cycle (~840 seconds / 14 minutes):
+  0–120s    Normal          — optimal readings across all sensors
+  120–270s  Alkaline Drift  — slow pH rise (algae bloom / lime leaching)
+  270–315s  pH Recovery     — gradual return toward normal
+  315–405s  Normal          — stable window
+  405–585s  Turbidity Event — sustained sediment / rain runoff
+  585–645s  Turb Recovery   — clearing
+  645–765s  Combined Stress — multiple parameters elevated simultaneously
+  765–840s  Full Recovery   — all sensors normalising
+
+Send interval: 15 seconds (configurable via SEND_INTERVAL env var)
 
 Usage:
     python water_quality_simulator.py
 
 Environment variables:
-    BACKEND_URL       Backend base URL  (default: http://127.0.0.1:8000)
-    GATEWAY_ID        Gateway identifier (default: WQ-GATEWAY-01)
-    AQUANEX_USERNAME  Login username (required for device registration)
-    AQUANEX_PASSWORD  Login password (required for device registration)
-    SEND_INTERVAL     Seconds between telemetry batches (default: 5)
+    BACKEND_URL    Backend base URL  (default: http://127.0.0.1:8000)
+    GATEWAY_ID     Gateway identifier (default: WQ-GATEWAY-01)
+    SEND_INTERVAL  Seconds between sends (default: 15)
+
+Note: configure devices in the Water Quality page before running.
 """
 
 import math
@@ -32,68 +38,32 @@ from datetime import datetime, timezone
 
 import requests
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
-GATEWAY_ID = os.environ.get("GATEWAY_ID", "WQ-GATEWAY-01")
-USERNAME = os.environ.get("AQUANEX_USERNAME", "")
-PASSWORD = os.environ.get("AQUANEX_PASSWORD", "")
-SEND_INTERVAL = float(os.environ.get("SEND_INTERVAL", "5"))
+# ── Config ────────────────────────────────────────────────────────────────────
+BACKEND_URL   = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+GATEWAY_ID    = os.environ.get("GATEWAY_ID", "WQ-GATEWAY-01")
+SEND_INTERVAL = float(os.environ.get("SEND_INTERVAL", "15"))
 
-# ---------------------------------------------------------------------------
-# Device definitions
-# ---------------------------------------------------------------------------
+# ── Device definitions ────────────────────────────────────────────────────────
 DEVICES = [
-    {
-        "id": "WQ-PH-01",
-        "microcontroller_id": "WQ-MCU-01",
-        "type": "ph_sensor",
-        "metric": "ph",
-        "lat": 25.2060,
-        "lng": 55.2720,
-        "label": "pH Sensor A (North)",
-    },
-    {
-        "id": "WQ-PH-02",
-        "microcontroller_id": "WQ-MCU-01",
-        "type": "ph_sensor",
-        "metric": "ph",
-        "lat": 25.2035,
-        "lng": 55.2695,
-        "label": "pH Sensor B (South)",
-    },
-    {
-        "id": "WQ-TURB-01",
-        "microcontroller_id": "WQ-MCU-02",
-        "type": "turbidity_sensor",
-        "metric": "turbidity_ntu",
-        "lat": 25.2070,
-        "lng": 55.2730,
-        "label": "Turbidity Sensor A (East)",
-    },
-    {
-        "id": "WQ-TURB-02",
-        "microcontroller_id": "WQ-MCU-02",
-        "type": "turbidity_sensor",
-        "metric": "turbidity_ntu",
-        "lat": 25.2025,
-        "lng": 55.2685,
-        "label": "Turbidity Sensor B (West)",
-    },
+    {"id": "WQ-PH-01",   "mcu_id": "WQ-MCU-01", "type": "ph_sensor",        "metric": "ph",            "lat": 25.2060, "lng": 55.2720, "label": "pH Sensor A (North)"},
+    {"id": "WQ-PH-02",   "mcu_id": "WQ-MCU-01", "type": "ph_sensor",        "metric": "ph",            "lat": 25.2035, "lng": 55.2695, "label": "pH Sensor B (South)"},
+    {"id": "WQ-TURB-01", "mcu_id": "WQ-MCU-02", "type": "turbidity_sensor", "metric": "turbidity_ntu", "lat": 25.2070, "lng": 55.2730, "label": "Turbidity Sensor A (East)"},
+    {"id": "WQ-TURB-02", "mcu_id": "WQ-MCU-02", "type": "turbidity_sensor", "metric": "turbidity_ntu", "lat": 25.2025, "lng": 55.2685, "label": "Turbidity Sensor B (West)"},
 ]
 
-# ---------------------------------------------------------------------------
-# Scenario phases
-# ---------------------------------------------------------------------------
-SCENARIO_DURATION = 70.0  # seconds per full cycle
+# ── Scenario phases ───────────────────────────────────────────────────────────
+# (start_sec, end_sec, phase_name)
+SCENARIO_DURATION = 840.0   # 14 minutes per full cycle
 
 PHASES = [
-    (0,  30, "normal"),
-    (30, 45, "ph_spike"),
-    (45, 55, "turbidity_spike"),
-    (55, 65, "combined"),
-    (65, 70, "recovery"),
+    (0,   120,  "normal"),
+    (120, 270,  "alkaline_drift"),   # sustained pH rise — 2.5 min
+    (270, 315,  "ph_recovery"),
+    (315, 405,  "normal"),
+    (405, 585,  "turbidity_event"),  # sustained runoff — 3 min
+    (585, 645,  "turb_recovery"),
+    (645, 765,  "combined_stress"),  # multiple params — 2 min
+    (765, 840,  "full_recovery"),
 ]
 
 
@@ -105,45 +75,58 @@ def get_phase(elapsed: float) -> str:
     return "normal"
 
 
-# ---------------------------------------------------------------------------
-# Value generators
-# ---------------------------------------------------------------------------
+def phase_progress(elapsed: float) -> float:
+    """0.0 → 1.0 progress within the current phase (for smooth transitions)."""
+    e = elapsed % SCENARIO_DURATION
+    for start, end, name in PHASES:
+        if start <= e < end:
+            return (e - start) / (end - start)
+    return 0.0
+
+
+# ── Value generators ──────────────────────────────────────────────────────────
 def _noise(sigma: float) -> float:
     return random.gauss(0.0, sigma)
 
+def _diurnal() -> float:
+    """Slow daily sinusoidal baseline drift."""
+    return math.sin(time.time() / 7200.0 * math.pi) * 0.06
 
-def _diurnal(amplitude: float = 0.05) -> float:
-    """Slow sinusoidal drift representing daily temperature/light cycles."""
-    return math.sin(time.time() / 3600.0 * math.pi) * amplitude
 
-
-def _generate_ph(sensor_index: int, phase: str) -> float:
-    """Return a simulated pH reading for the given sensor and phase."""
-    base = 7.05 + _diurnal(0.08) + _noise(0.04)
+def _generate_ph(sensor_index: int, phase: str, progress: float) -> float:
+    base = 7.1 + _diurnal() + _noise(0.04)
 
     if phase == "normal":
         ph = base
 
-    elif phase == "ph_spike":
+    elif phase == "alkaline_drift":
+        # Gradual rise — mimics algae bloom consuming CO₂
+        # Sensor A rises higher; sensor B follows with lag
         if sensor_index == 1:
-            # Alkaline spike — e.g. fertiliser overdose, lime leaching
-            ph = 9.1 + _noise(0.25) + abs(_diurnal(0.3))
+            peak = 8.9 + _noise(0.12)
+            ph = base + (peak - base) * min(progress * 1.3, 1.0)
         else:
-            # Acidic spike — e.g. acid rain, CO₂ dissolution
-            ph = 5.0 + _noise(0.18)
+            peak = 8.3 + _noise(0.10)
+            ph = base + (peak - base) * min(progress * 1.0, 1.0)
 
-    elif phase == "combined":
+    elif phase == "ph_recovery":
+        # Gradual return; sensor B recovers faster
         if sensor_index == 1:
-            ph = 8.1 + _noise(0.12)
+            ph = 8.9 - (8.9 - base) * min(progress * 1.1, 1.0) + _noise(0.08)
         else:
-            ph = 6.1 + _noise(0.10)
+            ph = 8.3 - (8.3 - base) * min(progress * 1.3, 1.0) + _noise(0.07)
 
-    elif phase == "recovery":
-        # Trending back to normal; use a weighted average
+    elif phase == "combined_stress":
+        # Moderate alkaline drift + noise (compound event)
         if sensor_index == 1:
-            ph = 7.5 + _noise(0.08)
+            ph = 8.2 + _noise(0.15) + progress * 0.3
         else:
-            ph = 6.7 + _noise(0.08)
+            ph = 6.1 + _noise(0.12) - progress * 0.2  # mild acidic
+        ph = max(5.0, min(10.0, ph))
+
+    elif phase == "full_recovery":
+        # Both sensors normalise
+        ph = base + _noise(0.06) * (1.0 - progress)
 
     else:
         ph = base
@@ -151,31 +134,42 @@ def _generate_ph(sensor_index: int, phase: str) -> float:
     return round(max(2.0, min(14.0, ph)), 2)
 
 
-def _generate_turbidity(sensor_index: int, phase: str) -> float:
-    """Return a simulated turbidity reading (NTU)."""
-    base = 1.0 + abs(_diurnal(0.3)) + abs(_noise(0.12))
+def _generate_turbidity(sensor_index: int, phase: str, progress: float) -> float:
+    base = 0.9 + abs(_diurnal() * 0.4) + abs(_noise(0.08))
 
     if phase == "normal":
         turb = base
 
-    elif phase == "turbidity_spike":
+    elif phase == "turbidity_event":
+        # Sustained runoff — ramps up then plateaus
+        ramp = min(progress * 2.0, 1.0)
         if sensor_index == 1:
-            # Heavy runoff event
-            turb = 12.5 + _noise(1.2) + abs(_diurnal(2.0))
+            # Upstream sensor hit harder
+            peak = 14.5 + _noise(1.0)
+            turb = base + (peak - base) * ramp + _noise(0.5)
         else:
-            turb = 7.8 + _noise(0.9)
+            peak = 9.2 + _noise(0.8)
+            turb = base + (peak - base) * ramp + _noise(0.4)
 
-    elif phase == "combined":
+    elif phase == "turb_recovery":
+        # Exponential-style clearing
         if sensor_index == 1:
-            turb = 5.8 + _noise(0.5)
+            turb = 14.5 * (1.0 - progress) ** 1.5 + base + _noise(0.4)
         else:
-            turb = 4.2 + _noise(0.4)
+            turb = 9.2 * (1.0 - progress) ** 1.5 + base + _noise(0.3)
 
-    elif phase == "recovery":
+    elif phase == "combined_stress":
+        # Moderately elevated turbidity alongside pH stress
         if sensor_index == 1:
-            turb = 3.5 + _noise(0.3)
+            turb = 5.8 + _noise(0.5) + progress * 0.8
         else:
-            turb = 2.8 + _noise(0.3)
+            turb = 4.1 + _noise(0.4) + progress * 0.5
+
+    elif phase == "full_recovery":
+        if sensor_index == 1:
+            turb = 5.8 * (1.0 - progress) ** 2.0 + base + _noise(0.3)
+        else:
+            turb = 4.1 * (1.0 - progress) ** 2.0 + base + _noise(0.2)
 
     else:
         turb = base
@@ -183,218 +177,124 @@ def _generate_turbidity(sensor_index: int, phase: str) -> float:
     return round(max(0.0, turb), 2)
 
 
-def generate_reading(device: dict, phase: str) -> dict:
-    """Return the simulated `values` dict for one device."""
-    dev_type = device["type"]
+def generate_reading(device: dict, phase: str, progress: float) -> dict:
     idx = int(device["id"][-2:]) if device["id"][-2:].isdigit() else 1
-
-    if dev_type == "ph_sensor":
-        return {"ph": _generate_ph(idx, phase)}
-    elif dev_type == "turbidity_sensor":
-        return {"turbidity_ntu": _generate_turbidity(idx, phase)}
+    if device["type"] == "ph_sensor":
+        return {"ph": _generate_ph(idx, phase, progress)}
+    elif device["type"] == "turbidity_sensor":
+        return {"turbidity_ntu": _generate_turbidity(idx, phase, progress)}
     return {}
 
 
-# ---------------------------------------------------------------------------
-# Backend communication
-# ---------------------------------------------------------------------------
+# ── Status helpers ────────────────────────────────────────────────────────────
+def _status_str(device_type: str, value: float) -> str:
+    if device_type == "ph_sensor":
+        if 6.5 <= value <= 7.5:  return "OPTIMAL "
+        if 6.0 <= value <= 8.0:  return "WARNING "
+        return "CRITICAL"
+    if device_type == "turbidity_sensor":
+        if value <= 3.0:  return " CLEAR  "
+        if value <= 5.0:  return "WARNING "
+        return "CRITICAL"
+    return "UNKNOWN "
+
+
+# ── Telemetry sender ──────────────────────────────────────────────────────────
 _session = requests.Session()
-_access_token: str = ""
 
 
-def login() -> bool:
-    """Authenticate and store the JWT access token."""
-    global _access_token
-    if not USERNAME or not PASSWORD:
-        print("[WARN] No AQUANEX_USERNAME / AQUANEX_PASSWORD set — device registration will be skipped.")
-        return False
-    try:
-        resp = _session.post(
-            f"{BACKEND_URL}/api/auth/login/",
-            json={"username": USERNAME, "password": PASSWORD},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        _access_token = resp.json().get("access", "")
-        print(f"[AUTH] Logged in as {USERNAME}")
-        return bool(_access_token)
-    except Exception as exc:
-        print(f"[AUTH] Login failed: {exc}")
-        return False
-
-
-def _auth_headers() -> dict:
-    return {"Authorization": f"Bearer {_access_token}"} if _access_token else {}
-
-
-def register_devices(workspace_id: str = "") -> bool:
-    """Register the gateway and its water quality devices."""
-    payload: dict = {
-        "gateway_id": GATEWAY_ID,
-        "protocol": "http",
-        "devices": [
-            {
-                "id": d["id"],
-                "microcontroller_id": d["microcontroller_id"],
-                "type": d["type"],
-                "metric": d["metric"],
-                "lat": d["lat"],
-                "lng": d["lng"],
-                "status": "online",
-            }
-            for d in DEVICES
-        ],
-    }
-    headers = _auth_headers()
-    if workspace_id:
-        headers["X-Workspace-Id"] = workspace_id
-    try:
-        resp = _session.post(
-            f"{BACKEND_URL}/api/gateway-register/",
-            json=payload,
-            headers=headers,
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            print(f"[REGISTER] Gateway {GATEWAY_ID} registered with {len(DEVICES)} devices")
-            return True
-        else:
-            print(f"[REGISTER] Failed ({resp.status_code}): {resp.text[:200]}")
-            return False
-    except Exception as exc:
-        print(f"[REGISTER] Error: {exc}")
-        return False
-
-
-def get_workspace_id() -> str:
-    """Fetch the user's active workspace ID."""
-    try:
-        resp = _session.get(
-            f"{BACKEND_URL}/api/workspaces/",
-            headers=_auth_headers(),
-            timeout=10,
-        )
-        resp.raise_for_status()
-        workspaces = resp.json()
-        if isinstance(workspaces, list) and workspaces:
-            return str(workspaces[0].get("id", ""))
-        if isinstance(workspaces, dict):
-            results = workspaces.get("results") or []
-            if results:
-                return str(results[0].get("id", ""))
-    except Exception as exc:
-        print(f"[WORKSPACE] Could not fetch workspace: {exc}")
-    return ""
-
-
-def send_telemetry(phase: str) -> None:
-    """Build and POST a telemetry batch for all four devices."""
+def send_telemetry(phase: str, progress: float) -> None:
     now_iso = datetime.now(timezone.utc).isoformat()
-    telemetry = []
-    for device in DEVICES:
-        values = generate_reading(device, phase)
-        telemetry.append({
-            "device_id": device["id"],
-            "mcu_id": device["microcontroller_id"],
-            "values": values,
-            "lat": device["lat"],
-            "lng": device["lng"],
-            "ts": now_iso,
-        })
-
-    payload = {
-        "gateway_id": GATEWAY_ID,
-        "telemetry": telemetry,
-        "prefer_sync_ml": False,
-    }
-
+    telemetry = [
+        {
+            "device_id": d["id"],
+            "mcu_id":    d["mcu_id"],
+            "values":    generate_reading(d, phase, progress),
+            "lat":       d["lat"],
+            "lng":       d["lng"],
+            "ts":        now_iso,
+        }
+        for d in DEVICES
+    ]
     try:
         resp = _session.post(
             f"{BACKEND_URL}/api/gateway-telemetry/",
-            json=payload,
-            timeout=10,
+            json={"gateway_id": GATEWAY_ID, "telemetry": telemetry, "prefer_sync_ml": False},
+            timeout=30,
         )
-        data = resp.json()
-        accepted = data.get("accepted", "?")
+        data      = resp.json()
+        accepted  = data.get("accepted", "?")
+        rejected  = data.get("rejected", [])
         anomalies = data.get("anomalies", [])
-        anomaly_str = (
+        alert_str = (
             f"  ⚠  {len(anomalies)} alert(s): " +
             ", ".join(a.get("device_type", "?") for a in anomalies)
-            if anomalies else ""
-        )
-        print(f"  → accepted={accepted}{anomaly_str}")
+        ) if anomalies else ""
+        rej_str = f"  ✗ {len(rejected)} rejected" if rejected else ""
+        print(f"  → sent {accepted}/{len(telemetry)}{alert_str}{rej_str}")
+    except requests.exceptions.Timeout:
+        print("  → TIMEOUT (data may still have been saved)")
     except Exception as exc:
-        print(f"  → ERROR sending telemetry: {exc}")
+        print(f"  → ERROR: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-def print_readings(phase: str, elapsed: float) -> None:
+# ── Display ───────────────────────────────────────────────────────────────────
+_PHASE_LABELS = {
+    "normal":           "Normal",
+    "alkaline_drift":   "Alkaline Drift  (pH rising)",
+    "ph_recovery":      "pH Recovery",
+    "turbidity_event":  "Turbidity Event (runoff)",
+    "turb_recovery":    "Turbidity Recovery",
+    "combined_stress":  "Combined Stress",
+    "full_recovery":    "Full Recovery",
+}
+
+
+def print_tick(phase: str, elapsed: float, progress: float) -> None:
     e = elapsed % SCENARIO_DURATION
-    bar_width = 30
-    bar = int(bar_width * e / SCENARIO_DURATION)
-    progress = "[" + "=" * bar + ">" + " " * (bar_width - bar) + "]"
+    bar_w = 32
+    bar   = int(bar_w * e / SCENARIO_DURATION)
+    prog  = "[" + "=" * bar + ">" + " " * (bar_w - bar) + "]"
+    label = _PHASE_LABELS.get(phase, phase)
+    mins  = int(e // 60)
+    secs  = int(e % 60)
+    total_mins = int(SCENARIO_DURATION // 60)
 
-    print(f"\n{'='*60}")
-    print(f"  Phase: {phase.upper():20s}  {progress}  t={e:.1f}s/{SCENARIO_DURATION:.0f}s")
-    print(f"{'='*60}")
-    for device in DEVICES:
-        values = generate_reading(device, phase)
-        label = device["label"]
-        metric, val = next(iter(values.items()))
-        status = _value_status(device["type"], val)
-        print(f"  {label:<30s}  {metric}={val:>6.2f}  [{status}]")
-
-
-def _value_status(device_type: str, value: float) -> str:
-    if device_type == "ph_sensor":
-        if 6.5 <= value <= 7.5:
-            return "OPTIMAL"
-        elif 6.0 <= value <= 8.0:
-            return "WARNING"
-        else:
-            return "CRITICAL"
-    elif device_type == "turbidity_sensor":
-        if value <= 3.0:
-            return " CLEAR "
-        elif value <= 5.0:
-            return "WARNING"
-        else:
-            return "CRITICAL"
-    return "UNKNOWN"
+    print(f"\n{'='*64}")
+    print(f"  {label}")
+    print(f"  {prog}  {mins:02d}:{secs:02d} / {total_mins:02d}:00")
+    print(f"{'='*64}")
+    for d in DEVICES:
+        vals = generate_reading(d, phase, progress)
+        metric, val = next(iter(vals.items()))
+        st = _status_str(d["type"], val)
+        print(f"  {d['label']:<34s}  {metric}={val:>6.2f}  [{st}]")
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
-    print("=" * 60)
+    print("=" * 64)
     print("  AquaNex Water Quality Simulator")
-    print(f"  Backend : {BACKEND_URL}")
-    print(f"  Gateway : {GATEWAY_ID}")
-    print(f"  Devices : {len(DEVICES)}  (2×pH + 2×turbidity)")
-    print(f"  Interval: {SEND_INTERVAL}s")
-    print("=" * 60)
+    print(f"  Backend  : {BACKEND_URL}")
+    print(f"  Gateway  : {GATEWAY_ID}")
+    print(f"  Devices  : {len(DEVICES)}  (2×pH + 2×turbidity)")
+    print(f"  Interval : {SEND_INTERVAL}s")
+    print(f"  Cycle    : {int(SCENARIO_DURATION/60)} min  (anomalies last 2–3 min each)")
+    print("=" * 64)
+    print("\n  Ensure devices are configured in the Water Quality page first.")
+    print("  Press Ctrl+C to stop.\n")
 
-    # Authenticate and register devices
-    workspace_id = ""
-    if login():
-        workspace_id = get_workspace_id()
-        register_devices(workspace_id)
-    else:
-        print("[INFO] Running without auth — telemetry will still be sent if gateway is already registered.")
-
-    scenario_start = time.time()
-    print("\n[SIM] Starting simulation loop. Press Ctrl+C to stop.\n")
-
+    start = time.time()
     try:
         while True:
-            elapsed = time.time() - scenario_start
-            phase = get_phase(elapsed)
-            print_readings(phase, elapsed)
-            send_telemetry(phase)
+            elapsed  = time.time() - start
+            phase    = get_phase(elapsed)
+            progress = phase_progress(elapsed)
+            print_tick(phase, elapsed, progress)
+            send_telemetry(phase, progress)
             time.sleep(SEND_INTERVAL)
-
     except KeyboardInterrupt:
-        print("\n\n[SIM] Simulator stopped.")
+        print("\n\n  Simulator stopped.")
         sys.exit(0)
 
 
