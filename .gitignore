@@ -31,3 +31,5 @@ Thumbs.db
 *.code-workspace
 .aider*
 aquanex/src/Backend/.env
+#.env
+*.env
