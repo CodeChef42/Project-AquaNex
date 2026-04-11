@@ -30,3 +30,4 @@ Thumbs.db
 .vscode/
 *.code-workspace
 .aider*
+aquanex/src/Backend/.env
