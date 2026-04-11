@@ -12,13 +12,8 @@ media
 staticfiles
 
 # Environments
-<<<<<<< HEAD
 #.env
 #.venv
-=======
-# .env
-# .venv
->>>>>>> 659230411fd84cc019f137f5bf365cbc34cbf714
 env/
 venv/
 ENV/

@@ -61,8 +61,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
     signin:      { msg: 'Signing you in…',              sub: 'Verifying your credentials' },
     workspace:   { msg: 'Loading your workspace…',      sub: 'Fetching sensors and zone data' },
     overlay:     { msg: 'Accessing workspace…',         sub: 'Setting up your dashboard' },
-    logout:      { msg: 'Signing you out…',              sub: 'Clearing your session securely' },
-    onboarding:  { msg: 'Preparing your onboarding…',   sub: 'Setting up your AquaNex workspace' },
+    logout:      { msg: 'Signing you out…',             sub: 'Clearing your session securely' },
+    onboarding:  { msg: 'Preparing your onboarding…',   sub: 'Teleporting you to onboarding' },
     dashboard:   { msg: 'Launching your dashboard…',    sub: 'Syncing sensors and zone data' },
   };
  
