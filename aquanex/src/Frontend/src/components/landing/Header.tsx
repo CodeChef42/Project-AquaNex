@@ -23,6 +23,11 @@ const Header = () => {
   const handleLogin = () => { setMobileOpen(false); navigate("/signin"); };
   const handleSignUp = () => { setMobileOpen(false); navigate("/signup"); };
 
+  // Consolidate the colors so the Logo, Links, and Buttons all share the exact same logic
+  const defaultTextColor = scrolled ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.85)";
+  const hoverTextColor = scrolled ? "#000000" : "#ffffff";
+  const logoColor = scrolled ? "#000000" : "#ffffff";
+
   return (
     <motion.header
       className="fixed left-0 right-0 top-0 z-50"
@@ -31,16 +36,17 @@ const Header = () => {
         borderBottom: scrolled ? "1px solid rgba(26,26,26,0.1)" : "1px solid transparent",
         boxShadow: scrolled ? "0 8px 32px rgba(0,0,0,0.06)" : "none",
       }}
-      
       style={{ backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
       transition={{ duration: 0.4, ease: "easeInOut" }}
     >
-      {/* 🛠️ ONLY CHANGE HERE: Swapped section-padding for px-10 md:px-20 */}
       <div className="px-10 md:px-20 flex items-center justify-between py-4">
 
+        {/* LOGO WRAPPER: Removed the extra span so it doesn't duplicate */}
         <motion.div
           animate={{ scale: scrolled ? 0.92 : 1 }}
           transition={{ duration: 0.3 }}
+          className="flex items-center cursor-pointer transition-colors duration-300"
+          style={{ color: logoColor }}
         >
           <Logo size="md" />
         </motion.div>
@@ -51,12 +57,12 @@ const Header = () => {
               key={link.label}
               href={link.href}
               className="rounded-full px-4 py-2 text-sm font-medium transition-colors"
-              style={{ color: scrolled ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.85)" }}
+              style={{ color: defaultTextColor }}
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: i * 0.08 }}
-              onMouseEnter={e => (e.currentTarget.style.color = scrolled ? "#000000" : "#ffffff")}
-              onMouseLeave={e => (e.currentTarget.style.color = scrolled ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.85)")}
+              onMouseEnter={e => (e.currentTarget.style.color = hoverTextColor)}
+              onMouseLeave={e => (e.currentTarget.style.color = defaultTextColor)}
             >
               {link.label}
             </motion.a>
@@ -73,9 +79,9 @@ const Header = () => {
             type="button"
             onClick={handleLogin}
             className="text-sm font-medium transition-colors"
-            style={{ color: scrolled ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.85)" }}
-            onMouseEnter={e => (e.currentTarget.style.color = "#000000")}
-            onMouseLeave={e => (e.currentTarget.style.color = scrolled ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.85)")}
+            style={{ color: defaultTextColor }}
+            onMouseEnter={e => (e.currentTarget.style.color = hoverTextColor)}
+            onMouseLeave={e => (e.currentTarget.style.color = defaultTextColor)}
           >
             Login
           </button>
