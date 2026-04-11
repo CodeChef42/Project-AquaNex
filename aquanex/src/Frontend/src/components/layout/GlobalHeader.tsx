@@ -62,6 +62,13 @@ const GlobalHeader = () => {
         style={{ background: "rgba(255,255,255,0.85)" }}
       >
         <div className="max-w-[1440px] mx-auto h-full flex items-center justify-between px-10 md:px-16 lg:px-20">
+
+          {/* LEFT SIDE: LOGO — clicks to landing page */}
+          <div className="flex items-center shrink-0">
+            <a href="https://aquanex.app" className="cursor-pointer">
+              <Logo withText={true} size="md" />
+            </a>
+          </div>
           
           {/* LEFT SIDE: LOGO */}
           <div className="flex items-center shrink-0">
