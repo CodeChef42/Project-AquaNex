@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 from healthping import start_health_ping
-
+import os
 DJANGO_BACKEND_URL = os.environ.get("DJANGO_BACKEND_URL", "http://localhost:8000")
 DJANGO_INTERNAL_TOKEN = os.environ.get("DJANGO_INTERNAL_TOKEN", "")
 try:
@@ -19,7 +19,6 @@ import paho.mqtt.client as mqtt
 import threading
 import time
 import re
-import os
 import tempfile
 from typing import Any, Dict, List, Optional
 
@@ -559,18 +558,31 @@ def predict_breakage(data: SensorData):
         return PredictionResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+prediction = _predict_from_snapshot(snapshot)
+prediction["gateway_id"]   = gateway_id
+prediction["workspace_id"] = data.workspace_id
 
+# Include all slot→device_id mappings so Django can resolve pipe_id from any of them
+prediction["slot_device_ids"] = {
+    slot: state.get(f"{slot}_device_id")
+    for slot in ("flow_1", "pressure_1", "flow_2", "pressure_2")
+}
 def _report_incident_to_django(prediction: dict):
-    """Fire-and-forget POST to Django to create/update an incident."""
     if not prediction.get("is_anomaly"):
         return
     try:
+        slot_device_ids = prediction.get("slot_device_ids", {})
+
         payload = {
             "gateway_id":    prediction.get("gateway_id", ""),
             "workspace_id":  prediction.get("workspace_id"),
             "anomaly_type":  prediction.get("anomaly_type", "unknown"),
             "severity":      prediction.get("severity", "medium"),
             "confidence":    prediction.get("confidence", 0.0),
+            # ← PRIMARY: downstream flow meter is the first indicator of leakage
+            "device_id":     slot_device_ids.get("flow_2") or slot_device_ids.get("flow_1"),
+            # ← FALLBACK: send all slot→device mappings so Django can try each one
+            "slot_device_ids": slot_device_ids,
             "details": {
                 "deltas":    prediction.get("deltas", {}),
                 "rule":      prediction.get("rule", {}),
