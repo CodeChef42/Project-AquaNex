@@ -172,6 +172,11 @@ WQ_INCIDENT_TYPES = {
     "turbidity_warning", "turbidity_spike", "turbidity_critical",
 }
 
+# Grouped by metric family so we can close sibling severities when escalating/de-escalating
+_PH_FAMILY         = {"ph_warning", "ph_anomaly", "ph_critical"}
+_TURBIDITY_FAMILY  = {"turbidity_warning", "turbidity_spike", "turbidity_critical"}
+
+
 def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_type, value, ts):
     """Rule-based anomaly detection for water quality sensors. Returns incident summary or None."""
     try:
@@ -207,6 +212,25 @@ def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_typ
     now_ts = timezone.now()
 
     if incident_type:
+        # Determine sibling incident types in the same metric family.
+        # When a sensor escalates (e.g. turbidity_warning → turbidity_spike) or
+        # de-escalates (turbidity_critical → turbidity_spike), close the old level
+        # first so only ONE active incident exists per sensor per metric family.
+        if incident_type in _PH_FAMILY:
+            sibling_types = list(_PH_FAMILY - {incident_type})
+        elif incident_type in _TURBIDITY_FAMILY:
+            sibling_types = list(_TURBIDITY_FAMILY - {incident_type})
+        else:
+            sibling_types = []
+
+        if sibling_types:
+            Incident.objects.filter(
+                workspace=workspace,
+                gateway_id=device_id,
+                incident_type__in=sibling_types,
+                status__in=["ongoing", "recovering"],
+            ).update(status="recovering", last_seen_at=now_ts)
+
         prediction = {
             "is_anomaly": True,
             "anomaly_type": incident_type,
@@ -227,9 +251,9 @@ def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_typ
             status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
 
-        # Auto-resolve incidents that have been in "recovering" for 2+ minutes.
-        # At a 15-second send interval that means 8+ consecutive normal ticks,
-        # so a brief blip that quickly normalises gets a grace period before resolution.
+        # Auto-resolve incidents that have been recovering for 2+ minutes.
+        # At a 15-second send interval that is 8+ consecutive normal ticks,
+        # giving a grace period before marking an incident fully resolved.
         resolve_cutoff = now_ts - timedelta(minutes=2)
         Incident.objects.filter(
             workspace=workspace,
@@ -240,6 +264,163 @@ def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_typ
         ).update(status="resolved", resolved_at=now_ts)
 
         return None
+
+
+def _check_water_quality_thresholds_batch(workspace, checks):
+    """
+    Batch WQ threshold checks for multiple devices in a single tick.
+    Replaces per-device _check_water_quality_thresholds() calls with:
+      1 SELECT  — all active WQ incidents for all devices
+      1 UPDATE  — sibling severity closes (if any)
+      1 bulk_update — ongoing/recovering incident updates
+      1 bulk_create — brand-new incidents
+    = 4 queries regardless of device count, vs. up to 4×N previously.
+
+    checks: list of (device_id, device_type, value, ts)
+    Returns: dict {device_id: {"id": ..., "created": bool} | None}
+             None means normal reading (no active anomaly).
+    """
+    if not checks:
+        return {}
+
+    now_ts = timezone.now()
+    resolve_cutoff = now_ts - timedelta(minutes=2)
+    device_ids = [c[0] for c in checks]
+
+    # ── Single fetch: all active WQ incidents for all devices ─────────────────
+    existing = list(Incident.objects.filter(
+        workspace=workspace,
+        gateway_id__in=device_ids,
+        incident_type__in=list(WQ_INCIDENT_TYPES),
+        status__in=["ongoing", "recovering"],
+    ))
+    # Index: (gateway_id, incident_type, status) → Incident
+    inc_map = {}
+    for inc in existing:
+        inc_map[(inc.gateway_id, inc.incident_type, inc.status)] = inc
+
+    # ── Determine actions in memory (no queries) ───────────────────────────────
+    sibling_ids_to_close = []   # IDs of sibling incidents to mark recovering
+    incs_to_update = {}         # id → Incident (modified in memory, bulk-updated later)
+    new_incidents = []          # Incident objects to bulk_create
+    results = {}
+
+    for device_id, device_type, value, ts in checks:
+        try:
+            fval = float(value)
+        except (TypeError, ValueError):
+            results[device_id] = None
+            continue
+
+        incident_type = None
+        severity = None
+        if device_type == "ph_sensor":
+            if fval < 5.5 or fval > 9.5:
+                incident_type, severity = "ph_critical", "critical"
+            elif fval < 6.0 or fval > 8.5:
+                incident_type, severity = "ph_anomaly", "high"
+            elif fval < 6.5 or fval > 8.0:
+                incident_type, severity = "ph_warning", "medium"
+        elif device_type == "turbidity_sensor":
+            if fval > 10.0:
+                incident_type, severity = "turbidity_critical", "critical"
+            elif fval > 5.0:
+                incident_type, severity = "turbidity_spike", "high"
+            elif fval > 3.0:
+                incident_type, severity = "turbidity_warning", "medium"
+
+        detected_at = ts or now_ts
+
+        if incident_type:
+            # Close sibling severity levels for this device (e.g. warning → spike)
+            if incident_type in _PH_FAMILY:
+                family = _PH_FAMILY
+            elif incident_type in _TURBIDITY_FAMILY:
+                family = _TURBIDITY_FAMILY
+            else:
+                family = set()
+
+            for stype in family - {incident_type}:
+                for stat in ("ongoing", "recovering"):
+                    sib = inc_map.get((device_id, stype, stat))
+                    if sib:
+                        sibling_ids_to_close.append(sib.id)
+
+            ongoing = inc_map.get((device_id, incident_type, "ongoing"))
+            recovering = inc_map.get((device_id, incident_type, "recovering"))
+
+            if ongoing:
+                ongoing.last_seen_at = detected_at
+                ongoing.severity = severity
+                incs_to_update[ongoing.id] = ongoing
+                results[device_id] = {"id": str(ongoing.id), "created": False}
+            elif recovering:
+                recovering.status = "ongoing"
+                recovering.last_seen_at = detected_at
+                recovering.severity = severity
+                incs_to_update[recovering.id] = recovering
+                results[device_id] = {"id": str(recovering.id), "created": False}
+            else:
+                new_incidents.append(Incident(
+                    workspace=workspace,
+                    gateway_id=device_id,
+                    incident_type=incident_type,
+                    severity=severity,
+                    status="ongoing",
+                    detected_at=detected_at,
+                    last_seen_at=detected_at,
+                    fingerprint=_incident_fingerprint(device_id, incident_type),
+                    details={
+                        "prediction": {
+                            "is_anomaly": True,
+                            "anomaly_type": incident_type,
+                            "severity": severity,
+                            "device_id": device_id,
+                            "device_type": device_type,
+                            "value": fval,
+                            "source": "water_quality_threshold",
+                        }
+                    },
+                ))
+                results[device_id] = {"id": None, "created": True}
+        else:
+            # Normal reading — move ongoing → recovering; resolve stale recovering
+            for itype in WQ_INCIDENT_TYPES:
+                ongoing = inc_map.get((device_id, itype, "ongoing"))
+                if ongoing:
+                    ongoing.status = "recovering"
+                    ongoing.last_seen_at = now_ts
+                    incs_to_update[ongoing.id] = ongoing
+
+                rec = inc_map.get((device_id, itype, "recovering"))
+                if rec and rec.last_seen_at and rec.last_seen_at <= resolve_cutoff:
+                    rec.status = "resolved"
+                    rec.resolved_at = now_ts
+                    incs_to_update[rec.id] = rec
+
+            results[device_id] = None
+
+    # ── Execute bulk DB writes (3 queries max) ─────────────────────────────────
+    if sibling_ids_to_close:
+        Incident.objects.filter(id__in=sibling_ids_to_close).update(
+            status="recovering", last_seen_at=now_ts
+        )
+
+    if incs_to_update:
+        Incident.objects.bulk_update(
+            list(incs_to_update.values()),
+            ["status", "last_seen_at", "severity", "resolved_at", "details"],
+        )
+
+    if new_incidents:
+        created = Incident.objects.bulk_create(new_incidents, ignore_conflicts=True)
+        for inc in created:
+            if inc.id:
+                dev_result = results.get(inc.gateway_id)
+                if isinstance(dev_result, dict) and dev_result.get("created") and dev_result.get("id") is None:
+                    dev_result["id"] = str(inc.id)
+
+    return results
 
 
 def _resolve_user_workspace(request, create_if_missing=False):
@@ -2031,27 +2212,69 @@ class GatewayTelemetryIngestView(APIView):
             prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
         elif _is_truthy(request.data.get("allow_async_ml")):
             prefer_sync_ml = False
-            
+
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 🚀 BROADCAST FIX: Fetch ALL workspaces using this gateway instead of just the first one
-        workspaces = list(Workspace.objects.filter(gateway_id=gateway_id))
-        if not workspaces:
-            return Response({"error": "gateway_id not registered to any workspace"}, status=status.HTTP_404_NOT_FOUND)
+        # Parse records early — needed for workspace auto-discovery below.
+        records = request.data.get("telemetry")
+        if not isinstance(records, list):
+            records = [request.data]
 
-        # Ensure the Gateway object exists in the DB (bound to the first workspace just to satisfy the FK)
+        # ── Workspace resolution ───────────────────────────────────────────────
+        # 1. Exact match: workspaces that already have this gateway_id registered.
+        workspaces = list(Workspace.objects.filter(gateway_id=gateway_id))
+
+        if not workspaces:
+            # 2. Device-ID match: find a workspace whose devices JSON contains any
+            #    of the device IDs in this telemetry batch.  Handles the common case
+            #    where the user configured devices via the WQ page but never explicitly
+            #    saved the gateway ID (or the workspace was recreated).
+            payload_device_ids = {
+                str(r.get("device_id", "")).strip()
+                for r in records
+                if isinstance(r, dict) and r.get("device_id")
+            }
+            auto_ws = None
+            if payload_device_ids:
+                for candidate in Workspace.objects.exclude(devices=None):
+                    ws_dev_ids = {
+                        str(d.get("id", "")).strip()
+                        for d in (candidate.devices or [])
+                        if isinstance(d, dict) and d.get("id")
+                    }
+                    if ws_dev_ids & payload_device_ids:
+                        auto_ws = candidate
+                        break
+
+            # 3. Last resort: use the first workspace in the DB so data is never
+            #    silently dropped — the gateway gets auto-registered there.
+            if not auto_ws:
+                auto_ws = Workspace.objects.order_by("created_at").first()
+
+            if not auto_ws:
+                return Response(
+                    {"error": "No workspace found. Create a workspace in AquaNex first."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Persist the gateway_id so future requests hit path 1.
+            auto_ws.gateway_id = gateway_id
+            auto_ws.save(update_fields=["gateway_id"])
+            logger.info("Auto-registered gateway %s → workspace %s", gateway_id, auto_ws.id)
+            workspaces = [auto_ws]
+
+        # Ensure the Gateway row exists (satisfies FK on related tables).
         gateway = Gateway.objects.filter(id=gateway_id).first()
         if not gateway:
-            gateway = Gateway.objects.create(id=gateway_id, workspace=workspaces[0], status="online", last_seen=timezone.now())
+            gateway = Gateway.objects.create(
+                id=gateway_id, workspace=workspaces[0],
+                status="online", last_seen=timezone.now(),
+            )
         else:
             gateway.status = "online"
             gateway.last_seen = timezone.now()
             gateway.save(update_fields=["status", "last_seen"])
-
-        records = request.data.get("telemetry")
-        if not isinstance(records, list):
-            records = [request.data]
 
         now_label = timezone.now().isoformat()
         
@@ -2074,6 +2297,7 @@ class GatewayTelemetryIngestView(APIView):
             anomalies = []
             ml_records = []
             devices_mutated = False
+            wq_checks = []   # collected for batch threshold check after the loop
 
             for idx, row in enumerate(records):
                 if not isinstance(row, dict):
@@ -2171,25 +2395,9 @@ class GatewayTelemetryIngestView(APIView):
                     device["anomaly"] = False
                     device["anomaly_meta"] = None
 
-                    # Check for rule-based anomalies in THIS specific workspace
+                    # Collect WQ devices for batch threshold check after the loop
                     if dev_type_canonical in {"ph_sensor", "turbidity_sensor"}:
-                        wq_result = _check_water_quality_thresholds(
-                            workspace=workspace,
-                            gateway_id=gateway_id,
-                            device_id=device_id,
-                            device_type=dev_type_canonical,
-                            value=validated_val,
-                            ts=ts,
-                        )
-                        if wq_result:
-                            device["anomaly"] = True
-                            anomalies.append({
-                                "source": "water_quality_threshold",
-                                "device_id": device_id,
-                                "gateway_id": gateway_id,
-                                "device_type": dev_type_canonical,
-                                "incident_id": wq_result.get("id"),
-                            })
+                        wq_checks.append((device_id, dev_type_canonical, validated_val, ts))
 
                     resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
 
@@ -2232,6 +2440,20 @@ class GatewayTelemetryIngestView(APIView):
                     accepted += 1
                 else:
                     rejected.append({"index": idx, "error": "value out of bounds or invalid", "device_id": device_id})
+
+            # ── Batch WQ threshold checks (1 SELECT + ≤3 writes vs. 4×N queries) ──
+            if wq_checks:
+                wq_results = _check_water_quality_thresholds_batch(workspace, wq_checks)
+                for wq_device_id, wq_result in wq_results.items():
+                    if wq_result and known_devices.get(wq_device_id):
+                        known_devices[wq_device_id]["anomaly"] = True
+                        anomalies.append({
+                            "source": "water_quality_threshold",
+                            "device_id": wq_device_id,
+                            "gateway_id": gateway_id,
+                            "device_type": str(known_devices[wq_device_id].get("type", "")),
+                            "incident_id": wq_result.get("id"),
+                        })
 
             # For WQ-only batches, always write the devices JSON so the readings
             # view always gets the very latest tick (not a stale pre-tick snapshot).
@@ -2570,23 +2792,18 @@ class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
         owner_workspaces = Workspace.objects.filter(owner=self.request.user)
 
         if requested_workspace_id:
-            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
-        elif owner_workspaces.exists():
-            # Fallback to all incidents in all workspaces owned by the current user.
-            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
-        else:
-            queryset = Incident.objects.none()
+            return Incident.objects.filter(workspace_id=requested_workspace_id)
+        if owner_workspaces.exists():
+            return Incident.objects.filter(workspace__in=owner_workspaces)
+        return Incident.objects.none()
 
-        # Last-resort fallback for environments where workspace ownership linkage
-        # is not aligned but incidents exist in the database.
-        if not queryset.exists():
-            queryset = Incident.objects.all()
 
-        return queryset
-    
 class IncidentListView(generics.ListAPIView):
     serializer_class = IncidentSerializer
     permission_classes = [IsAuthenticated]
+    # Disable DRF's global pagination — callers get ALL matching incidents so
+    # the alerts page never silently truncates to PAGE_SIZE rows.
+    pagination_class = None
 
     def get_queryset(self):
         requested_workspace_id = _workspace_id_from_request(self.request)
@@ -2595,15 +2812,9 @@ class IncidentListView(generics.ListAPIView):
         if requested_workspace_id:
             queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
         elif owner_workspaces.exists():
-            # Fallback to all incidents in all workspaces owned by the current user.
             queryset = Incident.objects.filter(workspace__in=owner_workspaces)
         else:
-            queryset = Incident.objects.none()
-
-        # Last-resort fallback for environments where workspace ownership linkage
-        # is not aligned but incidents exist in the database.
-        if not queryset.exists():
-            queryset = Incident.objects.all()
+            return Incident.objects.none()
 
         # Optional filters via query params
         types_param = self.request.query_params.get("incident_types")
@@ -2811,7 +3022,7 @@ class WaterQualityReadingsView(APIView):
         wq_incidents_qs = Incident.objects.filter(
             workspace=workspace,
             incident_type__in=list(WQ_INCIDENT_TYPES),
-            status__in=["open", "ongoing"],
+            status__in=["open", "ongoing", "recovering"],
         ).order_by("-last_seen_at")[:50]
 
         alerts = [

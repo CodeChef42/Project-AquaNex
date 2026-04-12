@@ -243,7 +243,9 @@ def send_telemetry() -> None:
         resp = _session.post(
             f"{BACKEND_URL}/api/gateway-telemetry/",
             json={"gateway_id": GATEWAY_ID, "telemetry": telemetry, "prefer_sync_ml": False},
-            timeout=30,
+            # 20s allows Supabase cold-start connection pooling (~10-15s on first tick)
+            # while still preventing indefinite blocking across multiple send intervals.
+            timeout=20,
         )
         data      = resp.json()
         accepted  = data.get("accepted", "?")
@@ -256,7 +258,7 @@ def send_telemetry() -> None:
         rej_str = f"  ✗ {len(rejected)} rejected" if rejected else ""
         print(f"  → sent {accepted}/{len(telemetry)}{alert_str}{rej_str}")
     except requests.exceptions.Timeout:
-        print("  → TIMEOUT (data may still have been saved)")
+        print(f"  → TIMEOUT — backend at {BACKEND_URL} took >20s. Retrying next tick…")
     except requests.exceptions.ConnectionError:
         print(f"  → WAITING — backend not reachable at {BACKEND_URL}. Retrying next tick…")
     except Exception as exc:

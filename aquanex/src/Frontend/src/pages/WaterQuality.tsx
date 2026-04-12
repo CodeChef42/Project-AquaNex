@@ -291,7 +291,9 @@ const WaterQualityMonitoring = () => {
   const warning  = sensorsWithReadings.filter((s) => sensorStatus(s) === "warning").length;
   const critical = sensorsWithReadings.filter((s) => sensorStatus(s) === "critical").length;
 
-  const activeAlerts = alerts.filter((a) => a.status === "ongoing" || a.status === "open");
+  const activeAlerts = alerts.filter(
+    (a) => a.status === "ongoing" || a.status === "open" || a.status === "recovering"
+  );
 
   // True all-clear: has readings, none are warning/critical, and no active alerts
   const allClear = sensorsWithReadings.length > 0 && warning === 0 && critical === 0 && activeAlerts.length === 0;
@@ -643,7 +645,8 @@ const WaterQualityMonitoring = () => {
 
                     {/* Active alerts for this device */}
                     {alerts
-                      .filter((a) => a.device_id === sensor.device_id && (a.status === "ongoing" || a.status === "open"))
+                      .filter((a) => a.device_id === sensor.device_id &&
+                        (a.status === "ongoing" || a.status === "open" || a.status === "recovering"))
                       .map((a) => (
                         <div key={a.id} className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-1.5">
                           <XCircle className="w-4 h-4 text-red-500 shrink-0" />
