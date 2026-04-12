@@ -298,8 +298,19 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         .forEach((d, i) => pressureFallbackIndexById.set(String(d?.id || ""), (i % 2) + 1));
 
       // ── Sensor Value Generation ──────────────────────────────────────────
+      // WQ devices (ph_sensor, turbidity_sensor) are intentionally excluded —
+      // they are fed by the standalone Python IoT simulator and must not be
+      // overwritten with browser-generated placeholder values.
       const ts = new Date().toISOString();
-      const telemetry = devices.map((device: any) => {
+      const isWqDevice = (device: any) => {
+        const t = String(device?.type || "").toLowerCase();
+        return t.includes("ph_sensor") || t.includes("turbidity_sensor") ||
+               t === "ph" || t === "turbidity";
+      };
+
+      const telemetry = devices
+        .filter((device: any) => !isWqDevice(device))
+        .map((device: any) => {
         const metric = inferMetric(device);
         const group  = metricGroup(metric, device?.type || "");
 
@@ -328,7 +339,8 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
             reading = sensorIndex === 1 ? randomAround(4.5, 0.2) : randomAround(0.5, 0.1);
 
         } else {
-          reading = randomAround(reading || 50, 2);
+          // Generic non-WQ sensor — preserve last value with small noise
+          reading = randomAround(reading || 0, 1);
         }
 
         if (reading < 0) reading = 0;
