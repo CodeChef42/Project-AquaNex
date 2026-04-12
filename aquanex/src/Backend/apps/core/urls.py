@@ -29,6 +29,7 @@ from .views import (
     PipelineResourcePlanView,
     WeatherCurrentView,
     WeatherForecastView,
+    WeatherGeocodeView,
     update_workspace_layout,
     IncidentIngestView,
 )
@@ -67,5 +68,6 @@ urlpatterns = [
     path("pipelines/resources-plan/", PipelineResourcePlanView.as_view(), name="pipelines-resources-plan"),
     path("weather/current/", WeatherCurrentView.as_view(), name="weather-current"),
     path("weather/forecast/", WeatherForecastView.as_view(), name="weather-forecast"),
+    path("weather/geocode/", WeatherGeocodeView.as_view(), name="weather-geocode"),
     
 ]

@@ -528,7 +528,7 @@ const Onboarding = () => {
 
     (async () => {
       try {
-        const baseUrl = import.meta.env.VITE_API_URL || '';
+        const apiBase = String(import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api").replace(/\/$/, "");
         const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
           String(lat)
         )}&lon=${encodeURIComponent(String(lng))}`;
@@ -553,7 +553,7 @@ const Onboarding = () => {
           .trim();
         setDetectedLayoutPlace(label || fallbackLabel);
 
-        const forecastUrl = `${baseUrl}/api/weather/forecast/?lat=${encodeURIComponent(
+        const forecastUrl = `${apiBase}/weather/forecast/?lat=${encodeURIComponent(
           String(lat)
         )}&lng=${encodeURIComponent(
           String(lng)
@@ -565,12 +565,12 @@ const Onboarding = () => {
         }
         const forecastJson: any = await forecastResp.json();
 
-        const daily = forecastJson?.daily || {};
-        const date = Array.isArray(daily?.date) ? daily.date : [];
-        const temp_max = Array.isArray(daily?.temp_max) ? daily.temp_max : [];
-        const temp_min = Array.isArray(daily?.temp_min) ? daily.temp_min : [];
-        const precipitation_sum = Array.isArray(daily?.precipitation_sum) ? daily.precipitation_sum : [];
-        const wind_speed_max = Array.isArray(daily?.wind_speed_max) ? daily.wind_speed_max : [];
+        const dailyList = Array.isArray(forecastJson?.daily) ? forecastJson.daily : [];
+        const date = dailyList.map((d: any) => d.date).filter(Boolean);
+        const temp_max = dailyList.map((d: any) => d.temp_max);
+        const temp_min = dailyList.map((d: any) => d.temp_min);
+        const precipitation_sum = dailyList.map((d: any) => d.precipitation_sum);
+        const wind_speed_max = dailyList.map((d: any) => d.wind_speed_max);
 
         if (!date.length) {
           throw new Error("Weather forecast unavailable for this location.");
