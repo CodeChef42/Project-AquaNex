@@ -2660,7 +2660,7 @@ class WeatherCurrentView(APIView):
         if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
             return Response({"error": "Coordinates out of range"}, status=400)
 
-        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        api_key = (os.environ.get("OPENWEATHER_API_KEY") or "").strip()
         if not api_key:
             return Response({"error": "OpenWeather API key not configured on server"}, status=503)
 
@@ -2726,7 +2726,7 @@ class WeatherForecastView(APIView):
         if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
             return Response({"error": "Coordinates out of range"}, status=400)
 
-        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        api_key = (os.environ.get("OPENWEATHER_API_KEY") or "").strip()
         if not api_key:
             return Response({"error": "OpenWeather API key not configured on server"}, status=503)
 
@@ -2796,4 +2796,52 @@ class WeatherForecastView(APIView):
                 "lat": city_info.get("coord", {}).get("lat"),
                 "lng": city_info.get("coord", {}).get("lon"),
             },
+        })
+
+
+class WeatherGeocodeView(APIView):
+    """Forward geocoding via OpenWeather Geo 1.0 (same API key as weather)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        if not q:
+            return Response({"error": "q is a required query parameter"}, status=400)
+
+        api_key = (os.environ.get("OPENWEATHER_API_KEY") or "").strip()
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/geo/1.0/direct"
+        params = {"q": q, "limit": 1, "appid": api_key}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to geocoding service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            results = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from geocoding service"}, status=502)
+
+        if not isinstance(results, list) or not results:
+            return Response({"error": "No results for that query"}, status=404)
+
+        first = results[0]
+        lat = first.get("lat")
+        lon = first.get("lon")
+        if lat is None or lon is None:
+            return Response({"error": "Invalid geocoding response"}, status=502)
+
+        return Response({
+            "lat": lat,
+            "lng": lon,
+            "name": first.get("name"),
+            "country": first.get("country"),
+            "state": first.get("state"),
         })

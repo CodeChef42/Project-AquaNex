@@ -1,14 +1,19 @@
 # Environment
-# .env
+.env
+.env.*
+!.env.example
 
 # Virtual Environments
-#venv/
-#.venv/
-#env/
-#ENV/
+venv/
+.venv/
+env/
+ENV/
+venv.bak/
+.venv.bak/
 
 # Dependencies
 node_modules/
+bower_components/
 
 # Python
 __pycache__/

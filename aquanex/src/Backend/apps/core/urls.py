@@ -27,6 +27,7 @@ from .views import (
     PipelineListCreateView,
     WeatherCurrentView,
     WeatherForecastView,
+    WeatherGeocodeView,
 )
 
 def health(request):
@@ -60,4 +61,5 @@ urlpatterns = [
     path("pipelines/", PipelineListCreateView.as_view(), name="pipelines-list-create"),
     path("weather/current/", WeatherCurrentView.as_view(), name="weather-current"),
     path("weather/forecast/", WeatherForecastView.as_view(), name="weather-forecast"),
+    path("weather/geocode/", WeatherGeocodeView.as_view(), name="weather-geocode"),
 ]

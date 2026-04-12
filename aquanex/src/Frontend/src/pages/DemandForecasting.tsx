@@ -309,6 +309,8 @@ const DemandForecasting = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
+      const apiBase = String(import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api").replace(/\/$/, "");
+
       let lat: number | null = null;
       let lng: number | null = null;
       let resolvedName = workspaceLocation || "Unknown Location";
@@ -333,15 +335,20 @@ const DemandForecasting = () => {
           for (const query of queries) {
             try {
                 const geoResp = await fetch(
-                  `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
+                  `${apiBase}/weather/geocode/?q=${encodeURIComponent(query)}`
                 );
                 if (!geoResp.ok) continue;
                 const geoJson = await geoResp.json();
-                const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
-                if (first && typeof first.latitude === "number" && typeof first.longitude === "number") {
-                  lat = first.latitude;
-                  lng = first.longitude;
-                  resolvedName = `${first.name}, ${first.country || ""}`;
+                if (
+                  typeof geoJson?.lat === "number" &&
+                  typeof geoJson?.lng === "number" &&
+                  Number.isFinite(geoJson.lat) &&
+                  Number.isFinite(geoJson.lng)
+                ) {
+                  lat = geoJson.lat;
+                  lng = geoJson.lng;
+                  const place = [geoJson.name, geoJson.state, geoJson.country].filter(Boolean).join(", ");
+                  resolvedName = place || resolvedName;
                   break;
                 }
             } catch (e) { continue; }
@@ -357,15 +364,14 @@ const DemandForecasting = () => {
       setWeatherLoading(true);
       setWeatherError("");
       try {
-        const baseUrl = import.meta.env.VITE_API_URL || '';
-        const currentResp = await fetch(`${baseUrl}/api/weather/current/?lat=${lat}&lng=${lng}`);
+        const currentResp = await fetch(`${apiBase}/weather/current/?lat=${lat}&lng=${lng}`);
         if (!currentResp.ok) {
           const errData = await currentResp.json().catch(() => ({}));
           throw new Error(errData.error || "Failed to fetch current weather");
         }
         const currentData = await currentResp.json();
 
-        const forecastResp = await fetch(`${baseUrl}/api/weather/forecast/?lat=${lat}&lng=${lng}`);
+        const forecastResp = await fetch(`${apiBase}/weather/forecast/?lat=${lat}&lng=${lng}`);
         if (!forecastResp.ok) {
           const errData = await forecastResp.json().catch(() => ({}));
           throw new Error(errData.error || "Failed to fetch forecast");

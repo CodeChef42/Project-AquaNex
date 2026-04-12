@@ -10,10 +10,10 @@ from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 
 # Define BASE_DIR FIRST so we know where we are
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # Build the exact path to your custom file
-env_path = BASE_DIR / '.worker.env'
+env_path = BASE_DIR / '.env'
 
 # Load it!
 load_dotenv(dotenv_path=env_path)
@@ -51,7 +51,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://www.aquanex.app",
     "https://aquanex.app",
-    "https://aquanex-deployment-2-mbilal-1120s-projects.vercel.app",
     "https://project-aquanex-xtn5.onrender.com",
 ]
 
