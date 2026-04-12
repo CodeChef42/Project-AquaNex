@@ -126,7 +126,10 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
   const workspaceRef  = useRef(workspace);
   useEffect(() => { workspaceRef.current = workspace; }, [workspace]);
 
-  const [isRunning,      setIsRunning]      = useState(localStorage.getItem("aquanex_sim_running") === "true");
+  const [isRunning, setIsRunning] = useState(false);
+  useEffect(() => {
+  localStorage.setItem("aquanex_sim_running", "false");
+  }, []);
   const [phase,          setPhase]          = useState<"Normal" | "Leak" | "Breakage">("Normal");
   const [cycleTime,      setCycleTime]      = useState(0);
   const [latestReadings, setLatestReadings] = useState<Record<string, number>>({});

@@ -198,6 +198,37 @@ const Simulation = () => {
         </CardContent>
       </Card>
 
+      {/* Moved Console Card here */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Console</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-xl border border-border bg-black text-green-200 font-mono text-xs h-80 overflow-auto p-3 space-y-2">
+            {filteredLogs.length === 0 ? (
+              <p className="text-green-400/80">No events yet for this subpage.</p>
+            ) : (
+              filteredLogs.map((log) => (
+                <div key={log.id}>
+                  <span className="text-green-400">[{log.ts}]</span>{" "}
+                  <span
+                    className={
+                      log.level === "error"
+                        ? "text-red-300"
+                        : log.level === "success"
+                        ? "text-emerald-300"
+                        : "text-sky-300"
+                    }
+                  >
+                    {log.message}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Device List</CardTitle>
@@ -312,36 +343,6 @@ const Simulation = () => {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Console</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="rounded-xl border border-border bg-black text-green-200 font-mono text-xs h-80 overflow-auto p-3 space-y-2">
-            {filteredLogs.length === 0 ? (
-              <p className="text-green-400/80">No events yet for this subpage.</p>
-            ) : (
-              filteredLogs.map((log) => (
-                <div key={log.id}>
-                  <span className="text-green-400">[{log.ts}]</span>{" "}
-                  <span
-                    className={
-                      log.level === "error"
-                        ? "text-red-300"
-                        : log.level === "success"
-                        ? "text-emerald-300"
-                        : "text-sky-300"
-                    }
-                  >
-                    {log.message}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
         </CardContent>
       </Card>
     </div>

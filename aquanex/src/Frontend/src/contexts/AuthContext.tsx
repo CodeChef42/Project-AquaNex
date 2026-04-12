@@ -61,6 +61,7 @@ interface AuthContextType {
   logout: () => void;
   fetchWorkspace: () => Promise<void>;
   fetchWorkspaces: () => Promise<void>;
+  updateWorkspaceLayout: (layout: { polygon: number[][]; area_m2: number; notes: string }) => void;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   deleteWorkspace: (workspaceId: string) => Promise<void>;
   isAuthenticated: boolean;
@@ -110,15 +111,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setWorkspaces(unique);
 
       if (response.data.exists && response.data.workspace) {
-        const currentId = String(response.data.workspace.id || "");
-        setWorkspace(response.data.workspace);
-        setSelectedWorkspaceId((prev) => {
-          if (!prev || !unique.some((w: Workspace) => w.id === prev)) {
-            localStorage.setItem('selected_workspace_id', currentId);
-            return currentId;
-          }
-          return prev;
-        });
+        const fallbackId = String(response.data.workspace.id || "");
+        const storedWorkspaceId = localStorage.getItem('selected_workspace_id');
+        const candidateId =
+          storedWorkspaceId && unique.some((w: Workspace) => w.id === storedWorkspaceId)
+            ? storedWorkspaceId
+            : fallbackId;
+        const resolvedWorkspace =
+          unique.find((w: Workspace) => w.id === candidateId) ?? response.data.workspace;
+        setWorkspace(resolvedWorkspace);
+        setSelectedWorkspaceId((prev) => (prev === candidateId ? prev : candidateId));
+        localStorage.setItem('selected_workspace_id', candidateId);
       } else {
         setWorkspace(null);
       }
@@ -130,6 +133,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
 
   const fetchWorkspace = fetchWorkspaces;
+
+  const updateWorkspaceLayout = useCallback((layout: { polygon: number[][]; area_m2: number; notes: string }) => {
+    setWorkspace((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        layout_polygon: layout.polygon,
+        layout_area_m2: layout.area_m2,
+        layout_notes: layout.notes,
+      };
+    });
+
+    setWorkspaces((prev) =>
+      prev.map((item) =>
+        item.id === workspace?.id
+          ? {
+              ...item,
+              layout_polygon: layout.polygon,
+              layout_area_m2: layout.area_m2,
+              layout_notes: layout.notes,
+            }
+          : item
+      )
+    );
+  }, [workspace?.id]);
 
 
   const fetchUser = useCallback(async () => {
@@ -238,6 +266,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       logout,
       fetchWorkspace,
       fetchWorkspaces,
+      updateWorkspaceLayout,
       selectWorkspace,
       deleteWorkspace,
       isAuthenticated: !!user,

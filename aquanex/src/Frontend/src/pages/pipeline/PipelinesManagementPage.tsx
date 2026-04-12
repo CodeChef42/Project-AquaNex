@@ -66,6 +66,51 @@ const getSeverityPriority = (sev: string) => {
     return 1;
 };
 
+const normalizeToken = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+const toNum = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const midpointFromPipe = (pipe: any): { lat: number; lng: number } | null => {
+  const sLat = toNum(pipe?.start_lat);
+  const sLng = toNum(pipe?.start_lng);
+  const eLat = toNum(pipe?.end_lat);
+  const eLng = toNum(pipe?.end_lng);
+  if ([sLat, sLng, eLat, eLng].every((v) => v !== null)) {
+    return {
+      lat: ((sLat as number) + (eLat as number)) / 2,
+      lng: ((sLng as number) + (eLng as number)) / 2,
+    };
+  }
+  return null;
+};
+
+const nearestPipeByPoint = (source: { lat: number; lng: number } | null, rows: any[]): any | null => {
+  if (!source || !Array.isArray(rows) || rows.length === 0) return null;
+  let best: any | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const pipe of rows) {
+    const mid = midpointFromPipe(pipe);
+    if (!mid) continue;
+    const dist = (mid.lat - source.lat) ** 2 + (mid.lng - source.lng) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = pipe;
+    }
+  }
+  return best;
+};
+
+const firstPipeWithCoordinates = (rows: any[]): any | null => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return (
+    rows.find((pipe) => midpointFromPipe(pipe) !== null) ||
+    rows[0] ||
+    null
+  );
+};
+
 /**
  * MAIN COMPONENT
  */
@@ -233,18 +278,87 @@ const PipelinesManagementPage = () => {
   }, [geolocatedModuleDevices, layoutPolygon, registeredPipelines]);
 
   const sortedAlerts = useMemo(() => {
+    const findPipeForIncident = (inc: any, details: any) => {
+      const candidates = [
+        details?.pipe_id,
+        details?.section_id,
+        details?.comp_id,
+        inc?.comp_id,
+      ]
+        .map(normalizeToken)
+        .filter(Boolean);
+      if (candidates.length === 0) return null;
+      const exactMatch = (
+        registeredPipelines.find((pipe: any) => {
+          const pipeKey = normalizeToken(pipe?.pipe_id || pipe?.section_id);
+          return pipeKey && candidates.includes(pipeKey);
+        }) || null
+      );
+      if (exactMatch) return exactMatch;
+      const incidentPoint =
+        details?.section_midpoint && Number.isFinite(Number(details.section_midpoint.lat)) && Number.isFinite(Number(details.section_midpoint.lng))
+          ? { lat: Number(details.section_midpoint.lat), lng: Number(details.section_midpoint.lng) }
+          : details?.coordinates?.midpoint && Number.isFinite(Number(details.coordinates.midpoint.lat)) && Number.isFinite(Number(details.coordinates.midpoint.lng))
+            ? { lat: Number(details.coordinates.midpoint.lat), lng: Number(details.coordinates.midpoint.lng) }
+            : null;
+      return nearestPipeByPoint(incidentPoint, registeredPipelines) || firstPipeWithCoordinates(registeredPipelines);
+    };
+
     const mapped = incidents.map((inc: any) => {
       const rawTime = inc.created_at || inc.timestamp;
       let timeStr = "N/A";
       if (rawTime) timeStr = new Date(rawTime).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }) + " GST";
+      const details = (inc && typeof inc.details === "object" && inc.details) || {};
+      const matchedPipe = findPipeForIncident(inc, details);
+      const midpoint = midpointFromPipe(matchedPipe) || details?.section_midpoint || details?.coordinates?.midpoint || null;
+      const pipeId =
+        matchedPipe?.pipe_id ||
+        matchedPipe?.section_id ||
+        details?.pipe_id ||
+        details?.section_id ||
+        details?.comp_id ||
+        inc?.comp_id ||
+        undefined;
+      const alertId = details?.alert_id || `ALERT-${String(inc.id).slice(0, 8).toUpperCase()}`;
+      const prediction = details?.prediction || {};
+      const reason =
+        String(prediction?.reason || "").trim() ||
+        (prediction?.deltas
+          ? `Flow delta ${prediction.deltas.flow_delta ?? "N/A"}, Pressure delta ${prediction.deltas.pressure_delta ?? "N/A"}`
+          : `Model detected ${String(inc.incident_type || "anomaly").replace(/_/g, " ")}`);
       
       return {
-          id: inc.id,
+          incidentId: String(inc.id),
+          alertId: String(alertId),
           severity: String(inc?.severity || "").toLowerCase() || "medium",
           time: timeStr,
-          location: inc.location || `Gateway ${inc.gateway_id}`,
+          reason,
           type: inc.incident_type,
           status: String(inc.status || "").trim().toLowerCase() || "open",
+          pipeId,
+          pipeType: matchedPipe?.pipeline_category || details?.pipe_specs?.pipe_category || "Unknown",
+          coordinates:
+            midpoint && Number.isFinite(Number(midpoint.lat)) && Number.isFinite(Number(midpoint.lng))
+              ? { lat: Number(midpoint.lat), lng: Number(midpoint.lng) }
+              : null,
+          pipeSpecs: matchedPipe
+            ? {
+                section_id: matchedPipe.section_id || matchedPipe.pipe_id,
+                flowmeter_id: matchedPipe.flowmeter_id ?? null,
+                sensor_id: matchedPipe.sensor_id ?? null,
+                material: matchedPipe.material ?? null,
+                pressure_class: matchedPipe.pressure_class ?? null,
+                depth: matchedPipe.depth ?? null,
+                nominal_dia: matchedPipe.nominal_dia ?? null,
+                pipe_category: matchedPipe.pipeline_category || matchedPipe.pipe_category || null,
+                water_capacity: matchedPipe.water_capacity ?? null,
+                pipe_id: matchedPipe.pipe_id || matchedPipe.section_id || null,
+                start_lat: matchedPipe.start_lat ?? null,
+                start_lng: matchedPipe.start_lng ?? null,
+                end_lat: matchedPipe.end_lat ?? null,
+                end_lng: matchedPipe.end_lng ?? null,
+              }
+            : details?.pipe_specs || null,
       };
     });
 
@@ -253,7 +367,7 @@ const PipelinesManagementPage = () => {
         if (b.status === 'recovering' && a.status !== 'recovering') return 1;
         return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
     });
-  }, [incidents]);
+  }, [incidents, registeredPipelines]);
 
   const topAlerts = sortedAlerts.slice(0, 3);
 
@@ -358,7 +472,7 @@ const PipelinesManagementPage = () => {
           {topAlerts.length === 0 ? (
             <div className="col-span-3 text-center py-8 text-muted-foreground bg-card rounded-xl border border-border">No active priority alerts</div>
           ) : (
-            topAlerts.map((alert: any) => <PipelineAlertCard key={alert.id} alert={alert} onResolve={handleResolve} />)
+            topAlerts.map((alert: any) => <PipelineAlertCard key={alert.incidentId} alert={alert} onResolve={handleResolve} />)
           )}
         </div>
       </div>

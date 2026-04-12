@@ -97,42 +97,25 @@ class Pipe(models.Model):
 
 class PipeSpecification(models.Model):
     section = models.OneToOneField(
-        Pipe, 
-        on_delete=models.CASCADE, 
-        primary_key=True, 
+        Pipe,
+        on_delete=models.CASCADE,
+        primary_key=True,
         db_column='section_id',
         related_name='pipespec'
     )
-    
-    flowmeter = models.ForeignKey(
-        'FlowMeter', 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        db_column='flowmeter_id'
-    )
-    sensor = models.ForeignKey(
-        'PressureSensor', 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        db_column='sensor_id'
-    )
 
-    material       = models.TextField() 
+    material       = models.TextField()
     pipe_category  = models.TextField()
     pressure_class = models.TextField(null=True, blank=True)
-    
     depth          = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     nominal_dia    = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     water_capacity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
-    
+
     class Meta:
         db_table = 'pipe_specs'
 
     def __str__(self):
         return f"Section {self.section_id}: {self.material} - {self.pipe_category}"
-
 class FlowMeter(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
     flow       = models.DecimalField(max_digits=10, decimal_places=2)
@@ -218,6 +201,8 @@ class Workspace(models.Model):
         ],
         default='idle'
     )
+    # models.py — add to Workspace model
+    layout = models.JSONField(default=dict, blank=True, null=True)
     layout_job_error        = models.TextField(blank=True, null=True)
     
     status                  = models.CharField(max_length=20, default='active')
@@ -278,14 +263,15 @@ class Incident(models.Model):
     fingerprint = models.CharField(max_length=220, db_index=True)
     details = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    comp_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = "incidents"
         constraints = [
             models.UniqueConstraint(
-                fields=["workspace", "gateway_id", "incident_type"],
+                fields=["workspace", "gateway_id", "incident_type", "comp_id"],
                 condition=models.Q(status="open"),
-                name="uniq_open_incident_per_type",
+                name="uniq_open_incident_per_type_and_comp",
             )
         ]
 
