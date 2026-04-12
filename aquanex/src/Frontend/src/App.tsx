@@ -21,6 +21,7 @@ const SoilSalinity            = lazy(() => import("./pages/SoilSalinity"));
 const ZoneDetail              = lazy(() => import("./pages/soil/ZoneDetail"));
 const IncidentAnalysis        = lazy(() => import("./pages/IncidentAnalytics"));
 const WaterQuality            = lazy(() => import("./pages/WaterQuality"));
+const WaterQualityAlerts      = lazy(() => import("./pages/WaterQualityAlerts"));
 const WaterQualityRecommendation = lazy(() => import("./pages/WaterQualityRecommendation"));
 const DemandForecasting       = lazy(() => import("./pages/DemandForecasting"));
 const HistoryLog              = lazy(() => import("./pages/HistoryLog"));
@@ -123,6 +124,7 @@ const App = () => (
                   {/* Water Quality Module */}
                   <Route element={<ModuleRoute module="water_quality" />}>
                     <Route path="/water-quality"                 element={<WaterQuality />} />
+                    <Route path="/water-quality/alerts"          element={<WaterQualityAlerts />} />
                     <Route path="/water-quality/recommendation/:zoneId" element={<WaterQualityRecommendation />} />
                   </Route>
 
