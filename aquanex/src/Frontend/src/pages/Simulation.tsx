@@ -278,7 +278,44 @@ const Simulation = () => {
           <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Live Telemetry Records</CardTitle>
         </CardHeader>
         <CardContent>
-          {filteredRecords.length === 0 ? (
+          {activePage === "water" ? (
+            // WQ data comes exclusively from the Python IoT simulator — show live workspace readings
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Water quality readings are provided by the standalone Python IoT simulator
+                (<code>water_quality_simulator.py</code>). Values below reflect the latest
+                readings received by the backend.
+              </p>
+              {pageDevices.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No water quality devices found in this workspace.</p>
+              ) : (
+                <div className="rounded-xl border border-border divide-y">
+                  {pageDevices.map((device) => {
+                    const val = device.reading;
+                    const metric = inferMetric(device);
+                    const lastSeen = device.last_seen
+                      ? new Date(device.last_seen).toLocaleTimeString()
+                      : "—";
+                    return (
+                      <div key={device.id} className="p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+                        <div className="space-y-0.5">
+                          <p className="font-semibold font-mono">{device.id}</p>
+                          <p className="text-muted-foreground">{device.type}</p>
+                        </div>
+                        <div className="text-right space-y-0.5">
+                          <p className="font-mono text-sm font-bold">
+                            {val != null ? Number(val).toFixed(2) : "—"}{" "}
+                            <span className="text-muted-foreground font-normal">{metric}</span>
+                          </p>
+                          <p className="text-muted-foreground">Last seen: {lastSeen}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : filteredRecords.length === 0 ? (
             <p className="text-sm text-muted-foreground">No records yet for this subpage.</p>
           ) : (
             <div className="rounded-xl border border-border h-80 overflow-auto">
