@@ -102,29 +102,19 @@ def _incident_fingerprint(gateway_id, incident_type):
 
 
 def _record_incident_from_prediction(workspace, gateway_id, prediction):
-    print("\n" + "="*50)
-    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
-    print(f"📦 PREDICTION PAYLOAD: {prediction}")
-    
     if not isinstance(prediction, dict):
-        print("❌ ABORT: Prediction is not a valid dictionary.")
         return None
 
     now_ts = timezone.now()
 
     if prediction.get("is_anomaly") is not True:
-        print("ℹ️ STATUS: Normal data received. is_anomaly is False.")
-        updated = Incident.objects.filter(
+        Incident.objects.filter(
             workspace=workspace,
             gateway_id=gateway_id,
             status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
-        print(f"ℹ️ Transitioned {updated} ongoing incidents to recovering.")
-        print("="*50 + "\n")
         return None
 
-    print("⚠️ ANOMALY CONFIRMED! Proceeding to database insertion logic...")
-    
     incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
     severity = str(prediction.get("severity") or "").strip().lower() or None
     detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
@@ -137,12 +127,10 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
     ).first()
 
     if ongoing_incident:
-        print(f"🔄 FOUND ONGOING: Updating existing incident ID: {ongoing_incident.id}")
         ongoing_incident.last_seen_at = detected_at
         ongoing_incident.severity = severity
         ongoing_incident.details = details
         ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
-        print("="*50 + "\n")
         return {"id": str(ongoing_incident.id), "created": False}
 
     # 2. Check for recovering
@@ -152,20 +140,15 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
     ).first()
 
     if recovering_incident:
-        print(f"🔄 FOUND RECOVERING: Re-opening incident ID: {recovering_incident.id}")
         recovering_incident.status = "ongoing"
         recovering_incident.last_seen_at = detected_at
         recovering_incident.severity = severity
         recovering_incident.details = details
         recovering_incident.save()
-        print("="*50 + "\n")
         return {"id": str(recovering_incident.id), "created": False}
 
-    # 3. Create Brand New
-    print("✨ NO ACTIVE INCIDENTS FOUND. Creating a brand new DB row...")
+    # 3. Create brand new incident
     fingerprint = _incident_fingerprint(gateway_id, incident_type)
-    print(f"🔑 Generated Unique Fingerprint: {fingerprint}")
-    
     try:
         with transaction.atomic():
             incident = Incident.objects.create(
@@ -179,12 +162,8 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction):
                 fingerprint=fingerprint,
                 details=details,
             )
-            print(f"✅ SUCCESS! Created new Incident ID: {incident.id}")
-            print("="*50 + "\n")
             return {"id": str(incident.id), "created": True}
-    except Exception as e:
-        print(f"❌ DATABASE ERROR: Failed to insert row! Error: {str(e)}")
-        print("="*50 + "\n")
+    except Exception:
         return None
 
 
@@ -247,6 +226,19 @@ def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_typ
             incident_type__in=list(WQ_INCIDENT_TYPES),
             status="ongoing",
         ).update(status="recovering", last_seen_at=now_ts)
+
+        # Auto-resolve incidents that have been in "recovering" for 2+ minutes.
+        # At a 15-second send interval that means 8+ consecutive normal ticks,
+        # so a brief blip that quickly normalises gets a grace period before resolution.
+        resolve_cutoff = now_ts - timedelta(minutes=2)
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=device_id,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status="recovering",
+            last_seen_at__lte=resolve_cutoff,
+        ).update(status="resolved", resolved_at=now_ts)
+
         return None
 
 
@@ -2029,6 +2021,7 @@ class GatewayRegisterView(APIView):
 
 
 class GatewayTelemetryIngestView(APIView):
+    authentication_classes = []   # IoT devices post without tokens — skip JWT auth entirely
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -2199,18 +2192,22 @@ class GatewayTelemetryIngestView(APIView):
                             })
 
                     resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
-                    
-                    # Persist DB row isolated to THIS workspace
-                    _persist_telemetry_row(
-                        workspace=workspace,
-                        gateway=gateway,
-                        device_id=device_id,
-                        mcu_id=resolved_mcu_id,
-                        ts=ts,
-                        lat=_optional_float(device.get("lat")),
-                        lng=_optional_float(device.get("lng")),
-                        readings=values,
-                    )
+
+                    # Skip time-series DB writes for WQ devices — their latest reading
+                    # is already cached in workspace.devices on every tick, and the 4
+                    # Supabase round-trips per device add ~30s of latency per batch.
+                    _is_wq_device = dev_type_canonical in {"ph_sensor", "turbidity_sensor"}
+                    if not _is_wq_device:
+                        _persist_telemetry_row(
+                            workspace=workspace,
+                            gateway=gateway,
+                            device_id=device_id,
+                            mcu_id=resolved_mcu_id,
+                            ts=ts,
+                            lat=_optional_float(device.get("lat")),
+                            lng=_optional_float(device.get("lng")),
+                            readings=values,
+                        )
 
                     resolved_sensor_index = _infer_sensor_index(
                         row.get("sensor_index"),
@@ -2236,7 +2233,15 @@ class GatewayTelemetryIngestView(APIView):
                 else:
                     rejected.append({"index": idx, "error": "value out of bounds or invalid", "device_id": device_id})
 
-            if devices_mutated or not workspace.devices:
+            # For WQ-only batches, always write the devices JSON so the readings
+            # view always gets the very latest tick (not a stale pre-tick snapshot).
+            _has_wq_devices = any(
+                _tb_canonical_type(str(known_devices.get(
+                    str(r.get("device_id", "")), {}
+                ).get("type", ""))) in {"ph_sensor", "turbidity_sensor"}
+                for r in records if isinstance(r, dict)
+            )
+            if devices_mutated or not workspace.devices or _has_wq_devices:
                 updated_devices_list = list(known_devices.values())
                 workspace.devices = updated_devices_list
                 workspace.save(update_fields=["devices"])
@@ -2739,6 +2744,13 @@ class WaterQualityReadingsView(APIView):
         if not workspace:
             return Response({"error": "No workspace"}, status=400)
 
+        # Always fetch the latest devices JSON from DB — never use a cached ORM object.
+        # Without this, Django may return the same in-memory Workspace instance across
+        # multiple requests in the same process, causing the frontend to see alternating
+        # old/new values (A→B→A→B oscillation) when the telemetry ingest writes a new
+        # reading on a different request cycle.
+        workspace.refresh_from_db(fields=["devices"])
+
         wq_devices = [
             d for d in (workspace.devices or [])
             if isinstance(d, dict) and _tb_canonical_type(str(d.get("type") or "")) in self.WQ_DEVICE_TYPES
@@ -2747,70 +2759,41 @@ class WaterQualityReadingsView(APIView):
         gateway_id = str(workspace.gateway_id or "")
         device_ids = [str(d["id"]) for d in wq_devices if d.get("id")]
 
-        latest_by_device = {}
-        if gateway_id and device_ids:
-            try:
-                for row in DeviceReadingLatest.objects.filter(
-                    workspace=workspace,
-                    gateway_id=gateway_id,
-                    device_id__in=device_ids,
-                ):
-                    latest_by_device[row.device_id] = {
-                        "readings": row.readings or {},
-                        "ts": row.ts.isoformat() if row.ts else None,
-                        "lat": row.lat,
-                        "lng": row.lng,
-                    }
-            except DatabaseError as exc:
-                logger.warning("WaterQualityReadingsView: DB error fetching latest readings: %s", exc)
+        # WQ devices do NOT write to DeviceReadingLatest (_persist_telemetry_row is
+        # skipped for ph_sensor / turbidity_sensor to avoid latency). Any rows that
+        # exist in that table for these device IDs are from before that skip was added
+        # and will always be stale/corrupt. Skip the DB lookup entirely for WQ devices
+        # and rely solely on the workspace.devices cache which is updated every tick.
+        latest_by_device: dict = {}
 
         sensors = []
         for device in wq_devices:
-            device_id  = str(device.get("id") or "")
+            device_id   = str(device.get("id") or "")
             device_type = _tb_canonical_type(str(device.get("type") or ""))
-            db_row     = latest_by_device.get(device_id)
-            readings   = db_row.get("readings", {}) if db_row else {}
 
-            raw = None
-            
             if device_type == "ph_sensor":
                 metric_key = "ph"
-                raw = readings.get("ph", readings.get("value"))
             elif device_type == "turbidity_sensor":
-                metric_key = "turbidity"
-                raw = readings.get("turbidity", readings.get("turbidity_ntu", readings.get("value")))
+                metric_key = "turbidity_ntu"
             else:
                 metric_key = str(device.get("metric") or "value")
-                raw = readings.get(metric_key)
 
-            # Fall back to workspace.devices cached reading
-            if raw is None:
-                cached = device.get("reading")
-                last_seen_str = str(device.get("last_seen") or "")
-                cache_is_fresh = False
-                if last_seen_str:
-                    try:
-                        ls = datetime.fromisoformat(last_seen_str)
-                        if timezone.is_naive(ls):
-                            ls = timezone.make_aware(ls)
-                        cache_is_fresh = (timezone.now() - ls).total_seconds() < 300  
-                    except (ValueError, TypeError):
-                        pass
-                
-                # Ignore 0s and physically impossible cache artifacts
-                if cached is not None and cache_is_fresh:
-                    if cached != 0:
-                        if device_type == "turbidity_sensor" and cached > 15.0:
-                            pass # Ignore random 50+ discovery artifact
-                        else:
-                            raw = cached
-
+            # Sole data source: workspace.devices cache (written every telemetry tick).
+            # Reject: 0 (registration placeholder) and physically impossible values.
             value = None
-            if raw is not None:
+            cached = device.get("reading")
+
+            if cached is not None and cached != 0:
                 try:
-                    value = float(raw)
+                    fval = float(cached)
+                    if device_type == "ph_sensor" and 0.0 < fval <= 14.0:
+                        value = fval
+                    elif device_type == "turbidity_sensor" and 0.0 <= fval <= 15.0:
+                        value = fval
+                    elif device_type not in ("ph_sensor", "turbidity_sensor"):
+                        value = fval
                 except (TypeError, ValueError):
-                    value = None
+                    pass
 
             sensors.append({
                 "device_id":   device_id,
@@ -2818,9 +2801,9 @@ class WaterQualityReadingsView(APIView):
                 "metric":      metric_key,
                 "value":       value,
                 "has_reading": value is not None,
-                "ts":          db_row.get("ts") if db_row else str(device.get("last_seen") or ""),
-                "lat":         device.get("lat") or (db_row.get("lat") if db_row else None),
-                "lng":         device.get("lng") or (db_row.get("lng") if db_row else None),
+                "ts":          str(device.get("last_seen") or ""),
+                "lat":         device.get("lat"),
+                "lng":         device.get("lng"),
                 "mcu_id":      str(device.get("microcontroller_id") or ""),
                 "status":      str(device.get("status") or "online"),
             })

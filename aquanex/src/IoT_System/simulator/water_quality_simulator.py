@@ -257,6 +257,8 @@ def send_telemetry() -> None:
         print(f"  → sent {accepted}/{len(telemetry)}{alert_str}{rej_str}")
     except requests.exceptions.Timeout:
         print("  → TIMEOUT (data may still have been saved)")
+    except requests.exceptions.ConnectionError:
+        print(f"  → WAITING — backend not reachable at {BACKEND_URL}. Retrying next tick…")
     except Exception as exc:
         print(f"  → ERROR: {exc}")
 

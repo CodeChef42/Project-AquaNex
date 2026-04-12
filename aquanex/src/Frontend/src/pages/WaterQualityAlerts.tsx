@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, ArrowLeft, CheckCircle, Clock, Droplet, RefreshCw, ShieldAlert } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle, Clock, Droplet, RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
 import api from "@/lib/api";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -101,6 +101,107 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(diff / 3600)}h ago`;
 }
 
+// ─── Natural-language insight generation ─────────────────────────────────────
+
+/** Groups consecutive incidents of the same (device, type) that are within
+ *  GAP_MS of each other into a single event window. */
+interface IncidentGroup {
+  device_id: string;
+  incident_type: string;
+  severity: string;
+  start: Date;
+  end: Date;       // last_seen_at of the last incident in the group
+  isActive: boolean;
+}
+
+const GAP_MS = 30 * 60 * 1000; // 30-minute window
+
+function groupIncidents(incidents: WqIncident[]): IncidentGroup[] {
+  // Sort oldest-first so we can walk forward in time
+  const sorted = [...incidents].sort(
+    (a, b) =>
+      new Date(a.detected_at ?? 0).getTime() -
+      new Date(b.detected_at ?? 0).getTime()
+  );
+
+  const groups: IncidentGroup[] = [];
+
+  for (const inc of sorted) {
+    if (!inc.detected_at) continue;
+    const start = new Date(inc.detected_at);
+    const end   = new Date(inc.last_seen_at ?? inc.detected_at);
+    const device = inc.device_id || inc.gateway_id || "unknown";
+    const isActive = inc.status === "ongoing" || inc.status === "recovering";
+
+    // Try to extend an existing group for the same device + type
+    const existing = groups.find(
+      (g) =>
+        g.device_id === device &&
+        g.incident_type === inc.incident_type &&
+        start.getTime() - g.end.getTime() <= GAP_MS
+    );
+
+    if (existing) {
+      if (end > existing.end) existing.end = end;
+      if (isActive) existing.isActive = true;
+      // escalate severity
+      const severityRank: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+      if ((severityRank[inc.severity] ?? 0) > (severityRank[existing.severity] ?? 0)) {
+        existing.severity = inc.severity;
+      }
+    } else {
+      groups.push({ device_id: device, incident_type: inc.incident_type, severity: inc.severity, start, end, isActive });
+    }
+  }
+
+  // Return newest-first
+  return groups.sort((a, b) => b.start.getTime() - a.start.getTime());
+}
+
+function formatTime(d: Date): string {
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "Asia/Dubai",
+    hour12: true,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatDate(d: Date): string {
+  return d.toLocaleDateString("en-US", {
+    timeZone: "Asia/Dubai",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function generateInsight(g: IncidentGroup): string {
+  const paramLabel: Record<string, string> = {
+    ph_warning:           "pH levels slightly outside the optimal range",
+    ph_anomaly:           "pH levels reached abnormal values",
+    ph_critical:          "pH levels reached critical values",
+    turbidity_warning:    "water turbidity rose above the warning threshold",
+    turbidity_spike:      "water turbidity spiked to elevated levels",
+    turbidity_critical:   "water turbidity reached critically high levels",
+  };
+  const param = paramLabel[g.incident_type] ?? "an anomaly was detected";
+
+  const sameDay = formatDate(g.start) === formatDate(g.end);
+  const dateStr = formatDate(g.start);
+  const startStr = formatTime(g.start);
+  const endStr   = formatTime(g.end);
+
+  if (g.isActive) {
+    return `On ${g.device_id}, ${param} starting on ${dateStr} at ${startStr} — still ongoing.`;
+  }
+
+  if (sameDay) {
+    return `On ${g.device_id}, ${param} on ${dateStr} between ${startStr} and ${endStr}.`;
+  }
+  return `On ${g.device_id}, ${param} from ${dateStr} ${startStr} to ${formatDate(g.end)} ${endStr}.`;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 const WaterQualityAlerts = () => {
@@ -153,6 +254,10 @@ const WaterQualityAlerts = () => {
       setResolvingId(null);
     }
   };
+
+  // ── Grouped insights ───────────────────────────────────────────────────────
+
+  const insightGroups = useMemo(() => groupIncidents(incidents), [incidents]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
 
@@ -296,6 +401,51 @@ const WaterQualityAlerts = () => {
             <CheckCircle className="w-5 h-5 shrink-0" />
             <span className="text-sm font-medium">All alerts resolved — water quality parameters are within acceptable ranges.</span>
           </div>
+        )}
+
+        {/* ── Natural-language alert summaries ── */}
+        {insightGroups.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Sparkles className="w-4 h-4 text-teal-500" />
+                Alert Summaries
+              </CardTitle>
+              <CardDescription>Plain-language description of each detected event</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2">
+                {insightGroups.map((g, i) => {
+                  const isActive = g.isActive;
+                  const isCritical = g.severity === "critical";
+                  const borderColor = isCritical
+                    ? "border-red-300 bg-red-50"
+                    : isActive
+                    ? "border-orange-200 bg-orange-50"
+                    : "border-gray-200 bg-gray-50";
+                  const dotColor = isCritical
+                    ? "bg-red-500"
+                    : isActive
+                    ? "bg-orange-400"
+                    : "bg-gray-400";
+                  return (
+                    <li
+                      key={i}
+                      className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${borderColor}`}
+                    >
+                      <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                      <span className="text-gray-700">{generateInsight(g)}</span>
+                      {isActive && (
+                        <Badge className="ml-auto shrink-0 bg-orange-100 text-orange-700 border border-orange-300 text-xs">
+                          Active
+                        </Badge>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </CardContent>
+          </Card>
         )}
 
         {/* ── Tabs + table ── */}

@@ -132,12 +132,37 @@ function incidentLabel(type: string) {
   return map[type] || type.replace(/_/g, " ");
 }
 
+const TZ = "Asia/Dubai"; // GMT+4
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (diff < 60) return `${Math.round(diff)}s ago`;
+  if (diff < 0 || diff < 60) return `${Math.max(0, Math.round(diff))}s ago`;
   if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
   return `${Math.round(diff / 3600)}h ago`;
+}
+
+function formatTime(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("en-US", {
+    timeZone: TZ,
+    hour12: true,
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatTs(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-US", {
+    timeZone: TZ,
+    hour12: true,
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 // ─── main component ──────────────────────────────────────────────────────────
@@ -167,16 +192,50 @@ const WaterQualityMonitoring = () => {
   const [loadingReadings, setLoadingReadings] = useState(false);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
+  // Track the latest accepted ISO timestamp per sensor so we never
+  // overwrite a newer value with an older one (out-of-order responses).
+  const latestTsRef = useRef<Record<string, number>>({});
+  // Monotonic counter — each fetch gets a sequence number; stale responses are dropped.
+  const fetchSeqRef = useRef(0);
+
   const fetchReadings = useCallback(async () => {
     if (!isConfigured) return;
+    const seq = ++fetchSeqRef.current;
     try {
       const res = await api.get("/water-quality/readings/");
-      console.debug("[WQ] readings response:", res.data);
-      setReadings(res.data as WqReadings);
+      // Drop the response if a newer fetch has already completed.
+      if (seq !== fetchSeqRef.current) return;
+
+      const incoming = res.data as WqReadings;
+
+      // Merge: only accept a sensor's value if its timestamp is newer than
+      // the last one we displayed for that device.
+      setReadings((prev) => {
+        const prevById: Record<string, WqSensor> = {};
+        (prev?.sensors ?? []).forEach((s) => { prevById[s.device_id] = s; });
+
+        const merged = incoming.sensors.map((s) => {
+          const incomingMs = s.ts ? new Date(s.ts).getTime() : 0;
+          const knownMs   = latestTsRef.current[s.device_id] ?? 0;
+
+          if (incomingMs > 0 && incomingMs < knownMs) {
+            // Incoming is older than what we already show — keep current value.
+            return prevById[s.device_id] ?? s;
+          }
+          if (incomingMs > knownMs) {
+            latestTsRef.current[s.device_id] = incomingMs;
+          }
+          return s;
+        });
+
+        return { ...incoming, sensors: merged };
+      });
+
       setLastFetched(new Date());
     } catch (err: any) {
+      if (seq !== fetchSeqRef.current) return;
       console.error("[WQ] readings fetch failed:", err?.response?.data || err?.message);
-      // keep stale data
+      // keep stale data on error
     } finally {
       setLoadingReadings(false);
     }
@@ -373,7 +432,7 @@ const WaterQualityMonitoring = () => {
                     <span className="text-sm font-medium text-gray-800">{incidentLabel(alert.incident_type)}</span>
                     <span className="text-xs text-gray-500">Device: {alert.device_id}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{timeAgo(alert.last_seen_at)}</span>
+                  <span className="text-xs text-gray-400">{formatTs(alert.last_seen_at)}</span>
                 </div>
               ))}
             </div>
@@ -594,7 +653,7 @@ const WaterQualityMonitoring = () => {
                       ))}
 
                     <div className="text-xs text-gray-400 pt-1">
-                      Last reading: {timeAgo(sensor.ts)}
+                      Last reading: {formatTime(sensor.ts)} (GMT+4)
                       {sensor.lat != null && sensor.lng != null && (
                         <span className="ml-2">· {sensor.lat.toFixed(4)}, {sensor.lng.toFixed(4)}</span>
                       )}
@@ -679,7 +738,7 @@ const WaterQualityMonitoring = () => {
                             {alert.status}
                           </span>
                         </td>
-                        <td className="py-2 text-gray-400 text-xs">{timeAgo(alert.last_seen_at)}</td>
+                        <td className="py-2 text-gray-400 text-xs">{formatTs(alert.last_seen_at)}</td>
                       </tr>
                     ))}
                   </tbody>
