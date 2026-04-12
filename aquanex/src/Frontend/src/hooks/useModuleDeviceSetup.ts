@@ -106,21 +106,41 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
     setScanning(true);
     setError("");
     try {
-      const discoveryResponse = await api.post("/gateway-discover/", {
+      let discoveryResponse = await api.post("/gateway-discover/", {
         gateway_id: gatewayId,
         protocol: "mqtt",
-        force_refresh: true,
+        force_refresh: false,
         preview_only: true,
+        fast_scan: true,
         required_device_types: requiredTypes,
       });
-      const discoveredRaw = Array.isArray(discoveryResponse?.data?.devices)
+      let discoveredRaw = Array.isArray(discoveryResponse?.data?.devices)
         ? discoveryResponse.data.devices
         : [];
-      const discoveredDevices = discoveredRaw.filter(
+      let discoveredDevices = discoveredRaw.filter(
         (device: WorkspaceDevice) =>
           requiredTypes.includes(canonicalDeviceType(String(device?.type || ""))) &&
           hasCoordinates(device)
       );
+      if (discoveredDevices.length === 0) {
+        // Fallback to full live scan only when fast scan cannot satisfy module requirements.
+        discoveryResponse = await api.post("/gateway-discover/", {
+          gateway_id: gatewayId,
+          protocol: "mqtt",
+          force_refresh: true,
+          preview_only: true,
+          fast_scan: false,
+          required_device_types: requiredTypes,
+        });
+        discoveredRaw = Array.isArray(discoveryResponse?.data?.devices)
+          ? discoveryResponse.data.devices
+          : [];
+        discoveredDevices = discoveredRaw.filter(
+          (device: WorkspaceDevice) =>
+            requiredTypes.includes(canonicalDeviceType(String(device?.type || ""))) &&
+            hasCoordinates(device)
+        );
+      }
       if (discoveredDevices.length === 0) {
         setError("No required geolocated devices found for this module.");
         return;

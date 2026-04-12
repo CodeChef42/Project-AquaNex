@@ -74,6 +74,7 @@ const AlertList = () => {
     return incidents
       .map((inc: any) => ({
         id: String(inc.id),
+        alertId: String(inc?.details?.alert_id || `ALERT-${String(inc.id).slice(0, 8).toUpperCase()}`),
         severity: deriveSeverity(inc),
         type: String(inc.incident_type || "anomaly"),
         location: String(inc.location || `Gateway ${inc.gateway_id || "unknown"}`),
@@ -170,7 +171,7 @@ const AlertList = () => {
                     className="cursor-pointer hover:bg-muted/50"
                     onClick={() => setExpandedRow(expandedRow === alert.id ? null : alert.id)}
                   >
-                    <TableCell className="font-medium">#{alert.id}</TableCell>
+                    <TableCell className="font-medium">#{alert.alertId}</TableCell>
                     <TableCell>
                       <Badge variant={getSeverityColor(alert.severity) as any}>
                         {alert.severity.toUpperCase()}

@@ -1,19 +1,20 @@
-import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Wrench, Clock } from "lucide-react";
-import PipelinesMapView from "./PipelinesMapView";
+import { Wrench, Clock, Navigation } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface Alert {
-  id: string;
+  incidentId: string;
+  alertId: string;
   severity: string;
   time: string;
-  location: string;
+  reason: string;
   type: string;
-  pipeLength: string;
-  pipeType: string;
+  pipeId?: string;
+  pipeType?: string;
+  coordinates?: { lat: number; lng: number } | null;
+  pipeSpecs?: Record<string, any> | null;
   status?: string;
 }
 
@@ -23,7 +24,6 @@ interface PipelineAlertCardProps {
 }
 
 const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
-  const [showMap, setShowMap] = useState(false);
   const navigate = useNavigate();
 
   const getSeverityColor = (severity: string) => {
@@ -40,8 +40,12 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
     }
   };
 
-  // Extract pipe ID from location, e.g., "Zone 3, Pipe 845-D" -> "845-D"
-  const pipeId = alert.location.split("Pipe ")[1] || alert.id;
+  const pipeId = alert.pipeId || "Unknown";
+  const hasCoordinates =
+    Number.isFinite(alert.coordinates?.lat) && Number.isFinite(alert.coordinates?.lng);
+  const mapsUrl = hasCoordinates
+    ? `https://www.google.com/maps?q=${alert.coordinates!.lat},${alert.coordinates!.lng}`
+    : "";
 
   return (
     <>
@@ -50,24 +54,19 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
           <div className="flex items-start justify-between">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <CardTitle className="text-lg">Alert #{alert.id}</CardTitle>
+                <CardTitle className="text-lg">Pipe {pipeId}</CardTitle>
                 <Badge variant={getSeverityColor(alert.severity) as any}>
                   {alert.severity.toUpperCase()}
                 </Badge>
               </div>
+              <p className="text-sm text-muted-foreground">Alert #{alert.alertId}</p>
               <p className="text-sm text-muted-foreground">{alert.type}</p>
+              <p className="text-sm text-muted-foreground">{alert.reason}</p>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-muted-foreground" />
-              <div>
-                <p className="font-medium">Location</p>
-                <p className="text-muted-foreground">{alert.location}</p>
-              </div>
-            </div>
             <div className="flex items-center gap-2">
               <Wrench className="w-4 h-4 text-muted-foreground" />
               <div>
@@ -78,15 +77,19 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4 text-muted-foreground" />
               <div>
-                <p className="font-medium">Length</p>
-                <p className="text-muted-foreground">{alert.pipeLength}</p>
+                <p className="font-medium">Coordinates</p>
+                <p className="text-muted-foreground">
+                  {hasCoordinates
+                    ? `${alert.coordinates!.lat.toFixed(6)}, ${alert.coordinates!.lng.toFixed(6)}`
+                    : "N/A"}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <Wrench className="w-4 h-4 text-muted-foreground" />
               <div>
                 <p className="font-medium">Type</p>
-                <p className="text-muted-foreground">{alert.pipeType}</p>
+                <p className="text-muted-foreground">{alert.pipeType || "Unknown"}</p>
               </div>
             </div>
           </div>
@@ -100,15 +103,25 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
                   variant="outline"
                   size="sm"
                   className="flex-1"
-                  onClick={() => navigate(`/pipeline/resources/${alert.id}`, { state: { alert } })}
+                  onClick={() => navigate(`/pipeline/resources/${alert.incidentId}`, { state: { alert } })}
                 >
                   Resources
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  disabled={!hasCoordinates}
+                  onClick={() => { if (hasCoordinates) window.open(mapsUrl, "_blank", "noopener,noreferrer"); }}
+                >
+                  <Navigation className="w-4 h-4 mr-1" />
+                  Navigate
                 </Button>
                 <Button
                   variant="default"
                   size="sm"
                   className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                  onClick={() => onResolve && onResolve(alert.id)}
+                  onClick={() => onResolve && onResolve(alert.incidentId)}
                 >
                   Confirm Fix
                 </Button>
@@ -120,20 +133,24 @@ const PipelineAlertCard = ({ alert, onResolve }: PipelineAlertCardProps) => {
                 variant="outline"
                 size="sm"
                 className="flex-1"
-                onClick={() => navigate(`/pipeline/resources/${alert.id}`, { state: { alert } })}
+                onClick={() => navigate(`/pipeline/resources/${alert.incidentId}`, { state: { alert } })}
               >
                 Resources
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                disabled={!hasCoordinates}
+                onClick={() => { if (hasCoordinates) window.open(mapsUrl, "_blank", "noopener,noreferrer"); }}
+              >
+                <Navigation className="w-4 h-4 mr-1" />
+                Navigate
               </Button>
             </div>
           )}
         </CardContent>
       </Card>
-
-      <PipelinesMapView
-        open={showMap}
-        onOpenChange={setShowMap}
-        location={alert.location}
-      />
     </>
   );
 };

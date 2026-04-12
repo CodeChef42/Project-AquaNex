@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
+from .views import update_workspace_layout  # add to existing imports line
 from django.http import JsonResponse
 from .views import (
     GatewayDiscoverView,
@@ -25,8 +26,11 @@ from .views import (
     IncidentResolveView,
     IncidentSeedView,
     PipelineListCreateView,
+    PipelineResourcePlanView,
     WeatherCurrentView,
     WeatherForecastView,
+    update_workspace_layout,
+    IncidentIngestView,
 )
 
 def health(request):
@@ -34,6 +38,7 @@ def health(request):
 
 urlpatterns = [
     path("health/", health),
+    path("incidents/ingest/", IncidentIngestView.as_view()),
     path("incidents/", IncidentListView.as_view(), name="incidents-list"),
     path("incidents/<str:pk>/", IncidentDetailView.as_view(), name="incident-detail"),
     path("incidents/<str:pk>/resolve/", IncidentResolveView.as_view(), name="incident-resolve"),
@@ -57,7 +62,10 @@ urlpatterns = [
     path("gateway-telemetry/", GatewayTelemetryIngestView.as_view(), name="gateway-telemetry"),
     path("layout-upload/", LayoutUploadView.as_view(), name="layout-upload"),
     path("layout-status/<str:task_id>/", LayoutTaskStatus.as_view(), name="layout-status"),
+    path("workspace/layout/", update_workspace_layout, name="update-workspace-layout"),
     path("pipelines/", PipelineListCreateView.as_view(), name="pipelines-list-create"),
+    path("pipelines/resources-plan/", PipelineResourcePlanView.as_view(), name="pipelines-resources-plan"),
     path("weather/current/", WeatherCurrentView.as_view(), name="weather-current"),
     path("weather/forecast/", WeatherForecastView.as_view(), name="weather-forecast"),
+    
 ]

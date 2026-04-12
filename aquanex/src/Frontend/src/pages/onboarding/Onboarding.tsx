@@ -24,7 +24,12 @@ import L from "leaflet";
 import "leaflet-defaulticon-compatibility";
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css";
 import { LeafDecor } from '../../components/LeafDecor';
-
+import { useMapEvents, Marker} from "react-leaflet";
+import {
+  isSelfIntersectingPolygon,
+  wouldSelfIntersectOnAdd,
+  wouldSelfIntersectOnClose,
+} from "@/components/map-utils";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -245,6 +250,107 @@ const INITIAL: OnboardingData = {
   },
 };
 
+// 1. Custom Vertex Icon (No missing image errors)
+const vertexIcon = new L.DivIcon({
+  className: "custom-vertex-icon",
+  html: `<div style="width:14px;height:14px;background:#0ea5e9;border:2px solid white;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,0.5);"></div>`,
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+});
+
+// 2. Map Event Handler
+
+interface MapDrawingHandlerProps {
+  mapMode: "idle" | "draw" | "edit";
+  draftPoints: [number, number][];
+  onAddPoint: (latlng: L.LatLng) => void;
+  onFinishDrawing: () => void;
+  onInvalidDraw?: (message: string) => void;
+}
+
+function MapDrawingHandler({ mapMode, draftPoints, onAddPoint, onFinishDrawing, onInvalidDraw }: MapDrawingHandlerProps) {
+  const [cursorPoint, setCursorPoint] = useState<[number, number] | null>(null);
+  const previewLineRef = useRef<L.Polyline | null>(null);
+  const map = useMapEvents({
+    click(e) {
+      if (mapMode === "draw") {
+        // If we have at least 2 points (meaning the next click could form a triangle)
+        // check if they clicked close to the starting point.
+        if (draftPoints.length >= 2) {
+          const firstPt = L.latLng(draftPoints[0][0], draftPoints[0][1]);
+          // Calculate screen pixel distance (not physical meters) so it works at any zoom
+          const clickPt = map.latLngToContainerPoint(e.latlng);
+          const startPt = map.latLngToContainerPoint(firstPt);
+          
+          if (clickPt.distanceTo(startPt) < 25) { // 25 pixel snap radius
+            if (wouldSelfIntersectOnClose(draftPoints)) {
+              onInvalidDraw?.("Polygon cannot cross over itself.");
+              return;
+            }
+            onFinishDrawing();
+            return;
+          }
+        }
+        if (wouldSelfIntersectOnAdd(draftPoints, [e.latlng.lat, e.latlng.lng])) {
+          onInvalidDraw?.("Polygon cannot cross over itself.");
+          return;
+        }
+        onAddPoint(e.latlng);
+      }
+    },
+    mousemove(e) {
+      if (mapMode !== "draw" || draftPoints.length === 0) {
+        setCursorPoint(null);
+        return;
+      }
+      setCursorPoint([e.latlng.lat, e.latlng.lng]);
+    },
+  });
+
+  useEffect(() => {
+    const container = map.getContainer();
+    if (mapMode === "draw") {
+      container.style.cursor = "crosshair";
+      map.dragging.disable();
+    } else if (mapMode === "edit") {
+      container.style.cursor = "grab";
+      map.dragging.enable();
+    } else {
+      container.style.cursor = "";
+      map.dragging.enable();
+      setCursorPoint(null);
+    }
+    return () => {
+      container.style.cursor = "";
+      map.dragging.enable();
+      setCursorPoint(null);
+    };
+  }, [map, mapMode]);
+
+  useEffect(() => {
+    if (previewLineRef.current) {
+      map.removeLayer(previewLineRef.current);
+      previewLineRef.current = null;
+    }
+    if (mapMode !== "draw" || draftPoints.length === 0 || !cursorPoint) return;
+    const segment: [number, number][] = [draftPoints[draftPoints.length - 1], cursorPoint];
+    previewLineRef.current = L.polyline(segment, {
+      color: "#0ea5e9",
+      weight: 2,
+      dashArray: "6, 6",
+      opacity: 0.95,
+    }).addTo(map);
+    return () => {
+      if (previewLineRef.current) {
+        map.removeLayer(previewLineRef.current);
+        previewLineRef.current = null;
+      }
+    };
+  }, [cursorPoint, draftPoints, map, mapMode]);
+
+  return null;
+}
+
 const Onboarding = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -275,6 +381,8 @@ const Onboarding = () => {
   const createNewWorkspace = searchParams.get("new") === "1";
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
+  const [mapMode, setMapMode] = useState<"idle" | "draw" | "edit">("idle");
+  const [draftPoints, setDraftPoints] = useState<[number, number][]>([]); // stored as [lat, lng] for UI
   const visibleSteps = useMemo(
     () =>
       STEPS.filter((stepDef) => {
@@ -771,22 +879,31 @@ const Onboarding = () => {
   };
 
   const canProceed = () => {
-    if (step === 1)
-      return (
-        data.workspaceName.trim() !== "" &&
-        (skipCompanyIdentity || data.companyName.trim() !== "") &&
-        data.companyType !== "" &&
-        (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
-      );
+  // Step 1: Workspace & Company Details
+  if (step === 1) {
+    return (
+      data.workspaceName.trim() !== "" &&
+      (skipCompanyIdentity || data.companyName.trim() !== "") &&
+      data.companyType !== "" &&
+      (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
+    );
+  }
 
-    if (step === 3) {
-      if (finalLayoutPolygon.length < 3) return false;
-      finalLayoutPolygon.length >= 3
-    }
+  // Step 3: Map Layout Lock
+  if (step === 3) {
+    // 1. Must have drawn a valid shape (3+ points)
+    // 2. AND must have explicitly clicked the "Save Layout" button
+    return finalLayoutPolygon.length >= 3 && layoutConfirmed;
+  }
 
-    if (step === 4) return data.modules.length > 0;
-    return true;
-  };
+  // Step 4: Module Selection
+  if (step === 4) {
+    return data.modules.length > 0;
+  }
+
+  // Allow proceeding on any other steps (like Step 2, if it has no strict requirements)
+  return true;
+};
 
   const ensureTargetWorkspaceId = useCallback(async () => {
     if (onboardingWorkspaceId) return onboardingWorkspaceId;
@@ -1521,9 +1638,27 @@ const Onboarding = () => {
         </div>
       </div>
     );
+    
 
+
+    
     // ─── Step 3 ───
-    if (step === 3)
+    if (step === 3) {
+      // Sync manual drawing to main data
+      const handleSyncDraft = (points: [number, number][]) => {
+        const lngLatPoints = points.map((p) => [p[1], p[0]]); // convert to [lng, lat]
+        const area = calculateArea(lngLatPoints);
+        setManualPolygon(lngLatPoints);
+        setData((prev) => ({
+          ...prev,
+          layout: {
+            ...prev.layout,
+            polygon: lngLatPoints,
+            area_m2: area,
+          },
+        }));
+      };
+
       return (
         <div className="space-y-6">
           <div>
@@ -1534,7 +1669,64 @@ const Onboarding = () => {
             </p>
           </div>
 
-          <div className="rounded-2xl border-2 border-border overflow-hidden shadow-lg bg-white">
+          {/* 🔴 FORCE LEAFLET CURSOR STYLES 🔴 */}
+          {mapMode === "draw" && (
+            <style>{`
+              .leaflet-container, .leaflet-interactive {
+                cursor: crosshair !important;
+              }
+            `}</style>
+          )}
+
+          <div className="p-4 rounded-2xl border border-border bg-muted/20 space-y-3">
+            <div>
+              <p className="text-sm font-semibold">Map Drawing Tool</p>
+              <p className="text-xs text-muted-foreground">
+                {mapMode === "draw" && "Click the map to add points. Click the starting point to finish."}
+                {mapMode === "edit" && "Drag the points on the map to adjust them."}
+                {mapMode === "idle" && "Select an action below."}
+              </p>
+            </div>
+            
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMapMode("draw")}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors ${
+                  mapMode === "draw" ? "bg-primary text-white border-primary" : "bg-white border-border hover:bg-muted"
+                }`}
+              >
+                Draw
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => setMapMode("edit")}
+                disabled={draftPoints.length === 0}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  mapMode === "edit" ? "bg-primary text-white border-primary" : "bg-white border-border hover:bg-muted"
+                }`}
+              >
+                Edit
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftPoints([]);
+                  handleSyncDraft([]);
+                  setMapMode("idle");
+                  setLayoutConfirmed(false);
+                }}
+                className="flex-1 py-2 rounded-xl text-sm font-semibold bg-white border border-border hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          {/* Main Map Container */}
+          <div className={`rounded-2xl border-2 overflow-hidden shadow-lg bg-white transition-colors ${mapMode !== 'idle' ? 'border-primary ring-2 ring-primary/20' : 'border-border'}`}>
             <MapContainer
               center={DUBAI_CENTER}
               zoom={12}
@@ -1542,68 +1734,83 @@ const Onboarding = () => {
             >
               <TileLayer
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                attribution='Tiles &copy; Esri'
               />
-              <FeatureGroup>
-                <EditControl
-                  position="topright"
-                  onCreated={(e: any) => {
-                    const layer = e.layer;
-                    const coords = layer.getLatLngs()[0] as L.LatLng[];
-                    const polygonCoords = coords.map((c) => [
-                      c.lng,
-                    c.lat,
-                  ]) as number[][];
-                    const area = calculateArea(polygonCoords);
-                    setManualPolygon(polygonCoords);
-                    setLayoutConfirmed(false);
-                    setData((prev) => ({
-                      ...prev,
-                      layout: {
-                        ...prev.layout,
-                        polygon: polygonCoords,
-                        area_m2: area,
-                      },
-                    }));
-                  }}
-                  onEdited={(e: any) => {
-                    const layer = e.layers.getLayers()[0] as L.Polygon;
-                    const coords = layer.getLatLngs()[0] as L.LatLng[];
-                    const polygonCoords = coords.map((c) => [
-                      c.lng,
-                      c.lat,
-                    ]) as number[][];
-                    const area = calculateArea(polygonCoords);
-                    setManualPolygon(polygonCoords);
-                    setLayoutConfirmed(false);
-                    setData((prev) => ({
-                      ...prev,
-                      layout: {
-                        ...prev.layout,
-                        polygon: polygonCoords,
-                        area_m2: area,
-                      },
-                    }));
-                  }}
-                  draw={{
-                    polygon: true,
-                    polyline: false,
-                    circle: false,
-                    rectangle: false,
-                    marker: false,
-                    circlemarker: false,
+              
+              <MapDrawingHandler 
+                mapMode={mapMode} 
+                draftPoints={draftPoints}
+                onInvalidDraw={(message) =>
+                  toast({ title: "Invalid layout", description: message, variant: "destructive" })
+                }
+                onAddPoint={(pt) => {
+                  const newPoints = [...draftPoints, [pt.lat, pt.lng] as [number, number]];
+                  setDraftPoints(newPoints);
+                  handleSyncDraft(newPoints);
+                  setLayoutConfirmed(false);
+                }} 
+                onFinishDrawing={() => {
+                  // Connect the shape visually, exit draw mode, and sync
+                  setMapMode("idle");
+                  handleSyncDraft(draftPoints);
+                }}
+              />
+
+              {/* Draw Lines */}
+              {draftPoints.length > 0 && (
+                <Polyline 
+                  positions={draftPoints} 
+                  pathOptions={{ color: '#0ea5e9', dashArray: mapMode === 'draw' ? '5, 10' : undefined, weight: 2 }} 
+                />
+              )}
+
+              {/* Show closing target during Draw mode */}
+              {mapMode === "draw" && draftPoints.length >= 3 && (
+                <CircleMarker 
+                  center={draftPoints[0]} 
+                  radius={8} 
+                  pathOptions={{ color: "#10b981", fillColor: "#10b981", fillOpacity: 0.8, weight: 2 }} 
+                >
+                  <Popup>Click to close polygon</Popup>
+                </CircleMarker>
+              )}
+
+              {/* Editable Vertices */}
+              {draftPoints.map((pt, i) => (
+                <Marker 
+                  key={i} 
+                  position={pt} 
+                  icon={vertexIcon}
+                  draggable={mapMode === "edit"}
+                  eventHandlers={{
+                    dragend: (e) => {
+                      const newLatLng = e.target.getLatLng();
+                      const newPoints = [...draftPoints];
+                      newPoints[i] = [newLatLng.lat, newLatLng.lng];
+                      if (isSelfIntersectingPolygon(newPoints)) {
+                        e.target.setLatLng(draftPoints[i]);
+                        toast({
+                          title: "Invalid layout",
+                          description: "Polygon cannot cross over itself.",
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      setDraftPoints(newPoints);
+                      handleSyncDraft(newPoints);
+                      setLayoutConfirmed(false);
+                    }
                   }}
                 />
-                {data.layout.polygon.length > 0 && (
-                  <Polygon
-                    positions={data.layout.polygon.map(([lng, lat]) => [
-                      lat,
-                      lng,
-                    ])}
-                    pathOptions={{ color: "blue" }}
-                  />
-                )}
-              </FeatureGroup>
+              ))}
+
+              {/* Solid Polygon when not editing/drawing */}
+              {mapMode === "idle" && data.layout.polygon.length > 2 && (
+                <Polygon
+                  positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
+                  pathOptions={{ color: "blue", weight: 3, fillOpacity: 0.2 }}
+                />
+              )}
             </MapContainer>
           </div>
 
@@ -1627,6 +1834,7 @@ const Onboarding = () => {
             />
           </div>
 
+          {/* === MANUAL COORDINATES === */}
           <div className="space-y-3 rounded-2xl border border-border p-4">
             <p className="text-sm font-semibold">Manual Coordinates</p>
             <p className="text-xs text-muted-foreground">
@@ -1650,6 +1858,7 @@ const Onboarding = () => {
             </button>
           </div>
 
+          {/* === IRRIGATION DRAWING UPLOAD === */}
           <div className="space-y-3 rounded-2xl border border-border p-4">
             <p className="text-sm font-semibold">Irrigation Drawing Upload</p>
             <p className="text-xs text-muted-foreground">
@@ -1791,106 +2000,118 @@ const Onboarding = () => {
             )}
           </div>
 
+          {/* === FINAL LAYOUT PREVIEW & ACTIONS === */}
           {finalLayoutPolygon.length >= 3 && (
-            <div className="space-y-4 rounded-2xl border border-border p-4 bg-muted/20">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold">Final Layout Preview</p>
-                <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium">
-                  {finalLayoutSource === "document_refined"
-                    ? "Source: Document refined"
-                    : "Source: Manual draw"}
-                </span>
-              </div>
+             <div className="space-y-4 rounded-2xl border border-border p-4 bg-muted/20">
+               <div className="flex items-center justify-between gap-3">
+                 <p className="text-sm font-semibold">Final Layout Preview</p>
+                 <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                   {finalLayoutSource === "document_refined"
+                     ? "Source: Document refined"
+                     : "Source: Manual draw"}
+                 </span>
+               </div>
 
-              <div className="rounded-xl border border-border overflow-hidden">
-                <MapContainer
-                  center={DUBAI_CENTER}
-                  zoom={12}
-                  style={{ height: "260px", width: "100%" }}
-                >
-                  <TileLayer
-                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    attribution='Tiles &copy; Esri'
-                  />
-                  <FitMapToPoints points={finalLayoutLatLng} fallbackZoom={12} maxZoom={16} />
-                  <Polygon
-                    positions={finalLayoutPolygon.map(([lng, lat]) => [lat, lng])}
-                    pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
-                  />
-                </MapContainer>
-              </div>
+               <div className="rounded-xl border border-border overflow-hidden">
+                 <MapContainer
+                   center={DUBAI_CENTER}
+                   zoom={12}
+                   style={{ height: "260px", width: "100%" }}
+                 >
+                   <TileLayer
+                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                     attribution='Tiles &copy; Esri'
+                   />
+                   <FitMapToPoints points={finalLayoutLatLng} fallbackZoom={12} maxZoom={16} />
+                   <Polygon
+                     positions={finalLayoutPolygon.map(([lng, lat]) => [lat, lng])}
+                     pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
+                   />
+                 </MapContainer>
+               </div>
 
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  Final area: {formatArea(finalLayoutArea)}
-                </p>
-                <label className="text-xs font-medium text-muted-foreground">
-                  Final coordinates (lng, lat)
-                </label>
-                <textarea
-                  readOnly
-                  value={JSON.stringify(finalLayoutPolygon, null, 2)}
-                  className="w-full h-28 px-3 py-2 rounded-xl border border-border bg-background text-xs font-mono"
-                />
-              </div>
+               <div className="space-y-2">
+                 <p className="text-xs text-muted-foreground">
+                   Final area: {formatArea(finalLayoutArea)}
+                 </p>
+                 <label className="text-xs font-medium text-muted-foreground">
+                   Final coordinates (lng, lat)
+                 </label>
+                 <textarea
+                   readOnly
+                   value={JSON.stringify(finalLayoutPolygon, null, 2)}
+                   className="w-full h-28 px-3 py-2 rounded-xl border border-border bg-background text-xs font-mono"
+                 />
+               </div>
 
-              <button
-                type="button"
-                onClick={handleConfirmLayout}
-                disabled={savingLayout}
-                className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${
-                  layoutConfirmed
-                    ? "bg-emerald-600 text-white"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90"
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                {savingLayout
-                  ? "Saving layout..."
-                  : layoutConfirmed
-                  ? "Layout confirmed"
-                  : "Confirm final layout and coordinates"}
-              </button>
+               {/* Your Green Confirm Button */}
+               <button
+                 type="button"
+                 onClick={() => {
+                   handleConfirmLayout();
+                   setMapMode("idle");
+                 }}
+                 disabled={savingLayout}
+                 className={`w-full py-3 rounded-xl text-sm font-semibold transition-all shadow-sm ${
+                   layoutConfirmed
+                     ? "bg-emerald-600 text-white hover:bg-emerald-700 ring-2 ring-emerald-600 ring-offset-2"
+                     : "bg-primary text-primary-foreground hover:bg-primary/90"
+                 } disabled:opacity-50 disabled:cursor-not-allowed`}
+               >
+                 {savingLayout
+                   ? "Saving layout..."
+                   : layoutConfirmed
+                   ? "✅ Layout Saved Successfully"
+                   : "Save Layout"}
+               </button>
 
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={clearManualPolygon}
-                  disabled={manualPolygon.length < 3}
-                  className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Clear Drawn Polygon
-                </button>
-                <button
-                  type="button"
-                  onClick={clearExtractedPolygon}
-                  disabled={extractedPolygon.length < 3 && extractedPoints.length < 3}
-                  className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Clear Extracted Result
-                </button>
-                <button
-                  type="button"
-                  onClick={clearLayoutSelection}
-                  disabled={finalLayoutPolygon.length < 3 && !data.layout.layoutFile}
-                  className="px-3 py-2 rounded-xl border border-destructive/40 text-destructive text-xs font-medium hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Clear All Selection
-                </button>
-              </div>
-            </div>
+               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                 <button
+                   type="button"
+                   onClick={() => {
+                     clearManualPolygon();
+                     setDraftPoints([]);
+                     setMapMode("idle");
+                   }}
+                   disabled={manualPolygon.length < 3}
+                   className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                 >
+                   Clear Drawn Polygon
+                 </button>
+                 <button
+                   type="button"
+                   onClick={clearExtractedPolygon}
+                   disabled={extractedPolygon.length < 3 && extractedPoints.length < 3}
+                   className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                 >
+                   Clear Extracted Result
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     clearLayoutSelection();
+                     setDraftPoints([]);
+                     setMapMode("idle");
+                   }}
+                   disabled={finalLayoutPolygon.length < 3 && !data.layout.layoutFile}
+                   className="px-3 py-2 rounded-xl border border-destructive/40 text-destructive text-xs font-medium hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                 >
+                   Clear All Selection
+                 </button>
+               </div>
+             </div>
           )}
 
-          <p className="text-xs text-muted-foreground text-center">
+          <p className="text-xs text-muted-foreground text-center font-medium">
             {finalLayoutPolygon.length >= 3 && !layoutConfirmed
-              ? "Please confirm final layout to continue."
+              ? "You must click 'Save Layout' to continue."
               : finalLayoutPolygon.length >= 3 && layoutConfirmed
-              ? "Layout confirmed. Continue to module selection."
-              : "You can refine this map later from the dashboard."}
+              ? "Layout confirmed. You can now proceed to the next step."
+              : "Draw or upload a map layout to continue."}
           </p>
         </div>
       );
-
+    }
 
     // ─── Step 4 ───
     if (step === 4)
@@ -2430,24 +2651,6 @@ const Onboarding = () => {
                   ? formatArea(data.layout.area_m2)
                   : "Not mapped",
               },
-              {
-                label: "Devices",
-                value: data.devices.length
-                  ? `${data.devices.length} discovered`
-                  : "Not discovered",
-              },
-              {
-                label: "Gateway",
-                value: data.gatewayId || "Not connected",
-              },
-              {
-                label: "Plant Entries",
-                value: `${buildDemandForecastingPayload().plants.length}`,
-              },
-              {
-                label: "System Entries",
-                value: `${buildDemandForecastingPayload().waterSystems.length}`,
-              },
             ].map(({ label, value }) => (
               <div
                 key={label}
@@ -2468,7 +2671,7 @@ const Onboarding = () => {
           </button>
         </div>
       );
-  };
+  }
 
   return (
     <div className="relative min-h-screen py-10 px-4
