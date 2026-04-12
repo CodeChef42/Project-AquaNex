@@ -558,15 +558,6 @@ def predict_breakage(data: SensorData):
         return PredictionResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
-prediction = _predict_from_snapshot(snapshot)
-prediction["gateway_id"]   = gateway_id
-prediction["workspace_id"] = data.workspace_id
-
-# Include all slot→device_id mappings so Django can resolve pipe_id from any of them
-prediction["slot_device_ids"] = {
-    slot: state.get(f"{slot}_device_id")
-    for slot in ("flow_1", "pressure_1", "flow_2", "pressure_2")
-}
 def _report_incident_to_django(prediction: dict):
     if not prediction.get("is_anomaly"):
         return
