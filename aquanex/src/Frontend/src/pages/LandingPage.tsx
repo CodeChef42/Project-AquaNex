@@ -5,7 +5,6 @@ import HeroSection from "@/components/landing/HeroSection";
 import FeaturesSection from "@/components/landing/FeaturesSection";
 import StatsSection from "@/components/landing/StatsSection";
 import SolutionsSection from "@/components/landing/SolutionsSection";
-import CTASection from "@/components/landing/CTASection";
 import Logo from "@/components/Logo";
 
 const articles = [
@@ -128,7 +127,6 @@ const IrrigationAnimation = ({ isHovered }: { isHovered: boolean }) => {
 
 const LandingPage = () => {
   const [hoveredMember, setHoveredMember] = useState<string | null>(null);
-  const irrigationControls = useAnimation();
 
   return (
     <motion.div
@@ -289,58 +287,106 @@ const LandingPage = () => {
           </div>
         </motion.section>
 
-        {/* CTA */}
-        <motion.div
-          style={{ background: "#faf7f2" }}
-          initial={{ opacity: 0, y: 40 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.7 }}
-        >
-          <CTASection />
-        </motion.div>
-
-        {/* Developers / Team Section */}
+        {/* --- ENHANCED DEVELOPERS / TEAM SECTION (GPU OPTIMIZED) --- */}
         <motion.section
           id="team"
-          style={{ background: "#ffffff" }}
-          className="py-20 md:py-28"
-          initial={{ opacity: 0, y: 40 }}
-          whileInView={{ opacity: 1, y: 0 }}
+          className="relative py-20 md:py-32 overflow-hidden bg-[#020617]" 
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.7 }}
         >
-          <div className="container mx-auto px-6">
-            <div className="text-center mb-16">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] mb-4 text-emerald-500">
+          {/* GPU-Friendly Background Gradient Animation */}
+          <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+            
+            {/* Vibrant Cyan Orb */}
+            <motion.div
+              className="absolute -top-[20%] -left-[10%] w-[800px] h-[800px] rounded-full"
+              style={{
+                background: "radial-gradient(circle at center, rgba(6,182,212,0.35) 0%, rgba(6,182,212,0) 70%)",
+                willChange: "transform",
+              }}
+              animate={{ x: [0, 150, 0], y: [0, 100, 0] }}
+              transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
+            />
+
+            {/* Bright Emerald Orb */}
+            <motion.div
+              className="absolute top-[10%] -right-[15%] w-[900px] h-[900px] rounded-full"
+              style={{
+                background: "radial-gradient(circle at center, rgba(16,185,129,0.3) 0%, rgba(16,185,129,0) 70%)",
+                willChange: "transform",
+              }}
+              animate={{ x: [0, -200, 0], y: [0, 150, 0] }}
+              transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
+            />
+
+            {/* Deep Blue Orb */}
+            <motion.div
+              className="absolute -bottom-[20%] left-[10%] w-[700px] h-[700px] rounded-full"
+              style={{
+                background: "radial-gradient(circle at center, rgba(59,130,246,0.35) 0%, rgba(59,130,246,0) 70%)",
+                willChange: "transform",
+              }}
+              animate={{ x: [0, 100, -50, 0], y: [0, -150, 0] }}
+              transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
+            />
+
+            {/* Subtle Violet Orb for color depth */}
+            <motion.div
+              className="absolute bottom-[0%] right-[20%] w-[600px] h-[600px] rounded-full"
+              style={{
+                background: "radial-gradient(circle at center, rgba(99,102,241,0.25) 0%, rgba(99,102,241,0) 70%)",
+                willChange: "transform",
+              }}
+              animate={{ x: [0, -100, 50, 0], y: [0, -50, 50, 0] }}
+              transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </div>
+
+          <div className="container relative z-20 mx-auto px-6">
+            <motion.div 
+              className="text-center mb-20"
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+            >
+              <p className="text-xs font-bold uppercase tracking-[0.2em] mb-4 text-[#86efac] drop-shadow-md">
                 The Minds Behind AquaNex
               </p>
-              <h2 className="text-4xl md:text-5xl font-extrabold leading-[1.1] text-gray-900">
+              <h2 className="text-4xl md:text-5xl lg:text-6xl font-extrabold leading-[1.1] text-white drop-shadow-xl">
                 Our Developers
               </h2>
-            </div>
+            </motion.div>
 
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-6 max-w-5xl mx-auto">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-6 max-w-5xl mx-auto">
               {teamMembers.map((member, index) => (
                 <motion.div
                   key={member.name}
-                  className="relative flex flex-col items-center p-6 rounded-2xl bg-gray-50 border border-gray-100 hover:shadow-2xl transition-shadow duration-300 overflow-hidden"
-                  initial={{ opacity: 0, y: 20 }}
+                  className="relative flex flex-col items-center p-6 rounded-3xl bg-white/[0.04] backdrop-blur-2xl border border-white/10 hover:bg-white/[0.08] hover:border-white/20 hover:shadow-2xl hover:shadow-[#10b981]/20 transition-all duration-300 overflow-hidden"
+                  initial={{ opacity: 0, y: 30 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
-                  transition={{ duration: 0.4, delay: index * 0.1 }}
-                  whileHover={{ scale: 1.02 }} 
+                  transition={{ duration: 0.5, delay: index * 0.1 }}
+                  whileHover={{ scale: 1.05, y: -5 }} 
                   onMouseEnter={() => setHoveredMember(member.name)} 
                   onMouseLeave={() => setHoveredMember(null)}
                 >
                   <IrrigationAnimation isHovered={hoveredMember === member.name} />
 
-                  <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-[#86efac] to-teal-400 mb-4 flex items-center justify-center shadow-inner group z-10">
-                    <span className="text-xl font-bold text-teal-900">{member.name.charAt(0)}</span>
+                  <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-[#86efac] to-[#0ea5e9] mb-5 flex items-center justify-center shadow-lg shadow-black/50 group z-10 ring-2 ring-white/20">
+                    <span className="text-xl font-bold text-[#020617]">{member.name.charAt(0)}</span>
                   </div>
                   
-                  <h3 className="text-lg font-bold text-gray-900 z-10">{member.name}</h3>
-                  <p className="text-xs font-semibold text-teal-600 mt-1 z-10">{member.role}</p>
+                  {/* Added text-center, whitespace-nowrap, and w-full */}
+                  <h3 className="text-lg font-bold text-white z-10 tracking-wide text-center whitespace-nowrap w-full">
+                    {member.name}
+                  </h3>
+                  
+                  {/* Added responsive sizing, text-center, and whitespace-nowrap */}
+                  <p className="text-[10px] sm:text-xs font-semibold text-[#86efac] mt-1 z-10 uppercase tracking-wider text-center whitespace-nowrap w-full">
+                    {member.role}
+                  </p>
                 </motion.div>
               ))}
             </div>

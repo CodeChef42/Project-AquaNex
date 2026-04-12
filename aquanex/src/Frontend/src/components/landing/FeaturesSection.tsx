@@ -55,13 +55,22 @@ const FeaturesSection = () => {
       style={{ background: "#faf7f2", isolation: "isolate" }}
       ref={ref}
     >
-      {/* Ambient background glow */}
-      <div className="absolute inset-0" style={{ zIndex: 0 }}>
+      {/* Ambient background glows */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ zIndex: 0 }}>
+        {/* Green Glow */}
         <motion.div
-          className="absolute w-[300px] h-[300px] md:w-[600px] md:h-[600px] rounded-full blur-[80px] md:blur-[120px]"
+          className="absolute -top-20 -left-20 w-[300px] h-[300px] md:w-[600px] md:h-[600px] rounded-full blur-[80px] md:blur-[120px]"
           style={{ background: "rgba(134,239,172,0.15)" }}
           animate={{ x: [0, 60, -50, 0], y: [0, -40, 50, 0] }}
-          transition={{ duration: 20, repeat: Infinity }}
+          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+        />
+        
+        {/* Blue Glow */}
+        <motion.div
+          className="absolute bottom-0 right-0 w-[300px] h-[300px] md:w-[500px] md:h-[500px] rounded-full blur-[80px] md:blur-[120px]"
+          style={{ background: "rgba(56,189,248,0.12)" }} 
+          animate={{ x: [0, -40, 30, 0], y: [0, 50, -40, 0] }}
+          transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
         />
       </div>
 
