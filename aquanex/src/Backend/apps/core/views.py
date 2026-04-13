@@ -31,7 +31,10 @@ from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
 from .models import Pipe, PipeSpecification
-
+from django.http import JsonResponse
+from django.views import View
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 logger = logging.getLogger(__name__)
 
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer
@@ -100,92 +103,710 @@ def _incident_fingerprint(gateway_id, incident_type):
     unique_string = f"{gateway_id}:{incident_type}:{uuid.uuid4()}"
     return hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
 
+def fetch_pipe_id_from_thingsboard(device_name):
+    """
+    Authenticates with ThingsBoard and fetches the pipe_id server attribute for a given device.
+    Uses Django cache to avoid hammering ThingsBoard with auth requests.
+    """
+    if not device_name:
+        return "UNKNOWN_PIPE"
 
-def _record_incident_from_prediction(workspace, gateway_id, prediction):
-    print("\n" + "="*50)
-    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
-    print(f"📦 PREDICTION PAYLOAD: {prediction}")
+    tb_url = os.environ.get("TB_URL", "http://localhost:8080").rstrip('/')
     
-    if not isinstance(prediction, dict):
-        print("❌ ABORT: Prediction is not a valid dictionary.")
+    # 1. Get JWT Token (Cached for 1 hour to speed up requests)
+    token = cache.get('tb_jwt_token')
+    if not token:
+        auth_res = requests.post(f"{tb_url}/api/auth/login", json={
+            "username": os.environ.get("TB_TENANT_EMAIL"),
+            "password": os.environ.get("TB_TENANT_PASSWORD")
+        })
+        if auth_res.status_code == 200:
+            token = auth_res.json().get("token")
+            cache.set('tb_jwt_token', token, timeout=3600)
+        else:
+            return "UNKNOWN_PIPE"
+
+    headers = {"X-Authorization": f"Bearer {token}"}
+
+    try:
+        # 2. Get the internal ThingsBoard Device ID by its name
+        dev_res = requests.get(f"{tb_url}/api/tenant/devices?deviceName={device_name}", headers=headers)
+        if dev_res.status_code != 200: return "UNKNOWN_PIPE"
+        
+        tb_internal_id = dev_res.json().get("id", {}).get("id")
+        if not tb_internal_id: return "UNKNOWN_PIPE"
+
+        # 3. Fetch the SERVER_SCOPE attributes (where pipe_id lives)
+        attr_res = requests.get(
+            f"{tb_url}/api/plugins/telemetry/DEVICE/{tb_internal_id}/values/attributes/SERVER_SCOPE", 
+            headers=headers
+        )
+        
+        if attr_res.status_code == 200:
+            attributes = attr_res.json()
+            for attr in attributes:
+                if attr.get("key") == "pipe_id":
+                    return str(attr.get("value"))
+                    
+    except Exception as e:
+        print(f"TB Fetch Error: {e}")
+        
+    return "UNKNOWN_PIPE"
+
+def _normalize_device_tokens(raw_value):
+    tokens = set()
+    if raw_value is None:
+        return tokens
+    raw = str(raw_value).strip()
+    if not raw:
+        return tokens
+    tokens.add(raw)
+    lowered = raw.lower()
+    tokens.add(lowered)
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if digits:
+        tokens.add(digits)
+        try:
+            tokens.add(str(int(digits)))
+        except ValueError:
+            pass
+    return tokens
+
+
+def _flow_and_pressure_signals(telemetry_rows):
+    signals = []
+    for row in telemetry_rows or []:
+        if not isinstance(row, dict):
+            continue
+        family = _infer_metric_family(row.get("metric"), row.get("type"))
+        if family not in {"flow", "pressure"}:
+            continue
+        token_set = set()
+        token_set.update(_normalize_device_tokens(row.get("device_id")))
+        token_set.update(_normalize_device_tokens(row.get("id")))
+        token_set.update(_normalize_device_tokens(row.get("flowmeter_id")))
+        token_set.update(_normalize_device_tokens(row.get("sensor_id")))
+        token_set.update(_normalize_device_tokens(row.get("pipe_id")))
+        token_set.update(_normalize_device_tokens(row.get("section_id")))
+        signals.append({"family": family, "tokens": token_set, "row": row})
+    return signals
+
+
+def _resolve_pipe_context(workspace, telemetry_rows):
+    signals = _flow_and_pressure_signals(telemetry_rows)
+    if not signals:
         return None
 
-    now_ts = timezone.now()
+    candidate = None
+    best_score = 0
+    pipes = Pipe.objects.filter(workspace=workspace).select_related("pipespec")
+    for pipe in pipes:
+        spec = getattr(pipe, "pipespec", None)
+        if not spec:
+            continue
 
-    if prediction.get("is_anomaly") is not True:
-        print("ℹ️ STATUS: Normal data received. is_anomaly is False.")
-        updated = Incident.objects.filter(
-            workspace=workspace,
-            gateway_id=gateway_id,
-            status="ongoing",
-        ).update(status="recovering", last_seen_at=now_ts)
-        print(f"ℹ️ Transitioned {updated} ongoing incidents to recovering.")
-        print("="*50 + "\n")
+        flow_tokens = _normalize_device_tokens(getattr(spec, "flowmeter_id", None))
+        pressure_tokens = _normalize_device_tokens(getattr(spec, "sensor_id", None))
+        pipe_tokens = _normalize_device_tokens(pipe.pipe_id)
+        score = 0
+        for signal in signals:
+            tokens = signal["tokens"]
+            if pipe_tokens.intersection(tokens):
+                score += 7
+                continue
+            if signal["family"] == "flow" and flow_tokens and flow_tokens.intersection(tokens):
+                score += 4
+            elif signal["family"] == "pressure" and pressure_tokens and pressure_tokens.intersection(tokens):
+                score += 4
+            elif (flow_tokens and flow_tokens.intersection(tokens)) or (pressure_tokens and pressure_tokens.intersection(tokens)):
+                score += 1
+
+        if score > best_score:
+            best_score = score
+            candidate = (pipe, spec)
+
+    if not candidate:
+        # Fallback: match by closest pipe midpoint to telemetry centroid.
+        lat_values = []
+        lng_values = []
+        for signal in signals:
+            row = signal.get("row") or {}
+            lat = _optional_float(row.get("lat"))
+            lng = _optional_float(row.get("lng"))
+            if lat is None or lng is None:
+                continue
+            lat_values.append(lat)
+            lng_values.append(lng)
+        if lat_values and lng_values:
+            centroid_lat = sum(lat_values) / len(lat_values)
+            centroid_lng = sum(lng_values) / len(lng_values)
+            closest = None
+            closest_distance = float("inf")
+            for pipe in pipes:
+                spec = getattr(pipe, "pipespec", None)
+                if not spec:
+                    continue
+                mid_lat = (_safe_float(pipe.start_lat, 0.0) + _safe_float(pipe.end_lat, 0.0)) / 2.0
+                mid_lng = (_safe_float(pipe.start_lng, 0.0) + _safe_float(pipe.end_lng, 0.0)) / 2.0
+                distance = (mid_lat - centroid_lat) ** 2 + (mid_lng - centroid_lng) ** 2
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest = (pipe, spec)
+            candidate = closest
+        if not candidate:
+            return None
+
+    pipe, spec = candidate
+    start_lat = _safe_float(pipe.start_lat, 0.0)
+    start_lng = _safe_float(pipe.start_lng, 0.0)
+    end_lat = _safe_float(pipe.end_lat, 0.0)
+    end_lng = _safe_float(pipe.end_lng, 0.0)
+    midpoint_lat = round((start_lat + end_lat) / 2.0, 7)
+    midpoint_lng = round((start_lng + end_lng) / 2.0, 7)
+
+    return {
+        "pipe_id": pipe.pipe_id,
+        "section_id": pipe.pipe_id,
+        "section_midpoint": {"lat": midpoint_lat, "lng": midpoint_lng},
+        "coordinates": {
+            "start": {"lat": start_lat, "lng": start_lng},
+            "end": {"lat": end_lat, "lng": end_lng},
+            "midpoint": {"lat": midpoint_lat, "lng": midpoint_lng},
+        },
+        "pipe_specs": {
+            "section_id": pipe.pipe_id,
+            "flowmeter_id": getattr(spec, "flowmeter_id", None),
+            "sensor_id": getattr(spec, "sensor_id", None),
+            "material": spec.material,
+            "pressure_class": spec.pressure_class,
+            "depth": _safe_float(spec.depth, 0.0) if spec.depth is not None else None,
+            "nominal_dia": _safe_float(spec.nominal_dia, 0.0) if spec.nominal_dia is not None else None,
+            "pipe_category": spec.pipe_category,
+            "water_capacity": _safe_float(spec.water_capacity, 0.0) if spec.water_capacity is not None else None,
+        },
+    }
+
+
+def _next_alert_id(workspace, pipe_id):
+    normalized_pipe = re.sub(r"[^A-Za-z0-9]+", "", str(pipe_id or "").upper()) or "PIPE"
+    compact = (normalized_pipe[:4] + normalized_pipe[-4:]) if len(normalized_pipe) > 8 else normalized_pipe
+    prefix = f"ALT-{compact}"
+    max_seq = 0
+    incidents = Incident.objects.filter(
+        workspace=workspace,
+        details__alert_id__startswith=f"{prefix}-",
+    ).only("details")
+    for incident in incidents:
+        details = incident.details if isinstance(incident.details, dict) else {}
+        current_alert = str(details.get("alert_id") or "")
+        if not current_alert.startswith(f"{prefix}-"):
+            continue
+        suffix = current_alert.rsplit("-", 1)[-1]
+        if suffix.isdigit():
+            max_seq = max(max_seq, int(suffix))
+    return f"{prefix}-{max_seq + 1:03d}"
+
+
+INCIDENT_TYPE_MAP = {
+    "leakage": "pipeline_leak",
+    "breakage": "pipeline_breakage",
+}
+
+
+def _incident_type_from_anomaly(anomaly_type):
+    normalized = str(anomaly_type or "unknown").strip().lower() or "unknown"
+    return INCIDENT_TYPE_MAP.get(normalized, f"anomaly_{normalized}")
+
+
+def _slot_device_ids_from_telemetry(telemetry_rows):
+    slot_device_ids = {}
+    for row in telemetry_rows or []:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("device_id") or "").strip()
+        if not device_id:
+            continue
+        family = _infer_metric_family(row.get("metric"), row.get("type"))
+        index = _infer_sensor_index(
+            row.get("sensor_index"),
+            row.get("position"),
+            row.get("device_id"),
+            row.get("id"),
+            row.get("type"),
+            row.get("metric"),
+        )
+        if family in {"flow", "pressure"} and index in {1, 2}:
+            slot_device_ids[f"{family}_{index}"] = device_id
+    return slot_device_ids
+
+
+def _resolve_comp_id_from_workspace_devices(workspace, candidate_device_ids):
+    devices = workspace.devices if isinstance(getattr(workspace, "devices", None), list) else []
+    candidates = [str(d or "").strip() for d in (candidate_device_ids or []) if str(d or "").strip()]
+    if not candidates or not devices:
         return None
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        device_id = str(device.get("id") or "").strip()
+        if device_id not in candidates:
+            continue
+        metadata = device.get("metadata") if isinstance(device.get("metadata"), dict) else {}
+        for key in ("comp_id", "pipe_id", "section_id", "zone_id"):
+            value = device.get(key)
+            if value:
+                return str(value)
+        for key in ("comp_id", "pipe_id", "section_id", "zone_id"):
+            value = metadata.get(key)
+            if value:
+                return str(value)
+    return None
 
-    print("⚠️ ANOMALY CONFIRMED! Proceeding to database insertion logic...")
-    
-    incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
-    severity = str(prediction.get("severity") or "").strip().lower() or None
-    detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
-    details = {"prediction": prediction}
 
-    # 1. Check for ongoing
-    ongoing_incident = Incident.objects.filter(
-        workspace=workspace, gateway_id=gateway_id,
-        incident_type=incident_type, status="ongoing"
-    ).first()
+def _fallback_unmapped_comp_id(gateway_id, candidate_device_ids):
+    valid = sorted({str(d or "").strip() for d in (candidate_device_ids or []) if str(d or "").strip()})
+    if not valid:
+        return None
+    basis = "|".join(valid)
+    digest = hashlib.sha256(f"{gateway_id}:{basis}".encode("utf-8")).hexdigest()[:16]
+    return f"UNMAPPED-{digest}"
 
-    if ongoing_incident:
-        print(f"🔄 FOUND ONGOING: Updating existing incident ID: {ongoing_incident.id}")
-        ongoing_incident.last_seen_at = detected_at
-        ongoing_incident.severity = severity
-        ongoing_incident.details = details
-        ongoing_incident.save(update_fields=['last_seen_at', 'severity', 'details'])
-        print("="*50 + "\n")
-        return {"id": str(ongoing_incident.id), "created": False}
 
-    # 2. Check for recovering
-    recovering_incident = Incident.objects.filter(
-        workspace=workspace, gateway_id=gateway_id,
-        incident_type=incident_type, status="recovering"
-    ).first()
+def _upsert_component_incident(
+    *,
+    workspace,
+    gateway_id,
+    anomaly_type,
+    severity,
+    detected_at,
+    details=None,
+    device_id=None,
+    slot_device_ids=None,
+    pipe_context=None,
+    source="ml_api",
+):
+    incident_type = _incident_type_from_anomaly(anomaly_type)
+    resolved_slot_ids = slot_device_ids if isinstance(slot_device_ids, dict) else {}
+    candidate_device_ids = []
+    if device_id:
+        candidate_device_ids.append(device_id)
+    for slot_did in resolved_slot_ids.values():
+        if slot_did and slot_did not in candidate_device_ids:
+            candidate_device_ids.append(slot_did)
+    comp_id = fetch_pipe_id_from_thingsboard(
+        device_id,
+        fallback_device_ids=resolved_slot_ids,
+        workspace_id=str(workspace.id),
+        gateway_id=gateway_id,
+    )
+    if not comp_id and isinstance(pipe_context, dict):
+        comp_id = str(pipe_context.get("pipe_id") or "").strip() or None
+    if not comp_id:
+        comp_id = _resolve_comp_id_from_workspace_devices(workspace, candidate_device_ids)
+    if not comp_id:
+        comp_id = _fallback_unmapped_comp_id(gateway_id, candidate_device_ids)
+        if comp_id:
+            logger.warning(
+                "Using synthetic comp_id=%s (gateway=%s, devices=%s) because explicit mapping is missing.",
+                comp_id,
+                gateway_id,
+                candidate_device_ids,
+            )
+    if not comp_id:
+        logger.error(
+            "Component incident upsert skipped: comp_id unresolved (gateway=%s, device=%s, slots=%s)",
+            gateway_id,
+            device_id,
+            resolved_slot_ids,
+        )
+        return {"error": "comp_id_unresolved"}
 
-    if recovering_incident:
-        print(f"🔄 FOUND RECOVERING: Re-opening incident ID: {recovering_incident.id}")
-        recovering_incident.status = "ongoing"
-        recovering_incident.last_seen_at = detected_at
-        recovering_incident.severity = severity
-        recovering_incident.details = details
-        recovering_incident.save()
-        print("="*50 + "\n")
-        return {"id": str(recovering_incident.id), "created": False}
+    existing = Incident.objects.filter(
+        workspace=workspace,
+        comp_id=comp_id,
+        status="open",
+    ).order_by("-last_seen_at").first()
 
-    # 3. Create Brand New
-    print("✨ NO ACTIVE INCIDENTS FOUND. Creating a brand new DB row...")
-    fingerprint = _incident_fingerprint(gateway_id, incident_type)
-    print(f"🔑 Generated Unique Fingerprint: {fingerprint}")
-    
+    alert_id = None
+    if existing and isinstance(existing.details, dict):
+        alert_id = str(existing.details.get("alert_id") or "").strip() or None
+    if not alert_id:
+        alert_id = _next_alert_id(workspace, comp_id)
+
+    payload_details = {}
+    if isinstance(details, dict):
+        payload_details.update(details)
+    if isinstance(pipe_context, dict):
+        payload_details.update(pipe_context)
+    payload_details.update(
+        {
+            "source": source,
+            "originating_device": device_id,
+            "comp_id": comp_id,
+            "pipe_id": comp_id,
+            "alert_id": alert_id,
+            "last_ml_update": detected_at.isoformat(),
+        }
+    )
+
+    if existing:
+        existing.last_seen_at = detected_at
+        existing.severity = severity
+        existing.details = payload_details
+        existing.gateway_id = gateway_id
+        existing.incident_type = incident_type
+        existing.save(update_fields=["last_seen_at", "severity", "details", "gateway_id", "incident_type"])
+        return {
+            "id": str(existing.id),
+            "alert_id": alert_id,
+            "pipe_id": comp_id,
+            "comp_id": comp_id,
+            "created": False,
+        }
+
+    fingerprint = _incident_fingerprint(gateway_id, f"comp-{comp_id}")
     try:
         with transaction.atomic():
             incident = Incident.objects.create(
                 workspace=workspace,
                 gateway_id=gateway_id,
                 incident_type=incident_type,
+                comp_id=comp_id,
                 severity=severity,
-                status="ongoing",
+                status="open",
                 detected_at=detected_at,
                 last_seen_at=detected_at,
                 fingerprint=fingerprint,
-                details=details,
+                details=payload_details,
             )
-            print(f"✅ SUCCESS! Created new Incident ID: {incident.id}")
-            print("="*50 + "\n")
-            return {"id": str(incident.id), "created": True}
-    except Exception as e:
-        print(f"❌ DATABASE ERROR: Failed to insert row! Error: {str(e)}")
+            return {
+                "id": str(incident.id),
+                "alert_id": alert_id,
+                "pipe_id": comp_id,
+                "comp_id": comp_id,
+                "created": True,
+            }
+    except IntegrityError:
+        race_row = Incident.objects.filter(
+            workspace=workspace,
+            comp_id=comp_id,
+            status="open",
+        ).order_by("-last_seen_at").first()
+        if not race_row:
+            return None
+        race_row.last_seen_at = detected_at
+        race_row.severity = severity
+        race_row.details = payload_details
+        race_row.gateway_id = gateway_id
+        race_row.incident_type = incident_type
+        race_row.save(update_fields=["last_seen_at", "severity", "details", "gateway_id", "incident_type"])
+        return {
+            "id": str(race_row.id),
+            "alert_id": alert_id,
+            "pipe_id": comp_id,
+            "comp_id": comp_id,
+            "created": False,
+        }
+
+
+def _record_incident_from_prediction(workspace, gateway_id, prediction, telemetry_rows=None):
+    print("\n" + "="*50)
+    print(f"🚨 DB INSERT CHECK FOR GATEWAY: {gateway_id}")
+    print(f"📦 PREDICTION PAYLOAD: {prediction}")
+
+    if not isinstance(prediction, dict):
+        return None
+
+    now_ts = timezone.now()
+
+    if prediction.get("is_anomaly") is not True:
+        updated = Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            status="open",
+        ).update(status="recovering", last_seen_at=now_ts)
+        print(f"ℹ️ Transitioned {updated} open incidents to recovering.")
         print("="*50 + "\n")
         return None
+
+    print("⚠️ ANOMALY CONFIRMED! Proceeding to component-level incident upsert...")
+
+    severity = str(prediction.get("severity") or "").strip().lower() or None
+    detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
+    pipe_context = _resolve_pipe_context(workspace, telemetry_rows or [])
+    anomaly_type = str(prediction.get("anomaly_type") or "unknown").strip().lower() or "unknown"
+    primary_device_id = str(prediction.get("device_id") or "").strip() or None
+    slot_device_ids = prediction.get("slot_device_ids")
+    if not isinstance(slot_device_ids, dict):
+        slot_device_ids = _slot_device_ids_from_telemetry(telemetry_rows or [])
+    if not primary_device_id:
+        primary_device_id = next(
+            (str(row.get("device_id") or "").strip() for row in (telemetry_rows or []) if isinstance(row, dict) and row.get("device_id")),
+            None,
+        )
+
+    incident_summary = _upsert_component_incident(
+        workspace=workspace,
+        gateway_id=gateway_id,
+        anomaly_type=anomaly_type,
+        severity=severity,
+        detected_at=detected_at,
+        details={"prediction": prediction},
+        device_id=primary_device_id,
+        slot_device_ids=slot_device_ids,
+        pipe_context=pipe_context,
+        source="ml_gateway_telemetry",
+    )
+    if not incident_summary or incident_summary.get("error"):
+        print("❌ INCIDENT NOT CREATED: comp_id unresolved.")
+        print("=" * 50 + "\n")
+    return incident_summary
+
+
+WQ_INCIDENT_TYPES = {
+    "ph_warning", "ph_anomaly", "ph_critical",
+    "turbidity_warning", "turbidity_spike", "turbidity_critical",
+}
+
+_PH_FAMILY         = {"ph_warning", "ph_anomaly", "ph_critical"}
+_TURBIDITY_FAMILY  = {"turbidity_warning", "turbidity_spike", "turbidity_critical"}
+
+
+def _check_water_quality_thresholds(workspace, gateway_id, device_id, device_type, value, ts):
+    """Rule-based anomaly detection for water quality sensors. Returns incident summary or None."""
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    incident_type = None
+    severity = None
+
+    if device_type == "ph_sensor":
+        if fval < 5.5 or fval > 9.5:
+            incident_type = "ph_critical"
+            severity = "critical"
+        elif fval < 6.0 or fval > 8.5:
+            incident_type = "ph_anomaly"
+            severity = "high"
+        elif fval < 6.5 or fval > 8.0:
+            incident_type = "ph_warning"
+            severity = "medium"
+
+    elif device_type == "turbidity_sensor":
+        if fval > 10.0:
+            incident_type = "turbidity_critical"
+            severity = "critical"
+        elif fval > 5.0:
+            incident_type = "turbidity_spike"
+            severity = "high"
+        elif fval > 3.0:
+            incident_type = "turbidity_warning"
+            severity = "medium"
+
+    now_ts = timezone.now()
+
+    if incident_type:
+        if incident_type in _PH_FAMILY:
+            sibling_types = list(_PH_FAMILY - {incident_type})
+        elif incident_type in _TURBIDITY_FAMILY:
+            sibling_types = list(_TURBIDITY_FAMILY - {incident_type})
+        else:
+            sibling_types = []
+
+        if sibling_types:
+            Incident.objects.filter(
+                workspace=workspace,
+                gateway_id=device_id,
+                incident_type__in=sibling_types,
+                status__in=["ongoing", "recovering"],
+            ).update(status="recovering", last_seen_at=now_ts)
+
+        prediction = {
+            "is_anomaly": True,
+            "anomaly_type": incident_type,
+            "severity": severity,
+            "timestamp": ts.isoformat() if ts else now_ts.isoformat(),
+            "device_id": device_id,
+            "device_type": device_type,
+            "value": fval,
+            "source": "water_quality_threshold",
+        }
+        return _record_incident_from_prediction(workspace, device_id, prediction)
+    else:
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=device_id,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status="ongoing",
+        ).update(status="recovering", last_seen_at=now_ts)
+
+        resolve_cutoff = now_ts - timedelta(minutes=2)
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=device_id,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status="recovering",
+            last_seen_at__lte=resolve_cutoff,
+        ).update(status="resolved", resolved_at=now_ts)
+        return None
+
+
+def _check_water_quality_thresholds_batch(workspace, checks):
+    """
+    Batch WQ threshold checks for multiple devices in a single tick.
+    Replaces per-device _check_water_quality_thresholds() calls with:
+      1 SELECT  — all active WQ incidents for all devices
+      1 UPDATE  — sibling severity closes (if any)
+      1 bulk_update — ongoing/recovering incident updates
+      1 bulk_create — brand-new incidents
+    = 4 queries regardless of device count, vs. up to 4×N previously.
+
+    checks: list of (device_id, device_type, value, ts)
+    Returns: dict {device_id: {"id": ..., "created": bool} | None}
+             None means normal reading (no active anomaly).
+    """
+    if not checks:
+        return {}
+
+    now_ts = timezone.now()
+    resolve_cutoff = now_ts - timedelta(minutes=2)
+    device_ids = [c[0] for c in checks]
+
+    # ── Single fetch: all active WQ incidents for all devices ─────────────────
+    existing = list(Incident.objects.filter(
+        workspace=workspace,
+        gateway_id__in=device_ids,
+        incident_type__in=list(WQ_INCIDENT_TYPES),
+        status__in=["ongoing", "recovering"],
+    ))
+    # Index: (gateway_id, incident_type, status) → Incident
+    inc_map = {}
+    for inc in existing:
+        inc_map[(inc.gateway_id, inc.incident_type, inc.status)] = inc
+
+    # ── Determine actions in memory (no queries) ───────────────────────────────
+    sibling_ids_to_close = []   # IDs of sibling incidents to mark recovering
+    incs_to_update = {}         # id → Incident (modified in memory, bulk-updated later)
+    new_incidents = []          # Incident objects to bulk_create
+    results = {}
+
+    for device_id, device_type, value, ts in checks:
+        try:
+            fval = float(value)
+        except (TypeError, ValueError):
+            results[device_id] = None
+            continue
+
+        incident_type = None
+        severity = None
+        if device_type == "ph_sensor":
+            if fval < 5.5 or fval > 9.5:
+                incident_type, severity = "ph_critical", "critical"
+            elif fval < 6.0 or fval > 8.5:
+                incident_type, severity = "ph_anomaly", "high"
+            elif fval < 6.5 or fval > 8.0:
+                incident_type, severity = "ph_warning", "medium"
+        elif device_type == "turbidity_sensor":
+            if fval > 10.0:
+                incident_type, severity = "turbidity_critical", "critical"
+            elif fval > 5.0:
+                incident_type, severity = "turbidity_spike", "high"
+            elif fval > 3.0:
+                incident_type, severity = "turbidity_warning", "medium"
+
+        detected_at = ts or now_ts
+
+        if incident_type:
+            # Close sibling severity levels for this device (e.g. warning → spike)
+            if incident_type in _PH_FAMILY:
+                family = _PH_FAMILY
+            elif incident_type in _TURBIDITY_FAMILY:
+                family = _TURBIDITY_FAMILY
+            else:
+                family = set()
+
+            for stype in family - {incident_type}:
+                for stat in ("ongoing", "recovering"):
+                    sib = inc_map.get((device_id, stype, stat))
+                    if sib:
+                        sibling_ids_to_close.append(sib.id)
+
+            ongoing = inc_map.get((device_id, incident_type, "ongoing"))
+            recovering = inc_map.get((device_id, incident_type, "recovering"))
+
+            if ongoing:
+                ongoing.last_seen_at = detected_at
+                ongoing.severity = severity
+                incs_to_update[ongoing.id] = ongoing
+                results[device_id] = {"id": str(ongoing.id), "created": False}
+            elif recovering:
+                recovering.status = "ongoing"
+                recovering.last_seen_at = detected_at
+                recovering.severity = severity
+                incs_to_update[recovering.id] = recovering
+                results[device_id] = {"id": str(recovering.id), "created": False}
+            else:
+                new_incidents.append(Incident(
+                    workspace=workspace,
+                    gateway_id=device_id,
+                    incident_type=incident_type,
+                    severity=severity,
+                    status="ongoing",
+                    detected_at=detected_at,
+                    last_seen_at=detected_at,
+                    fingerprint=_incident_fingerprint(device_id, incident_type),
+                    details={
+                        "prediction": {
+                            "is_anomaly": True,
+                            "anomaly_type": incident_type,
+                            "severity": severity,
+                            "device_id": device_id,
+                            "device_type": device_type,
+                            "value": fval,
+                            "source": "water_quality_threshold",
+                        }
+                    },
+                ))
+                results[device_id] = {"id": None, "created": True}
+        else:
+            # Normal reading — move ongoing → recovering; resolve stale recovering
+            for itype in WQ_INCIDENT_TYPES:
+                ongoing = inc_map.get((device_id, itype, "ongoing"))
+                if ongoing:
+                    ongoing.status = "recovering"
+                    ongoing.last_seen_at = now_ts
+                    incs_to_update[ongoing.id] = ongoing
+
+                rec = inc_map.get((device_id, itype, "recovering"))
+                if rec and rec.last_seen_at and rec.last_seen_at <= resolve_cutoff:
+                    rec.status = "resolved"
+                    rec.resolved_at = now_ts
+                    incs_to_update[rec.id] = rec
+
+            results[device_id] = None
+
+    # ── Execute bulk DB writes (3 queries max) ─────────────────────────────────
+    if sibling_ids_to_close:
+        Incident.objects.filter(id__in=sibling_ids_to_close).update(
+            status="recovering", last_seen_at=now_ts
+        )
+
+    if incs_to_update:
+        Incident.objects.bulk_update(
+            list(incs_to_update.values()),
+            ["status", "last_seen_at", "severity", "resolved_at", "details"],
+        )
+
+    if new_incidents:
+        created = Incident.objects.bulk_create(new_incidents, ignore_conflicts=True)
+        for inc in created:
+            if inc.id:
+                dev_result = results.get(inc.gateway_id)
+                if isinstance(dev_result, dict) and dev_result.get("created") and dev_result.get("id") is None:
+                    dev_result["id"] = str(inc.id)
+
+    return results
 
 
 def _resolve_user_workspace(request, create_if_missing=False):
@@ -465,6 +1086,151 @@ def _groq_module_recommendation(context_payload, heuristic_modules):
     return parsed
 
 
+def _heuristic_pipeline_resource_plan(pipe_specs, incident_context):
+    category = str(pipe_specs.get("pipe_category") or pipe_specs.get("pipeline_category") or "pipeline").strip()
+    material = str(pipe_specs.get("material") or "unknown").strip()
+    pressure_class = str(pipe_specs.get("pressure_class") or "unknown").strip()
+    nominal_dia = pipe_specs.get("nominal_dia")
+    depth = pipe_specs.get("depth")
+    water_capacity = pipe_specs.get("water_capacity")
+    incident_type = str(incident_context.get("incident_type") or "pipeline_anomaly").replace("_", " ")
+    severity = str(incident_context.get("severity") or "medium").lower()
+
+    diameter_text = str(nominal_dia) if nominal_dia not in (None, "", "N/A") else "site-measured diameter"
+    pressure_text = pressure_class if pressure_class not in ("", "unknown", "None") else "site-rated pressure class"
+    if severity in {"critical", "high"} or "break" in incident_type.lower():
+        repair_method = "Cut-and-replace damaged segment with spool piece and restrained couplings"
+        eta = "5-10 hours including section replacement, anchoring, and pressure testing"
+    else:
+        repair_method = "Install full-wrap repair clamp with sealing kit and reinforcement band"
+        eta = "2-5 hours including clamp installation and hydrostatic verification"
+
+    primary_parts = [
+        f"{material} compatible repair clamp, size {diameter_text}",
+        f"Mechanical coupling set, size {diameter_text}, rating {pressure_text}",
+        "EPDM/NBR gasket kit and PTFE thread seal tape",
+        "Stud bolts, nuts, washers (SS316 or zinc-coated high-tensile)",
+    ]
+    replacement_parts = [
+        f"Spool piece (same material and size {diameter_text})",
+        "Dismantling joint / flange adaptor kit",
+        "Thrust restraint set (tie rods or anchors) for high-pressure transients",
+    ]
+    tooling = [
+        "Pipe cutter/saw, bevelling tool, flange alignment pins",
+        "Torque wrench set (calibrated) for coupling/flange tightening sequence",
+        "Portable dewatering pump and line-stop plugs",
+    ]
+
+    return [
+        {"label": "Failure Mode", "value": f"{incident_type} on {category} segment"},
+        {"label": "Repair Method", "value": repair_method},
+        {"label": "Estimated Repair Window", "value": eta},
+        {"label": "Isolation Requirement", "value": "Upstream/downstream valve lockout and bypass verification"},
+        {"label": "Primary Repair Parts", "value": "; ".join(primary_parts)},
+        {"label": "Section Replacement Parts", "value": "; ".join(replacement_parts)},
+        {"label": "Specialized Tools", "value": "; ".join(tooling)},
+        {
+            "label": "Testing & QA Equipment",
+            "value": (
+                f"Hydrostatic test pump and calibrated pressure gauges ({pressure_text}); "
+                "ultrasonic thickness gauge; leak detection spray/soap solution"
+            ),
+        },
+        {
+            "label": "Post-Repair Validation",
+            "value": (
+                f"Pressure hold test ({pressure_class}), flow re-balance"
+                + (f", depth check at {depth} m" if depth not in (None, "", "N/A") else "")
+                + (f", capacity verification near {water_capacity} m3/h" if water_capacity not in (None, "", "N/A") else "")
+            ),
+        },
+    ]
+
+
+def _groq_pipeline_resource_plan(pipe_specs, incident_context):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a senior water infrastructure incident planner. "
+                "Return strict JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "task": "Generate a practical repair resource plan based on pipeline specs and incident context.",
+                    "pipe_specs": pipe_specs,
+                    "incident_context": incident_context,
+                    "response_schema": {
+                        "resources_needed": [
+                            {"label": "Primary Repair Parts", "value": "specific component list"}
+                        ],
+                        "summary": "short rationale",
+                    },
+                    "rules": [
+                        "Return 5-8 items.",
+                        "Each item must include label and value strings.",
+                        "Prioritize technical repair equipment and parts over generic staffing text.",
+                        "Use concrete parts/BOM style language: clamps, couplings, gaskets, bolts, spool piece, flanges, restraints, test pump, gauges.",
+                        "Values must be actionable and specific to material, pressure class, diameter, depth, and incident severity where available.",
+                        "No markdown, no commentary, JSON only.",
+                    ],
+                }
+            ),
+        },
+    ]
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(
+            {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 700,
+            }
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Groq returned no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    content = message.get("content") if isinstance(message, dict) else ""
+    parsed = _extract_json_object(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("Groq response was not valid JSON")
+    resources_needed = parsed.get("resources_needed")
+    if not isinstance(resources_needed, list) or not resources_needed:
+        raise ValueError("Groq response missing resources_needed")
+    normalized = []
+    for item in resources_needed:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if label and value:
+            normalized.append({"label": label, "value": value})
+    if not normalized:
+        raise ValueError("Groq response resources_needed had no valid items")
+    return {
+        "resources_needed": normalized,
+        "summary": str(parsed.get("summary") or "").strip(),
+    }
+
+
 def _infer_metric_family(metric, device_type):
     metric_key = str(metric or "").strip().lower()
     if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
@@ -550,19 +1316,26 @@ def _ml_predict_sync(snapshot):
 def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
     ml_service_url = f"{ml_base_url}/telemetry/ingest"
-    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
-    response = requests.post(
-        ml_service_url,
-        json={
-            "gateway_id": gateway_id,
-            "workspace_id": workspace_id,
-            "telemetry": telemetry or [],
-            "devices": devices or [],
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "15"))  # was "5"
+    try:
+        response = requests.post(
+            ml_service_url,
+            json={
+                "gateway_id": gateway_id,
+                "workspace_id": workspace_id,
+                "telemetry": telemetry or [],
+                "devices": devices or [],
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.ConnectionError:
+        logger.warning("ML service unreachable at %s — skipping inference", ml_base_url)
+        return {}
+    except requests.exceptions.Timeout:
+        logger.warning("ML service timed out after %ss for gateway=%s", timeout, gateway_id)
+        return {}
 
 
 def _normalize_device(raw, fallback_mcu_id, index):
@@ -792,7 +1565,8 @@ def _tb_get_device(token, device_id):
 
 def _tb_get_latest_values(token, device_id):
     keys = ",".join([
-        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph",
+        "q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm",
+        "ph", "turbidity_ntu", "turbidity",
         "temperature", "humidity", "flow", "pressure",
     ])
     try:
@@ -837,6 +1611,8 @@ def _tb_pick_metric_reading(timeseries, device_type_hint=None):
         preferred = ["q_m3h", "flow_lpm", "flow", "pressure_bar", "pressure", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
     elif hint == "ph_sensor":
         preferred = ["ph", "pressure_bar", "q_m3h", "flow_lpm", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "flow", "pressure"]
+    elif hint == "turbidity_sensor":
+        preferred = ["turbidity_ntu", "turbidity", "ph", "pressure_bar", "q_m3h", "flow_lpm", "flow", "pressure"]
     elif hint == "soil_salinity_sensor":
         preferred = ["ec_ds_m", "ec_ms_cm", "soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "ph", "flow", "pressure"]
     elif hint == "soil_moisture_sensor":
@@ -931,7 +1707,7 @@ def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
         return "flowmeter"
     if "ph" in name or metric == "ph":
         return "ph_sensor"
-    if "turbidity" in name or metric in {"turbidity", "turbidity_ntu"}:
+    if "turbidity" in name or "turb" in name or metric in {"turbidity", "turbidity_ntu"}:
         return "turbidity_sensor"
     return "sensor"
 
@@ -1044,6 +1820,37 @@ def _persist_gateway_inventory(workspace, gateway_id, devices, protocol=None):
         logger.warning("Inventory persistence skipped due to DB error: %s", str(exc))
 
 
+def _cached_gateway_inventory(workspace, gateway_id):
+    cached_devices = []
+    try:
+        qs = FieldDevice.objects.filter(workspace=workspace, gateway_id=gateway_id).order_by("mcu_id", "device_id")
+        for row in qs:
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            cached_devices.append(
+                {
+                    "id": row.device_id,
+                    "microcontroller_id": row.mcu_id,
+                    "type": str(row.device_type or "sensor"),
+                    "zone_id": str(metadata.get("zone_id") or metadata.get("zone") or "").strip() or None,
+                    "lat": float(row.lat) if row.lat is not None else None,
+                    "lng": float(row.lng) if row.lng is not None else None,
+                    "status": str(row.status or "online"),
+                    "metric": row.metric_key or "value",
+                    "reading": 0,
+                    "last_seen": row.last_seen.isoformat() if row.last_seen else "cached",
+                    "tb_id": metadata.get("tb_id"),
+                }
+            )
+    except Exception as exc:
+        logger.warning("Cached gateway inventory read failed for %s: %s", gateway_id, str(exc))
+        return []
+
+    dedup = {}
+    for dev in cached_devices:
+        dedup[dev["id"]] = dev
+    return sorted(dedup.values(), key=lambda d: (d["microcontroller_id"], d["id"]))
+
+
 def _persist_telemetry_row(workspace, gateway, device_id, mcu_id, ts, lat, lng, readings):
     try:
         DeviceReading.objects.create(
@@ -1118,7 +1925,7 @@ def _process_layout_sync_from_storage_key(workspace_id, storage_key, task_filena
     return layout_process(workspace_id, storage_key, task_filename)
 
 
-def _tb_build_inventory(gateway_id, workspace, protocol=None):
+def _tb_build_inventory(gateway_id, workspace, protocol=None, fast_scan=False):
     token = _tb_login()
     gateway_obj = _tb_find_gateway_device(token, gateway_id, protocol=protocol)
     if not gateway_obj:
@@ -1141,16 +1948,19 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         to_id = str(to.get("id") or "").strip()
         if not to_id:
             continue
-        device_obj = _tb_get_device(token, to_id)
-        name = _tb_device_name(device_obj) or _tb_device_name(rel) or to_id
+        device_obj = {}
+        name = _tb_device_name(rel) or to_id
+        if not fast_scan or not name:
+            device_obj = _tb_get_device(token, to_id)
+            name = _tb_device_name(device_obj) or _tb_device_name(rel) or to_id
         if _tb_infer_mcu(name):
             mcu_objects.append({"id": to_id, "name": name})
         else:
             direct_devices.append({
                 "id": to_id,
                 "name": name,
-                "tb_type": device_obj.get("type"),
-                "tb_label": device_obj.get("label"),
+                "tb_type": device_obj.get("type") if isinstance(device_obj, dict) else None,
+                "tb_label": device_obj.get("label") if isinstance(device_obj, dict) else None,
                 "mcu_name": f"{gateway_id}-MCU-01",
             })
 
@@ -1161,9 +1971,12 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     missing_coordinates = []
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
-        ts = _tb_get_latest_values(token, d["id"])
         provisional_type = _tb_infer_type(d["name"], attrs, "", d.get("tb_type"), d.get("tb_label"))
-        metric, reading = _tb_pick_metric_reading(ts, provisional_type)
+        if fast_scan:
+            metric, reading = "value", 0
+        else:
+            ts = _tb_get_latest_values(token, d["id"])
+            metric, reading = _tb_pick_metric_reading(ts, provisional_type)
         lat_val = _tb_optional_float(attrs.get("lat"))
         lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
         if lat_val is None or lng_val is None:
@@ -1194,12 +2007,24 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             dev_id = str(to.get("id") or "").strip()
             if not dev_id:
                 continue
-            dev_obj = _tb_get_device(token, dev_id)
-            dev_name = _tb_device_name(dev_obj) or _tb_device_name(rel) or dev_id
+            dev_obj = {}
+            dev_name = _tb_device_name(rel) or dev_id
+            if not fast_scan or not dev_name:
+                dev_obj = _tb_get_device(token, dev_id)
+                dev_name = _tb_device_name(dev_obj) or _tb_device_name(rel) or dev_id
             attrs = _tb_get_attrs(token, dev_id)
-            ts = _tb_get_latest_values(token, dev_id)
-            provisional_type = _tb_infer_type(dev_name, attrs, "", dev_obj.get("type"), dev_obj.get("label"))
-            metric, reading = _tb_pick_metric_reading(ts, provisional_type)
+            provisional_type = _tb_infer_type(
+                dev_name,
+                attrs,
+                "",
+                dev_obj.get("type") if isinstance(dev_obj, dict) else None,
+                dev_obj.get("label") if isinstance(dev_obj, dict) else None,
+            )
+            if fast_scan:
+                metric, reading = "value", 0
+            else:
+                ts = _tb_get_latest_values(token, dev_id)
+                metric, reading = _tb_pick_metric_reading(ts, provisional_type)
             lat_val = _tb_optional_float(attrs.get("lat"))
             lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
             if lat_val is None or lng_val is None:
@@ -1208,7 +2033,13 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             devices.append({
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
-                "type": _tb_infer_type(dev_name, attrs, metric, dev_obj.get("type"), dev_obj.get("label")),
+                "type": _tb_infer_type(
+                    dev_name,
+                    attrs,
+                    metric,
+                    dev_obj.get("type") if isinstance(dev_obj, dict) else None,
+                    dev_obj.get("label") if isinstance(dev_obj, dict) else None,
+                ),
                 "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
                 "lat": lat_val,
                 "lng": lng_val,
@@ -1382,6 +2213,43 @@ def google_auth(request):
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_workspace_layout(request):
+    workspace = _resolve_user_workspace(request, create_if_missing=False)
+    if not workspace:
+        return Response({"error": "Workspace not found"}, status=404)
+
+    polygon = request.data.get("polygon", [])
+    area_m2 = _safe_float(request.data.get("area_m2", 0), 0.0)
+    notes = str(request.data.get("notes", "") or "")
+
+    existing = {}
+    try:
+        existing = workspace.layout or {}
+    except AttributeError:
+        pass
+
+    workspace.layout = {
+        **existing,
+        "polygon": polygon,
+        "area_m2": area_m2,
+        "notes": notes,
+    }
+    # Keep flattened fields in sync because most frontend modules consume these.
+    workspace.layout_polygon = polygon
+    workspace.layout_area_m2 = area_m2
+    workspace.layout_notes = notes
+    workspace.save(update_fields=["layout", "layout_polygon", "layout_area_m2", "layout_notes"])
+    return Response(
+        {
+            "success": True,
+            "layout_polygon": workspace.layout_polygon,
+            "layout_area_m2": workspace.layout_area_m2,
+            "layout_notes": workspace.layout_notes,
+        }
+    )
     
 class UserProfileView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
@@ -1758,8 +2626,9 @@ class GatewayDiscoverView(APIView):
     def post(self, request):
         gateway_id = (request.data.get("gateway_id") or "").strip()
         protocol = str(request.data.get("protocol") or "").strip().lower()
-        force_refresh = bool(request.data.get("force_refresh", False))
-        preview_only = bool(request.data.get("preview_only", False))
+        force_refresh = _is_truthy(request.data.get("force_refresh", False))
+        preview_only = _is_truthy(request.data.get("preview_only", False))
+        fast_scan = True if "fast_scan" not in request.data else _is_truthy(request.data.get("fast_scan"))
         required_types = _normalize_required_device_types(request.data.get("required_device_types"))
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1770,8 +2639,7 @@ class GatewayDiscoverView(APIView):
 
         # Return existing memory if gateway already paired.
         if (
-            not preview_only
-            and not force_refresh
+            not force_refresh
             and workspace.gateway_id == gateway_id
             and workspace.devices
         ):
@@ -1780,15 +2648,37 @@ class GatewayDiscoverView(APIView):
                 "success": True,
                 "gateway_id": gateway_id,
                 "source": "gateway_memory",
+                "fast_scan": fast_scan,
                 "devices": filtered_devices,
                 "microcontrollers": _microcontrollers_from_devices(filtered_devices),
                 "required_device_types": required_types,
             }, status=status.HTTP_200_OK)
 
+        if not force_refresh:
+            cached_devices = _cached_gateway_inventory(workspace, gateway_id)
+            if cached_devices:
+                filtered_devices = _filter_devices_by_types(cached_devices, required_types)
+                if filtered_devices:
+                    return Response({
+                        "success": True,
+                        "gateway_id": gateway_id,
+                        "source": "gateway_db_cache",
+                        "fast_scan": fast_scan,
+                        "devices": filtered_devices,
+                        "microcontrollers": _microcontrollers_from_devices(filtered_devices),
+                        "missing_coordinates": [],
+                        "required_device_types": required_types,
+                    }, status=status.HTTP_200_OK)
+
         cfg = _tb_config()
         try:
-            devices, missing_coordinates = _tb_build_inventory(gateway_id, workspace, protocol=protocol or None)
-            source = "thingsboard_live"
+            devices, missing_coordinates = _tb_build_inventory(
+                gateway_id,
+                workspace,
+                protocol=protocol or None,
+                fast_scan=fast_scan,
+            )
+            source = "thingsboard_fast" if fast_scan else "thingsboard_live"
         except Exception as exc:
             logger.warning("ThingsBoard discovery failed for gateway %s: %s", gateway_id, str(exc))
             if not cfg["fallback_sim"]:
@@ -1809,21 +2699,52 @@ class GatewayDiscoverView(APIView):
             seed = int(hashlib.sha256(gateway_id.encode()).hexdigest()[:8], 16)
             rng = random.Random(seed)
             center_lat, center_lng = 25.2048, 55.2708
+
+            # Build typed device list: honour required_types if provided, else use a
+            # default mix that covers pipeline and water-quality scenarios.
+            if required_types:
+                type_slots = []
+                per_type = max(1, 6 // max(len(required_types), 1))
+                for t in required_types:
+                    type_slots.extend([t] * per_type)
+                # Pad/trim to exactly 6 slots
+                while len(type_slots) < 6:
+                    type_slots.append(required_types[0])
+                type_slots = type_slots[:6]
+            else:
+                type_slots = [
+                    "flowmeter", "pressure_sensor",
+                    "flowmeter", "pressure_sensor",
+                    "ph_sensor", "turbidity_sensor",
+                ]
+
+            _metric_for_type = {
+                "flowmeter": "flow_lpm",
+                "pressure_sensor": "pressure_bar",
+                "ph_sensor": "ph",
+                "turbidity_sensor": "turbidity_ntu",
+                "soil_salinity_sensor": "ec_ds_m",
+                "soil_moisture_sensor": "soil_moisture_pct",
+            }
+
             devices = []
-            for idx in range(1, 7):
+            lat_offsets = [0.002, -0.002, 0.004, -0.004, 0.001, -0.003]
+            lng_offsets = [0.002, -0.002, -0.004, 0.004, 0.003, -0.001]
+            for idx, dev_type in enumerate(type_slots, start=1):
+                metric = _metric_for_type.get(dev_type, "value")
                 devices.append({
                     "id": f"{gateway_id}-DEV-{idx:02d}",
                     "microcontroller_id": f"{gateway_id}-MCU-{((idx - 1) // 2) + 1:02d}",
-                    "type": "sensor",
-                    "lat": None,
-                    "lng": None,
+                    "type": dev_type,
+                    "lat": round(center_lat + lat_offsets[idx - 1], 6),
+                    "lng": round(center_lng + lng_offsets[idx - 1], 6),
                     "status": "online",
-                    "metric": "value",
+                    "metric": metric,
                     "reading": round(rng.uniform(1.0, 99.0), 2),
                     "last_seen": "just now",
                 })
             source = "simulated_fallback"
-            missing_coordinates = [device["id"] for device in devices]
+            missing_coordinates = []
 
         devices = _filter_devices_by_types(devices, required_types)
 
@@ -1843,6 +2764,7 @@ class GatewayDiscoverView(APIView):
             "gateway_id": gateway_id,
             "protocol": protocol or "auto",
             "preview_only": preview_only,
+            "fast_scan": fast_scan,
             "source": source,
             "devices": devices,
             "microcontrollers": _microcontrollers_from_devices(devices),
@@ -1926,26 +2848,67 @@ class GatewayRegisterView(APIView):
 
 
 class GatewayTelemetryIngestView(APIView):
+    authentication_classes = []   # IoT devices post without tokens — skip JWT auth entirely
     permission_classes = [AllowAny]
 
     def post(self, request):
         gateway_id = str(request.data.get("gateway_id") or "").strip()
+        workspace_id_hint = str(
+            request.headers.get("X-Workspace-Id")
+            or request.data.get("workspace_id")
+            or ""
+        ).strip()
         prefer_sync_ml = True
         if "prefer_sync_ml" in request.data:
             prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
         elif _is_truthy(request.data.get("allow_async_ml")):
             prefer_sync_ml = False
+
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(gateway_id=gateway_id).first()
-        if not workspace:
-            return Response({"error": "gateway_id not registered"}, status=status.HTTP_404_NOT_FOUND)
-        gateway = Gateway.objects.filter(id=gateway_id, workspace=workspace).first()
+
+
+        if workspace_id_hint:
+            workspace = Workspace.objects.filter(id=workspace_id_hint).first()
+            if not workspace:
+                return Response({"error": "workspace not found for X-Workspace-Id"}, status=status.HTTP_404_NOT_FOUND)
+            expected_gateway = str(workspace.gateway_id or "").strip()
+            if expected_gateway and expected_gateway != gateway_id:
+                return Response(
+                    {
+                        "error": "gateway_id does not match selected workspace",
+                        "expected_gateway_id": expected_gateway,
+                        "received_gateway_id": gateway_id,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+        else:
+            matches = Workspace.objects.filter(gateway_id=gateway_id).order_by("created_at")
+            count = matches.count()
+            if count == 0:
+                return Response({"error": "gateway_id not registered"}, status=status.HTTP_404_NOT_FOUND)
+            if count > 1:
+                return Response(
+                    {
+                        "error": "gateway_id is mapped to multiple workspaces; include X-Workspace-Id",
+                        "gateway_id": gateway_id,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            workspace = matches.first()
+
+        gateway = Gateway.objects.filter(id=gateway_id).first()
+        if gateway and gateway.workspace_id != workspace.id:
+            # Re-assign gateway to the resolved workspace
+            gateway.workspace = workspace
+            gateway.save(update_fields=["workspace"])
         if not gateway:
-            gateway, _ = Gateway.objects.get_or_create(
+            gateway = Gateway.objects.create(
                 id=gateway_id,
-                defaults={"workspace": workspace, "status": "online", "last_seen": timezone.now()},
+                workspace=workspace,
+                status="online",
+                last_seen=timezone.now(),
             )
 
         known_devices = {}
@@ -1959,194 +2922,336 @@ class GatewayTelemetryIngestView(APIView):
         if not known_devices:
             return Response({"error": "No devices registered for gateway"}, status=status.HTTP_400_BAD_REQUEST)
 
+
         records = request.data.get("telemetry")
         if not isinstance(records, list):
             records = [request.data]
 
-        accepted = 0
-        rejected = []
-        anomalies = []
-        ml_records = []
-        now_label = timezone.now().isoformat()
+        # ── Workspace resolution ───────────────────────────────────────────────
+        # 1. Exact match: workspaces that already have this gateway_id registered.
+        workspaces = list(Workspace.objects.filter(gateway_id=gateway_id))
 
-        for idx, row in enumerate(records):
-            if not isinstance(row, dict):
-                rejected.append({"index": idx, "error": "invalid telemetry row"})
-                continue
-
-            device_id = str(row.get("device_id") or "").strip()
-            mcu_id = str(row.get("mcu_id") or "").strip()
-            lat = row.get("lat")
-            lng = row.get("lng")
-            values = row.get("values") if isinstance(row.get("values"), dict) else {}
-            metric = str(row.get("metric") or "").strip()
-            reading = row.get("reading")
-            ts = _parse_ts(row.get("ts"))
-
-            if not device_id or device_id not in known_devices:
-                rejected.append({"index": idx, "error": "unknown device_id", "device_id": device_id})
-                continue
-
-            device = known_devices[device_id]
-            if mcu_id and device.get("microcontroller_id") != mcu_id:
-                rejected.append({
-                    "index": idx,
-                    "error": "mcu_id mismatch",
-                    "device_id": device_id,
-                    "expected": device.get("microcontroller_id"),
-                    "received": mcu_id,
-                })
-                continue
-
-            if metric:
-                device["metric"] = metric
-
-            if reading is not None:
-                device["reading"] = reading
-            elif values:
-                if device.get("metric") in values:
-                    device["reading"] = values[device.get("metric")]
-                else:
-                    preferred = ["q_m3h", "flow_lpm", "pressure_bar", "soil_moisture_pct", "ec_ds_m", "ec_ms_cm", "ph"]
-                    chosen_key = next((key for key in preferred if key in values), None)
-                    if not chosen_key:
-                        chosen_key = next(iter(values.keys()), None)
-                    if chosen_key:
-                        device["metric"] = chosen_key
-                        device["reading"] = values[chosen_key]
-
-            if lat is not None:
-                device["lat"] = round(_safe_float(lat, device.get("lat", 0.0)), 7)
-            if lng is not None:
-                device["lng"] = round(_safe_float(lng, device.get("lng", 0.0)), 7)
-
-            device["status"] = "online"
-            device["last_seen"] = now_label
-            # Rule-based per-device anomaly flags are disabled; ML service is source of truth.
-            device["anomaly"] = False
-            device["anomaly_meta"] = None
-
-            resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
-            resolved_lat = _optional_float(device.get("lat"))
-            resolved_lng = _optional_float(device.get("lng"))
-            resolved_sensor_index = _infer_sensor_index(
-                row.get("sensor_index"),
-                row.get("position"),
-                device_id,
-                device.get("id"),
-                device.get("type"),
-                device.get("metric"),
-            )
-            readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
-            _persist_telemetry_row(
-                workspace=workspace,
-                gateway=gateway,
-                device_id=device_id,
-                mcu_id=resolved_mcu_id,
-                ts=ts,
-                lat=resolved_lat,
-                lng=resolved_lng,
-                readings=readings_payload,
-            )
-            ml_records.append({
-                "device_id": device_id,
-                "metric": device.get("metric"),
-                "reading": device.get("reading"),
-                "values": values if isinstance(values, dict) else {},
-                "mcu_id": resolved_mcu_id,
-                "type": str(device.get("type") or ""),
-                "sensor_index": resolved_sensor_index,
-                "position": "upstream"
-                if resolved_sensor_index == 1
-                else "downstream"
-                if resolved_sensor_index == 2
-                else None,
-                "ts": ts.isoformat() if ts else None,
-            })
-            accepted += 1
-
-        workspace.devices = list(known_devices.values())
-        workspace.save(update_fields=["devices"])
-
-        Gateway.objects.filter(id=gateway_id).update(status="online", last_seen=timezone.now())
-
-        ml_job = None
-        if ml_records:
-            use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
-            force_sync_on_celery_error = _is_truthy(
-                os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
-            )
-            if use_celery_ml and not prefer_sync_ml:
-                try:
-                    task = run_ml_breakage_inference.delay(
-                        telemetry=ml_records,
-                        gateway_id=gateway_id,
-                        workspace_id=str(workspace.id),
-                        devices=list(known_devices.values()),
-                    )
-                    ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
-                except Exception as exc:
-                    logger.warning("Failed to queue ML inference task for gateway=%s: %s", gateway_id, str(exc))
-                    if force_sync_on_celery_error:
-                        try:
-                            sync_result = _ml_ingest_sync(
-                                gateway_id=gateway_id,
-                                workspace_id=str(workspace.id),
-                                telemetry=ml_records,
-                                devices=list(known_devices.values()),
-                            )
-                            prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
-                            ml_job = {
-                                "queued": False,
-                                "mode": "sync_fallback",
-                                "queue_error": str(exc),
-                                "records": len(ml_records),
-                                "prediction_ready": bool(prediction),
-                                "prediction": prediction,
-                                "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
-                            }
-                        except requests.exceptions.RequestException as sync_exc:
-                            logger.warning(
-                                "Sync ML fallback failed after queue error for gateway=%s: %s",
-                                gateway_id,
-                                str(sync_exc),
-                            )
-                            ml_job = {
-                                "queued": False,
-                                "mode": "sync_fallback",
-                                "queue_error": str(exc),
-                                "error": str(sync_exc),
-                                "records": len(ml_records),
-                            }
-                    else:
-                        ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
-            else:
-                try:
-                    sync_result = _ml_ingest_sync(
-                        gateway_id=gateway_id,
-                        workspace_id=str(workspace.id),
-                        telemetry=ml_records,
-                        devices=list(known_devices.values()),
-                    )
-                    prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
-                    if not prediction:
-                        snapshot = _extract_predict_snapshot(ml_records)
-                        if snapshot:
-                            try:
-                                prediction = _ml_predict_sync(snapshot)
-                            except requests.exceptions.RequestException:
-                                prediction = None
-                    ml_job = {
-                        "queued": False,
-                        "mode": "sync" if not prefer_sync_ml else "sync_preferred",
-                        "records": len(ml_records),
-                        "prediction_ready": bool(prediction),
-                        "prediction": prediction,
-                        "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+        if not workspaces:
+            # 2. Device-ID match: find a workspace whose devices JSON contains any
+            #    of the device IDs in this telemetry batch.  Handles the common case
+            #    where the user configured devices via the WQ page but never explicitly
+            #    saved the gateway ID (or the workspace was recreated).
+            payload_device_ids = {
+                str(r.get("device_id", "")).strip()
+                for r in records
+                if isinstance(r, dict) and r.get("device_id")
+            }
+            auto_ws = None
+            if payload_device_ids:
+                for candidate in Workspace.objects.exclude(devices=None):
+                    ws_dev_ids = {
+                        str(d.get("id", "")).strip()
+                        for d in (candidate.devices or [])
+                        if isinstance(d, dict) and d.get("id")
                     }
-                except requests.exceptions.RequestException as exc:
-                    logger.warning("Synchronous ML inference failed for gateway=%s: %s", gateway_id, str(exc))
-                    ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
+                    if ws_dev_ids & payload_device_ids:
+                        auto_ws = candidate
+                        break
+
+            # 3. Last resort: use the first workspace in the DB so data is never
+            #    silently dropped — the gateway gets auto-registered there.
+            if not auto_ws:
+                auto_ws = Workspace.objects.order_by("created_at").first()
+
+            if not auto_ws:
+                return Response(
+                    {"error": "No workspace found. Create a workspace in AquaNex first."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Persist the gateway_id so future requests hit path 1.
+            auto_ws.gateway_id = gateway_id
+            auto_ws.save(update_fields=["gateway_id"])
+            logger.info("Auto-registered gateway %s → workspace %s", gateway_id, auto_ws.id)
+            workspaces = [auto_ws]
+
+        # Ensure the Gateway row exists (satisfies FK on related tables).
+        gateway = Gateway.objects.filter(id=gateway_id).first()
+        if not gateway:
+            gateway = Gateway.objects.create(
+                id=gateway_id, workspace=workspaces[0],
+                status="online", last_seen=timezone.now(),
+            )
+        else:
+            gateway.status = "online"
+            gateway.last_seen = timezone.now()
+            gateway.save(update_fields=["status", "last_seen"])
+
+        now_label = timezone.now().isoformat()
+        
+        # We will keep track of response metrics for the FIRST workspace to return back to the simulator
+        response_payload = None
+
+        # 🚀 Loop through EVERY workspace and apply the telemetry updates independently
+        for workspace in workspaces:
+            known_devices = {}
+            for device in workspace.devices or []:
+                if not isinstance(device, dict):
+                    continue
+                dev_id = str(device.get("id") or "").strip()
+                if dev_id:
+                    # Deep copy to ensure isolated JSON updates
+                    known_devices[dev_id] = dict(device)
+
+            accepted = 0
+            rejected = []
+            anomalies = []
+            ml_records = []
+            devices_mutated = False
+            wq_checks = []   # collected for batch threshold check after the loop
+
+            for idx, row in enumerate(records):
+                if not isinstance(row, dict):
+                    rejected.append({"index": idx, "error": "invalid telemetry row"})
+                    continue
+
+                device_id = str(row.get("device_id") or "").strip()
+                mcu_id = str(row.get("mcu_id") or "").strip()
+                lat = row.get("lat")
+                lng = row.get("lng")
+                values = row.get("values") if isinstance(row.get("values"), dict) else {}
+                metric = str(row.get("metric") or "").strip()
+                reading = row.get("reading")
+                ts = _parse_ts(row.get("ts"))
+
+                if not device_id:
+                    rejected.append({"index": idx, "error": "missing device_id"})
+                    continue
+
+                # AUTO-REGISTRATION
+                if device_id not in known_devices:
+                    inferred_type = "sensor"
+                    if "ph" in device_id.lower() or "ph" in values:
+                        inferred_type = "ph_sensor"
+                    elif "turb" in device_id.lower() or "turbidity" in values or "turbidity_ntu" in values:
+                        inferred_type = "turbidity_sensor"
+                    elif "flow" in device_id.lower():
+                        inferred_type = "flowmeter"
+                    elif "pressure" in device_id.lower():
+                        inferred_type = "pressure_sensor"
+
+                    known_devices[device_id] = {
+                        "id": device_id,
+                        "microcontroller_id": mcu_id or f"{gateway_id}-MCU-AUTO",
+                        "type": inferred_type,
+                        "status": "online",
+                        "last_seen": now_label,
+                        "lat": _optional_float(lat) or 25.2048,
+                        "lng": _optional_float(lng) or 55.2708,
+                    }
+                    devices_mutated = True
+
+                device = known_devices[device_id]
+                dev_type_canonical = _tb_canonical_type(device.get("type", ""))
+
+                # STRICT EXTRACTION
+                extracted_val = None
+                if reading is not None:
+                    extracted_val = reading
+                elif values:
+                    if dev_type_canonical == "ph_sensor":
+                        extracted_val = values.get("ph", values.get("value"))
+                    elif dev_type_canonical == "turbidity_sensor":
+                        extracted_val = values.get("turbidity_ntu", values.get("turbidity", values.get("value")))
+                    
+                    if extracted_val is None:
+                        if metric in values:
+                            extracted_val = values[metric]
+                        elif device.get("metric") in values:
+                            extracted_val = values[device.get("metric")]
+                        else:
+                            extracted_val = next(iter(values.values()), None)
+
+                # VALIDATION & HARD CAPPING
+                validated_val = None
+                if extracted_val is not None:
+                    try:
+                        fval = float(extracted_val)
+                        if dev_type_canonical == "ph_sensor" and (0.0 <= fval <= 14.0):
+                            validated_val = fval
+                            device["metric"] = "ph" 
+                        elif dev_type_canonical == "turbidity_sensor" and (0.0 <= fval <= 15.0):
+                            validated_val = fval
+                            device["metric"] = "turbidity" 
+                        elif dev_type_canonical not in {"ph_sensor", "turbidity_sensor"}:
+                            validated_val = fval
+                            if metric:
+                                device["metric"] = metric
+                    except (TypeError, ValueError):
+                        pass
+
+                # ONLY process and save to DB if the reading was VALID
+                if validated_val is not None:
+                    device["reading"] = validated_val
+                    values = {device.get("metric", "value"): validated_val}
+                    devices_mutated = True
+
+                    if lat is not None:
+                        device["lat"] = round(_safe_float(lat, device.get("lat", 0.0)), 7)
+                    if lng is not None:
+                        device["lng"] = round(_safe_float(lng, device.get("lng", 0.0)), 7)
+
+                    device["status"] = "online"
+                    device["last_seen"] = now_label
+                    device["anomaly"] = False
+                    device["anomaly_meta"] = None
+
+                    # Collect WQ devices for batch threshold check after the loop
+                    if dev_type_canonical in {"ph_sensor", "turbidity_sensor"}:
+                        wq_checks.append((device_id, dev_type_canonical, validated_val, ts))
+
+                    resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
+
+                    # Skip time-series DB writes for WQ devices — their latest reading
+                    # is already cached in workspace.devices on every tick, and the 4
+                    # Supabase round-trips per device add ~30s of latency per batch.
+                    _is_wq_device = dev_type_canonical in {"ph_sensor", "turbidity_sensor"}
+                    if not _is_wq_device:
+                        _persist_telemetry_row(
+                            workspace=workspace,
+                            gateway=gateway,
+                            device_id=device_id,
+                            mcu_id=resolved_mcu_id,
+                            ts=ts,
+                            lat=_optional_float(device.get("lat")),
+                            lng=_optional_float(device.get("lng")),
+                            readings=values,
+                        )
+
+                    resolved_sensor_index = _infer_sensor_index(
+                        row.get("sensor_index"),
+                        row.get("position"),
+                        device_id,
+                        device.get("id"),
+                        device.get("type"),
+                        device.get("metric"),
+                    )
+                    
+                    ml_records.append({
+                        "device_id": device_id,
+                        "metric": device.get("metric"),
+                        "reading": device.get("reading"),
+                        "values": values,
+                        "mcu_id": resolved_mcu_id,
+                        "type": str(device.get("type") or ""),
+                        "sensor_index": resolved_sensor_index,
+                        "position": "upstream" if resolved_sensor_index == 1 else "downstream" if resolved_sensor_index == 2 else None,
+                        "ts": ts.isoformat() if ts else None,
+                    })
+                    accepted += 1
+                else:
+                    rejected.append({"index": idx, "error": "value out of bounds or invalid", "device_id": device_id})
+
+            # ── Batch WQ threshold checks (1 SELECT + ≤3 writes vs. 4×N queries) ──
+            if wq_checks:
+                wq_results = _check_water_quality_thresholds_batch(workspace, wq_checks)
+                for wq_device_id, wq_result in wq_results.items():
+                    if wq_result and known_devices.get(wq_device_id):
+                        known_devices[wq_device_id]["anomaly"] = True
+                        anomalies.append({
+                            "source": "water_quality_threshold",
+                            "device_id": wq_device_id,
+                            "gateway_id": gateway_id,
+                            "device_type": str(known_devices[wq_device_id].get("type", "")),
+                            "incident_id": wq_result.get("id"),
+                        })
+
+            # For WQ-only batches, always write the devices JSON so the readings
+            # view always gets the very latest tick (not a stale pre-tick snapshot).
+            _has_wq_devices = any(
+                _tb_canonical_type(str(known_devices.get(
+                    str(r.get("device_id", "")), {}
+                ).get("type", ""))) in {"ph_sensor", "turbidity_sensor"}
+                for r in records if isinstance(r, dict)
+            )
+            if devices_mutated or not workspace.devices or _has_wq_devices:
+                updated_devices_list = list(known_devices.values())
+                workspace.devices = updated_devices_list
+                workspace.save(update_fields=["devices"])
+
+            ml_job = None
+            if ml_records:
+                _wq_types = {"ph_sensor", "turbidity_sensor"}
+                _all_wq = all(_tb_canonical_type(str(rec.get("type") or "")) in _wq_types for rec in ml_records)
+                if _all_wq:
+                    ml_job = {"queued": False, "reason": "water_quality_threshold_checks_used", "records": len(ml_records)}
+
+            if ml_records and ml_job is None:
+                use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
+                force_sync_on_celery_error = _is_truthy(
+                    os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
+                )
+                if use_celery_ml and not prefer_sync_ml:
+                    try:
+                        task = run_ml_breakage_inference.delay(
+                            telemetry=ml_records,
+                            gateway_id=gateway_id,
+                            workspace_id=str(workspace.id),
+                            devices=list(known_devices.values()),
+                        )
+                        ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
+                    except Exception as exc:
+                        logger.warning("Failed to queue ML task for gateway=%s, workspace=%s: %s", gateway_id, workspace.id, str(exc))
+                        if force_sync_on_celery_error:
+                            try:
+                                sync_result = _ml_ingest_sync(
+                                    gateway_id=gateway_id,
+                                    workspace_id=str(workspace.id),
+                                    telemetry=ml_records,
+                                    devices=list(known_devices.values()),
+                                )
+                                prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                                if not prediction:
+                                    snapshot = _extract_predict_snapshot(ml_records)
+                                    if snapshot:
+                                        try:
+                                            prediction = _ml_predict_sync(snapshot)
+                                        except requests.exceptions.RequestException:
+                                            prediction = None
+                                ml_job = {
+                                    "queued": False,
+                                    "mode": "sync_fallback",
+                                    "records": len(ml_records),
+                                    "prediction_ready": bool(prediction),
+                                    "prediction": prediction,
+                                    "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                                }
+                            except Exception as sync_exc:
+                                ml_job = {"queued": False, "mode": "sync_fallback", "error": str(sync_exc), "records": len(ml_records)}
+                        else:
+                            ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
+                else:
+                    try:
+                        sync_result = _ml_ingest_sync(
+                            gateway_id=gateway_id,
+                            workspace_id=str(workspace.id),
+                            telemetry=ml_records,
+                            devices=list(known_devices.values()),
+                        )
+                        prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                        if not prediction:
+                            snapshot = _extract_predict_snapshot(ml_records)
+                            if snapshot:
+                                try:
+                                    prediction = _ml_predict_sync(snapshot)
+                                except requests.exceptions.RequestException:
+                                    prediction = None
+                        ml_job = {
+                            "queued": False,
+                            "mode": "sync" if not prefer_sync_ml else "sync_preferred",
+                            "records": len(ml_records),
+                            "prediction_ready": bool(prediction),
+                            "prediction": prediction,
+                            "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                        }
+                    except requests.exceptions.RequestException as exc:
+                        logger.warning("Synchronous ML inference failed for gateway=%s: %s", gateway_id, str(exc))
+                        ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
         else:
             ml_job = {
                 "queued": False,
@@ -2156,9 +3261,13 @@ class GatewayTelemetryIngestView(APIView):
         ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
         incident_summary = None
         if isinstance(ml_prediction, dict):
-            # Pass prediction to record incident OR resolve existing ones
-            incident_summary = _record_incident_from_prediction(workspace, gateway_id, ml_prediction)
-            
+            incident_summary = _record_incident_from_prediction(
+                workspace,
+                gateway_id,
+                ml_prediction,
+                telemetry_rows=ml_records,
+            )
+
             if ml_prediction.get("is_anomaly") is True:
                 deltas = ml_prediction.get("deltas") or {}
                 anomalies.append({
@@ -2171,21 +3280,11 @@ class GatewayTelemetryIngestView(APIView):
                     "deltas": deltas,
                     "timestamp": ml_prediction.get("timestamp"),
                     "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                    "alert_id": incident_summary.get("alert_id") if isinstance(incident_summary, dict) else None,
+                    "pipe_id": incident_summary.get("pipe_id") if isinstance(incident_summary, dict) else None,
                 })
 
-        return Response({
-            "success": True,
-            "gateway_id": gateway_id,
-            "accepted": accepted,
-            "rejected": rejected,
-            "anomalies": anomalies,
-            "counts": {
-                "devices": len(known_devices),
-                "microcontrollers": len(_microcontrollers_from_devices(workspace.devices or [])),
-            },
-            "ml_inference": ml_job,
-        }, status=status.HTTP_200_OK)
-
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 class LayoutUploadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2393,6 +3492,117 @@ def predict_breakage(request):
             'error': 'Internal server error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+import hmac
+import json
+import logging
+
+from django.conf import settings
+from django.http import JsonResponse
+from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+
+from .models import Incident, Workspace
+from .utils import fetch_pipe_id_from_thingsboard
+
+logger = logging.getLogger(__name__)
+
+
+def _incident_fingerprint(gateway_id: str, incident_key: str) -> str:
+    import hashlib
+    raw = f"{gateway_id}:{incident_key}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:64]
+
+
+def _verify_internal_secret(request) -> bool:
+    expected = settings.SECRET_KEY
+    incoming = request.headers.get("X-Internal-Secret", "")
+    return hmac.compare_digest(incoming.encode(), expected.encode())
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class IncidentIngestView(View):
+    """
+    M2M webhook: ML API → Django incident ingestion.
+    Auth  : X-Internal-Secret header using Django's SECRET_KEY.
+    Scope : No DRF middleware, no session/cookie auth — intentional.
+
+    Uniqueness is enforced at COMPONENT level (comp_id + incident_type),
+    not gateway level. One open incident per broken pipe, not per gateway.
+    """
+
+    def post(self, request, *args, **kwargs):
+
+        # ── 1. M2M Auth ──────────────────────────────────────────────────────
+        # TODO: uncomment when ready to enable auth
+        # if not _verify_internal_secret(request):
+        #     logger.warning(
+        #         "IncidentIngestView: Unauthorized attempt from %s",
+        #         request.META.get("REMOTE_ADDR"),
+        #     )
+        #     return JsonResponse({"error": "Unauthorized"}, status=401)
+
+        # ── 2. Parse body ────────────────────────────────────────────────────
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON body"}, status=400)
+
+        gateway_id      = str(data.get("gateway_id")      or "").strip()
+        workspace_id    = str(data.get("workspace_id")    or "").strip()
+        anomaly_type    = str(data.get("anomaly_type")    or "unknown").strip()
+        severity        = str(data.get("severity")        or "medium").strip()
+        details         = data.get("details")             or {}
+        device_id       = str(data.get("device_id")      or "").strip() or None
+        slot_device_ids = data.get("slot_device_ids")    or {}
+
+        if not gateway_id:
+            return JsonResponse({"error": "gateway_id is required"}, status=400)
+
+        # ── 3. Resolve workspace ─────────────────────────────────────────────
+        workspace = None
+        if workspace_id:
+            workspace = Workspace.objects.filter(id=workspace_id).first()
+        if not workspace:
+            workspace = Workspace.objects.filter(gateway_id=gateway_id).first()
+        if not workspace:
+            return JsonResponse(
+                {"error": "Workspace not found for this gateway"},
+                status=404,
+            )
+
+        detected_at = _coerce_prediction_timestamp(
+            data.get("timestamp")
+            or (details.get("timestamp") if isinstance(details, dict) else None)
+        )
+        incident_summary = _upsert_component_incident(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            anomaly_type=anomaly_type,
+            severity=severity,
+            detected_at=detected_at,
+            details=details if isinstance(details, dict) else {"details": details},
+            device_id=device_id,
+            slot_device_ids=slot_device_ids if isinstance(slot_device_ids, dict) else {},
+            source="ml_api",
+        )
+        if not incident_summary or incident_summary.get("error"):
+            return JsonResponse({
+                "error":     "comp_id could not be resolved for this device",
+                "device_id": device_id,
+                "hint":      "Add 'comp_id' or 'pipe_id' to FieldDevice.metadata in DB, "
+                             "or as a SERVER_SCOPE attribute in ThingsBoard.",
+            }, status=422)
+        created = bool(incident_summary.get("created"))
+        return JsonResponse({
+            "success":     True,
+            "action":      "created" if created else "updated",
+            "incident_id": incident_summary.get("id"),
+            "comp_id":     incident_summary.get("comp_id"),
+        }, status=201 if created else 200)
+
+
 class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieves, updates, or deletes a specific incident by its primary key (ID).
@@ -2406,23 +3616,18 @@ class IncidentDetailView(generics.RetrieveUpdateDestroyAPIView):
         owner_workspaces = Workspace.objects.filter(owner=self.request.user)
 
         if requested_workspace_id:
-            queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
-        elif owner_workspaces.exists():
-            # Fallback to all incidents in all workspaces owned by the current user.
-            queryset = Incident.objects.filter(workspace__in=owner_workspaces)
-        else:
-            queryset = Incident.objects.none()
+            return Incident.objects.filter(workspace_id=requested_workspace_id)
+        if owner_workspaces.exists():
+            return Incident.objects.filter(workspace__in=owner_workspaces)
+        return Incident.objects.none()
 
-        # Last-resort fallback for environments where workspace ownership linkage
-        # is not aligned but incidents exist in the database.
-        if not queryset.exists():
-            queryset = Incident.objects.all()
 
-        return queryset
-    
 class IncidentListView(generics.ListAPIView):
     serializer_class = IncidentSerializer
     permission_classes = [IsAuthenticated]
+    # Disable DRF's global pagination — callers get ALL matching incidents so
+    # the alerts page never silently truncates to PAGE_SIZE rows.
+    pagination_class = None
 
     def get_queryset(self):
         requested_workspace_id = _workspace_id_from_request(self.request)
@@ -2431,20 +3636,24 @@ class IncidentListView(generics.ListAPIView):
         if requested_workspace_id:
             queryset = Incident.objects.filter(workspace_id=requested_workspace_id)
         elif owner_workspaces.exists():
-            # Fallback to all incidents in all workspaces owned by the current user.
             queryset = Incident.objects.filter(workspace__in=owner_workspaces)
         else:
-            queryset = Incident.objects.none()
+            return Incident.objects.none()
 
-        # Last-resort fallback for environments where workspace ownership linkage
-        # is not aligned but incidents exist in the database.
-        if not queryset.exists():
-            queryset = Incident.objects.all()
+        # Optional filters via query params
+        types_param = self.request.query_params.get("incident_types")
+        if types_param:
+            types = [t.strip() for t in types_param.split(",") if t.strip()]
+            if types:
+                queryset = queryset.filter(incident_type__in=types)
 
-        # Return all incidents regardless of status.
-        return queryset.order_by(
-            "-last_seen_at", "-detected_at", "-created_at"
-        )
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+
+        return queryset.order_by("-last_seen_at", "-detected_at", "-created_at")
 
 
 class IncidentResolveView(APIView):
@@ -2559,6 +3768,108 @@ class IncidentSeedView(APIView):
             status=201,
         )
 
+class WaterQualityReadingsView(APIView):
+    """Returns latest water quality sensor readings and active WQ incidents."""
+    permission_classes = [IsAuthenticated]
+
+    WQ_DEVICE_TYPES = {"ph_sensor", "turbidity_sensor"}
+
+    def get(self, request):
+        workspace = _resolve_user_workspace(request)
+        if not workspace:
+            return Response({"error": "No workspace"}, status=400)
+
+        # Always fetch the latest devices JSON from DB — never use a cached ORM object.
+        # Without this, Django may return the same in-memory Workspace instance across
+        # multiple requests in the same process, causing the frontend to see alternating
+        # old/new values (A→B→A→B oscillation) when the telemetry ingest writes a new
+        # reading on a different request cycle.
+        workspace.refresh_from_db(fields=["devices"])
+
+        wq_devices = [
+            d for d in (workspace.devices or [])
+            if isinstance(d, dict) and _tb_canonical_type(str(d.get("type") or "")) in self.WQ_DEVICE_TYPES
+        ]
+
+        gateway_id = str(workspace.gateway_id or "")
+        device_ids = [str(d["id"]) for d in wq_devices if d.get("id")]
+
+        # WQ devices do NOT write to DeviceReadingLatest (_persist_telemetry_row is
+        # skipped for ph_sensor / turbidity_sensor to avoid latency). Any rows that
+        # exist in that table for these device IDs are from before that skip was added
+        # and will always be stale/corrupt. Skip the DB lookup entirely for WQ devices
+        # and rely solely on the workspace.devices cache which is updated every tick.
+        latest_by_device: dict = {}
+
+        sensors = []
+        for device in wq_devices:
+            device_id   = str(device.get("id") or "")
+            device_type = _tb_canonical_type(str(device.get("type") or ""))
+
+            if device_type == "ph_sensor":
+                metric_key = "ph"
+            elif device_type == "turbidity_sensor":
+                metric_key = "turbidity_ntu"
+            else:
+                metric_key = str(device.get("metric") or "value")
+
+            # Sole data source: workspace.devices cache (written every telemetry tick).
+            # Reject: 0 (registration placeholder) and physically impossible values.
+            value = None
+            cached = device.get("reading")
+
+            if cached is not None and cached != 0:
+                try:
+                    fval = float(cached)
+                    if device_type == "ph_sensor" and 0.0 < fval <= 14.0:
+                        value = fval
+                    elif device_type == "turbidity_sensor" and 0.0 <= fval <= 15.0:
+                        value = fval
+                    elif device_type not in ("ph_sensor", "turbidity_sensor"):
+                        value = fval
+                except (TypeError, ValueError):
+                    pass
+
+            sensors.append({
+                "device_id":   device_id,
+                "device_type": device_type,
+                "metric":      metric_key,
+                "value":       value,
+                "has_reading": value is not None,
+                "ts":          str(device.get("last_seen") or ""),
+                "lat":         device.get("lat"),
+                "lng":         device.get("lng"),
+                "mcu_id":      str(device.get("microcontroller_id") or ""),
+                "status":      str(device.get("status") or "online"),
+            })
+
+        wq_incidents_qs = Incident.objects.filter(
+            workspace=workspace,
+            incident_type__in=list(WQ_INCIDENT_TYPES),
+            status__in=["open", "ongoing", "recovering"],
+        ).order_by("-last_seen_at")[:50]
+
+        alerts = [
+            {
+                "id": str(inc.id),
+                "incident_type": inc.incident_type,
+                "severity": inc.severity,
+                "status": inc.status,
+                "device_id": inc.gateway_id,
+                "detected_at": inc.detected_at.isoformat() if inc.detected_at else None,
+                "last_seen_at": inc.last_seen_at.isoformat() if inc.last_seen_at else None,
+                "details": inc.details,
+            }
+            for inc in wq_incidents_qs
+        ]
+
+        return Response({
+            "gateway_id": gateway_id,
+            "sensors": sensors,
+            "alerts": alerts,
+        })
+
+
 class PipelineListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -2579,6 +3890,7 @@ class PipelineListCreateView(APIView):
             
             results.append({
                 "pipe_id": pipe.pipe_id,
+                "section_id": pipe.pipe_id,
                 "start_lat": float(pipe.start_lat),
                 "start_lng": float(pipe.start_lng),
                 "end_lat": float(pipe.end_lat),
@@ -2586,6 +3898,9 @@ class PipelineListCreateView(APIView):
                 "pipeline_category": spec.pipe_category if spec else "Unknown",
                 "material": spec.material if spec else "Unknown",
                 "nominal_dia": float(spec.nominal_dia) if spec and spec.nominal_dia else 0,
+                "pressure_class": spec.pressure_class if spec else None,
+                "depth": float(spec.depth) if spec and spec.depth is not None else None,
+                "water_capacity": float(spec.water_capacity) if spec and spec.water_capacity is not None else None,
             })
             
         return Response(results, status=200)
@@ -2630,6 +3945,40 @@ class PipelineListCreateView(APIView):
             return Response({"error": str(e)}, status=400)
 
 
+class PipelineResourcePlanView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data if hasattr(request, "data") else {}
+        pipe_specs = data.get("pipe_specs") if isinstance(data.get("pipe_specs"), dict) else {}
+        incident_context = data.get("incident_context") if isinstance(data.get("incident_context"), dict) else {}
+        if not pipe_specs:
+            return Response({"error": "pipe_specs is required"}, status=400)
+
+        try:
+            groq_result = _groq_pipeline_resource_plan(pipe_specs, incident_context)
+            return Response(
+                {
+                    "source": "groq_llm",
+                    "summary": groq_result.get("summary") or "Generated from incident and pipeline specs.",
+                    "resources_needed": groq_result.get("resources_needed") or [],
+                },
+                status=200,
+            )
+        except Exception as exc:
+            logger.warning("PipelineResourcePlanView falling back to heuristic plan: %s", str(exc))
+            fallback = _heuristic_pipeline_resource_plan(pipe_specs, incident_context)
+            return Response(
+                {
+                    "source": "heuristic_fallback",
+                    "summary": "Fallback plan generated because LLM recommendation failed.",
+                    "llm_error": str(exc),
+                    "resources_needed": fallback,
+                },
+                status=200,
+            )
+
+
 def _openweather_error_response(status_code, response_text=None):
     if status_code == 401:
         return {"error": "Invalid API key", "code": "INVALID_API_KEY", "status": 401}
@@ -2665,7 +4014,7 @@ class WeatherCurrentView(APIView):
         if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
             return Response({"error": "Coordinates out of range"}, status=400)
 
-        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        api_key = (os.environ.get("OPENWEATHER_API_KEY")or "").strip()
         if not api_key:
             return Response({"error": "OpenWeather API key not configured on server"}, status=503)
 
@@ -2731,7 +4080,7 @@ class WeatherForecastView(APIView):
         if not (-90 <= lat_val <= 90 and -180 <= lng_val <= 180):
             return Response({"error": "Coordinates out of range"}, status=400)
 
-        api_key = os.environ.get("OPENWEATHER_API_KEY")
+        api_key = (os.environ.get("OPENWEATHER_API_KEY")or "").strip()
         if not api_key:
             return Response({"error": "OpenWeather API key not configured on server"}, status=503)
 
@@ -2802,3 +4151,51 @@ class WeatherForecastView(APIView):
                 "lng": city_info.get("coord", {}).get("lon"),
             },
         })
+
+
+class WeatherGeocodeView(APIView):
+    """Forward geocoding via OpenWeather Geo 1.0 (same API key as weather)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        if not q:
+            return Response({"error": "q is a required query parameter"}, status=400)
+
+        api_key = (os.environ.get("OPENWEATHER_API_KEY") or "").strip()
+        if not api_key:
+            return Response({"error": "OpenWeather API key not configured on server"}, status=503)
+
+        url = "https://api.openweathermap.org/geo/1.0/direct"
+        params = {"q": q, "limit": 1, "appid": api_key}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+        except requests.RequestException as e:
+            return Response({"error": f"Failed to connect to geocoding service: {str(e)}"}, status=502)
+
+        if resp.status_code != 200:
+            return Response(_openweather_error_response(resp.status_code, resp.text), status=resp.status_code)
+
+        try:
+            results = resp.json()
+        except Exception:
+            return Response({"error": "Invalid JSON from geocoding service"}, status=502)
+
+        if not isinstance(results, list) or not results:
+            return Response({"error": "No results for that query"}, status=404)
+
+        first = results[0]
+        lat = first.get("lat")
+        lon = first.get("lon")
+        if lat is None or lon is None:
+            return Response({"error": "Invalid geocoding response"}, status=502)
+
+        return Response({
+            "lat": lat,
+            "lng": lon,
+            "name": first.get("name"),
+            "country": first.get("country"),
+            "state": first.get("state"),
+})

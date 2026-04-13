@@ -27,10 +27,12 @@ AUTH_USER_MODEL = 'core.User'
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-szb&(+oo!s+v^7#_3ghv4!u#$1wl04rde#y3id--ht)8jqm)h$'
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY',
+    'django-insecure-szb&(+oo!s+v^7#_3ghv4!u#$1wl04rde#y3id--ht)8jqm)h$'  # local fallback only
+)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True').lower() not in ('false', '0', 'no')
 
 ALLOWED_HOSTS = [
     "localhost",
@@ -214,6 +216,7 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'   # required for WhiteNoise + collectstatic
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 

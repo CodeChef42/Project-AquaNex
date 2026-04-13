@@ -6,9 +6,12 @@ venv/
 .venv/
 env/
 ENV/
+venv.bak/
+.venv.bak/
 
 # Dependencies
 node_modules/
+bower_components/
 
 # Python
 __pycache__/

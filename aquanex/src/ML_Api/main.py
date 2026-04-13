@@ -1,12 +1,13 @@
 import asyncio
-
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 from healthping import start_health_ping
-
-
+import os
+DJANGO_BACKEND_URL = os.environ.get("DJANGO_BACKEND_URL", "http://localhost:8000")
+DJANGO_INTERNAL_TOKEN = os.environ.get("DJANGO_INTERNAL_TOKEN", "")
 try:
     import numpy as np
 except Exception:
@@ -18,7 +19,6 @@ import paho.mqtt.client as mqtt
 import threading
 import time
 import re
-import os
 import tempfile
 from typing import Any, Dict, List, Optional
 
@@ -558,8 +558,47 @@ def predict_breakage(data: SensorData):
         return PredictionResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+def _report_incident_to_django(prediction: dict):
+    if not prediction.get("is_anomaly"):
+        return
+    try:
+        slot_device_ids = prediction.get("slot_device_ids", {})
 
-
+        payload = {
+            "gateway_id":    prediction.get("gateway_id", ""),
+            "workspace_id":  prediction.get("workspace_id"),
+            "anomaly_type":  prediction.get("anomaly_type", "unknown"),
+            "severity":      prediction.get("severity", "medium"),
+            "confidence":    prediction.get("confidence", 0.0),
+            # ← PRIMARY: downstream flow meter is the first indicator of leakage
+            "device_id":     slot_device_ids.get("flow_2") or slot_device_ids.get("flow_1"),
+            # ← FALLBACK: send all slot→device mappings so Django can try each one
+            "slot_device_ids": slot_device_ids,
+            "details": {
+                "deltas":    prediction.get("deltas", {}),
+                "rule":      prediction.get("rule", {}),
+                "ml":        prediction.get("ml"),
+                "input":     prediction.get("input_data", {}),
+                "timestamp": prediction.get("timestamp"),
+                "source":    "ml_api",
+            },
+        }
+        headers = {}
+        if DJANGO_INTERNAL_TOKEN:
+            headers["X-Internal-Token"] = DJANGO_INTERNAL_TOKEN
+        print(f"[incident] Posting to {DJANGO_BACKEND_URL}/api/incidents/ingest/ payload={payload}")
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.post(
+                f"{DJANGO_BACKEND_URL}/api/incidents/ingest/",
+                json=payload,
+                headers=headers,
+            )
+            print(f"[incident] Django returned {resp.status_code}: {resp.text[:300]}")
+            if resp.status_code not in (200, 201):
+                print(f"[incident] Django returned {resp.status_code}: {resp.text[:200]}")
+    except Exception as exc:
+        print(f"[incident] Failed to report to Django: {exc}")
+ 
 @app.post("/telemetry/ingest")
 def ingest_telemetry(data: TelemetryIngestRequest):
     gateway_id = str(data.gateway_id or "").strip()
@@ -567,8 +606,13 @@ def ingest_telemetry(data: TelemetryIngestRequest):
         raise HTTPException(status_code=400, detail="gateway_id is required")
 
     state = gateway_sensor_state.setdefault(
-        gateway_id,
-        {"flow_1": None, "pressure_1": None, "flow_2": None, "pressure_2": None},
+    gateway_id,
+    {
+        "flow_1": None,    "flow_1_device_id": None,
+        "pressure_1": None,"pressure_1_device_id": None,
+        "flow_2": None,    "flow_2_device_id": None,
+        "pressure_2": None,"pressure_2_device_id": None,
+    },
     )
     devices = data.devices or []
     device_map = {str(d.get("id") or ""): d for d in devices if isinstance(d, dict)}
@@ -615,6 +659,7 @@ def ingest_telemetry(data: TelemetryIngestRequest):
 
         slot = f"{family}_{index}"
         state[slot] = reading
+        state[f"{slot}_device_id"] = device_id 
         updated.append({"slot": slot, "value": reading, "device_id": device_id})
 
     missing = [key for key, value in state.items() if value is None]
@@ -630,10 +675,13 @@ def ingest_telemetry(data: TelemetryIngestRequest):
         prediction["gateway_id"] = gateway_id
         prediction["workspace_id"] = data.workspace_id
         gateway_latest_prediction[gateway_id] = prediction
+        if prediction.get("is_anomaly"):
+            threading.Thread(target=_report_incident_to_django, args=(prediction,), daemon=True).start()
         print(
             f"[gateway={gateway_id}] ML {'ANOMALY' if prediction['is_anomaly'] else 'NORMAL'} "
             f"conf={prediction['confidence']:.2%} deltas={prediction['deltas']}"
         )
+        
 
     return {
         "success": True,
