@@ -1,4 +1,4 @@
-import { Info, HelpCircle, FileText, ExternalLink } from "lucide-react";
+import { Info, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 const Information = () => {
@@ -14,35 +14,44 @@ const Information = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card className="border-cyan-100 bg-white/50 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <FileText className="w-5 h-5 text-cyan-600" />
-              User Documentation
-            </CardTitle>
-            <CardDescription>Learn how to manage your workspace and pipelines.</CardDescription>
-          </CardHeader>
-          <CardContent className="text-sm text-slate-600">
-            Access the full guide on configuring sensors, managing alerts, and interpreting 
-            the demand forecasting machine learning models.
-          </CardContent>
-        </Card>
-
-        <Card className="border-cyan-100 bg-white/50 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <HelpCircle className="w-5 h-5 text-cyan-600" />
-              Support Center
-            </CardTitle>
-            <CardDescription>Need help or found a bug?</CardDescription>
-          </CardHeader>
-          <CardContent className="text-sm text-slate-600">
-            Contact your local system administrator or visit our online help portal for 
-            technical assistance with gateway connectivity issues.
-          </CardContent>
-        </Card>
-      </div>
+      <Card className="border-cyan-100 bg-white/50 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <FileText className="w-5 h-5 text-cyan-600" />
+            User Documentation
+          </CardTitle>
+          <CardDescription>Complete end-user guide for the AquaNex platform.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 text-sm text-slate-600">
+          <p>
+            AquaNex is an integrated water infrastructure platform that helps teams monitor field devices,
+            detect anomalies, and coordinate mitigation actions across pipelines, water quality, soil salinity,
+            and demand forecasting modules.
+          </p>
+          <div>
+            <p className="font-semibold text-slate-700">Core Workflow</p>
+            <p>1. Sign in and select your workspace.</p>
+            <p>2. Configure gateway devices through module setup pages.</p>
+            <p>3. Review live telemetry and anomaly predictions in each feature console.</p>
+            <p>4. Track incidents, acknowledge statuses, and review analytics trends.</p>
+            <p>5. Use simulation for controlled testing and validation before field rollout.</p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-700">Feature Overview</p>
+            <p><span className="font-medium">Pipeline Management:</span> monitors flow and pressure, detects leak/breakage patterns, and maps affected assets.</p>
+            <p><span className="font-medium">Water Quality:</span> tracks pH and turbidity readings, surfaces quality risks, and provides action guidance.</p>
+            <p><span className="font-medium">Soil Salinity:</span> follows EC trends, highlights salinity risks by zone, and provides mitigation recommendations.</p>
+            <p><span className="font-medium">Demand Forecasting:</span> combines usage behavior and weather context for short-term demand planning.</p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-700">Best Practices</p>
+            <p>- Keep gateway and sensor metadata (location, IDs, pipe links) current.</p>
+            <p>- Use Rescan Devices after changing device coordinates or mappings.</p>
+            <p>- Validate incident lifecycle transitions through analytics and detail views.</p>
+            <p>- Use simulation to verify expected anomaly behavior before production changes.</p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };

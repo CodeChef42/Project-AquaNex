@@ -171,8 +171,8 @@ const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
   { id: 2, label: "Team", icon: Users },
-  { id: 3, label: "Layout", icon: MapPin },
-  { id: 4, label: "Modules", icon: LayoutGrid },
+  { id: 3, label: "Modules", icon: LayoutGrid },
+  { id: 4, label: "Layout", icon: MapPin },
   { id: 5, label: "Gateway", icon: Cpu },
   { id: 7, label: "Ready", icon: CheckCircle },
 ];
@@ -411,6 +411,7 @@ const Onboarding = () => {
     wind_speed_max: number[];
   } | null>(null);
   const pollingTimerRef = useRef<number | null>(null);
+  const workspaceBootstrapPromiseRef = useRef<Promise<string | null> | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
 
   const goToNextVisibleStep = useCallback((currentStep: number) => {
@@ -889,16 +890,16 @@ const Onboarding = () => {
     );
   }
 
-  // Step 3: Map Layout Lock
+  // Step 3: Module Selection
   if (step === 3) {
+    return data.modules.length > 0;
+  }
+
+  // Step 4: Map Layout Lock
+  if (step === 4) {
     // 1. Must have drawn a valid shape (3+ points)
     // 2. AND must have explicitly clicked the "Save Layout" button
     return finalLayoutPolygon.length >= 3 && layoutConfirmed;
-  }
-
-  // Step 4: Module Selection
-  if (step === 4) {
-    return data.modules.length > 0;
   }
 
   // Allow proceeding on any other steps (like Step 2, if it has no strict requirements)
@@ -908,45 +909,49 @@ const Onboarding = () => {
   const ensureTargetWorkspaceId = useCallback(async () => {
     if (onboardingWorkspaceId) return onboardingWorkspaceId;
     if (!createNewWorkspace) return workspace?.id || null;
+    if (workspaceBootstrapPromiseRef.current) return workspaceBootstrapPromiseRef.current;
 
-    // ── CHANGED: wrapped in try/catch to expose real error ──
-    const bootstrap = await api.post("/onboarding/", {
-      createNewWorkspace: true,
-      workspaceName: data.workspaceName || "New Workspace",
-      companyName: data.companyName,
-      companyType: data.companyType,
-      location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
-      teamSize: data.teamSize,
-      modules: data.modules,
-      inviteEmails: data.inviteEmails,
-      devices: data.devices,
-      layout_polygon: data.layout.polygon,
-      layout_area_m2: data.layout.area_m2,
-      layout_notes: data.layout.notes,
-      gatewayId: data.gatewayId,
-      gatewayProtocol: data.gatewayProtocol,
-      demandForecasting: buildDemandForecastingPayload(),
-    }).catch((err: any) => {
-      // ── ADDED: log exact backend error ──
-      console.error("❌ /onboarding/ failed | Status:", err?.response?.status);
-      console.error("❌ Response:", err?.response?.data);
-      console.error("❌ Message:", err?.message);
-      return null;
-    });
+    workspaceBootstrapPromiseRef.current = (async () => {
+      const bootstrap = await api.post("/onboarding/", {
+        createNewWorkspace: true,
+        workspaceName: data.workspaceName || "New Workspace",
+        companyName: data.companyName,
+        companyType: data.companyType,
+        location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
+        teamSize: data.teamSize,
+        modules: data.modules,
+        inviteEmails: data.inviteEmails,
+        devices: data.devices,
+        layout_polygon: data.layout.polygon,
+        layout_area_m2: data.layout.area_m2,
+        layout_notes: data.layout.notes,
+        gatewayId: data.gatewayId,
+        gatewayProtocol: data.gatewayProtocol,
+        demandForecasting: buildDemandForecastingPayload(),
+      }).catch((err: any) => {
+        console.error("❌ /onboarding/ failed | Status:", err?.response?.status);
+        console.error("❌ Response:", err?.response?.data);
+        console.error("❌ Message:", err?.message);
+        return null;
+      });
 
-    // ── ADDED: guard if request failed ──
-    if (!bootstrap) return null;
+      if (!bootstrap) {
+        workspaceBootstrapPromiseRef.current = null;
+        return null;
+      }
 
-    const newId = String(bootstrap?.data?.workspace_id || "");
+      const newId = String(bootstrap?.data?.workspace_id || "");
 
-    // ── ADDED: log if response came back but no workspace_id ──
-    if (!newId) {
-      console.error("❌ No workspace_id in response:", bootstrap?.data);
-      return null;
-    }
+      if (!newId) {
+        console.error("❌ No workspace_id in response:", bootstrap?.data);
+        workspaceBootstrapPromiseRef.current = null;
+        return null;
+      }
 
-    setOnboardingWorkspaceId(newId);
-    return newId;
+      setOnboardingWorkspaceId(newId);
+      return newId;
+    })();
+    return workspaceBootstrapPromiseRef.current;
   }, [onboardingWorkspaceId, createNewWorkspace, workspace?.id, data]);
 
  const calculateArea = (coords: number[][]): number => {
@@ -1223,15 +1228,30 @@ const Onboarding = () => {
     setDevicesConfirmed(false);
     try {
       const targetWorkspaceId = await ensureTargetWorkspaceId();
-      const response = await api.post("/gateway-discover/", {
+      const fastResponse = await api.post("/gateway-discover/", {
         workspaceId: targetWorkspaceId || undefined,
         gateway_id: gatewayId,
         protocol: data.gatewayProtocol || "mqtt",
-        force_refresh: true,
+        fast_scan: true,
+        force_refresh: false,
         preview_only: true,
       });
-      const payload = response?.data || {};
-      const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+
+      let payload = fastResponse?.data || {};
+      let devices = Array.isArray(payload?.devices) ? payload.devices : [];
+      if (devices.length === 0) {
+        const fullResponse = await api.post("/gateway-discover/", {
+          workspaceId: targetWorkspaceId || undefined,
+          gateway_id: gatewayId,
+          protocol: data.gatewayProtocol || "mqtt",
+          fast_scan: false,
+          force_refresh: true,
+          preview_only: true,
+        });
+        payload = fullResponse?.data || {};
+        devices = Array.isArray(payload?.devices) ? payload.devices : [];
+      }
+
       if (devices.length === 0) {
         throw new Error("No devices found in gateway memory.");
       }
@@ -1326,8 +1346,8 @@ const Onboarding = () => {
     }
   }, [step, goToNextVisibleStep]);
 
-  useEffect(() => {
-  if (step !== 4) return;
+useEffect(() => {
+  if (step !== 3) return;
   if (recommendation || recommendationLoading) return;
   void requestModuleRecommendation();
 }, [step, finalLayoutPolygon]);
@@ -1642,8 +1662,8 @@ const Onboarding = () => {
 
 
     
-    // ─── Step 3 ───
-    if (step === 3) {
+    // ─── Step 4 ───
+    if (step === 4) {
       // Sync manual drawing to main data
       const handleSyncDraft = (points: [number, number][]) => {
         const lngLatPoints = points.map((p) => [p[1], p[0]]); // convert to [lng, lat]
@@ -2113,8 +2133,8 @@ const Onboarding = () => {
       );
     }
 
-    // ─── Step 4 ───
-    if (step === 4)
+    // ─── Step 3 ───
+    if (step === 3)
       return (
         <div className="space-y-6">
           <div>

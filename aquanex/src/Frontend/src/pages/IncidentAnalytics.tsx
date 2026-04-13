@@ -6,7 +6,20 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layout/PageHeader";
 import api from "@/lib/api";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
 import {
   Table,
   TableBody,
@@ -62,12 +75,24 @@ const IncidentAnalysis = () => {
   const [rangeMode, setRangeMode] = useState<RangeMode>("weekly");
   const initializedRef = useRef(false);
 
-  const fetchIncidents = async () => {
+  const fetchIncidents = async (opts?: { seedIfEmpty?: boolean }) => {
     try {
       const res = await api.get("/incidents/");
       const payload = res.data;
       const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.results) ? payload.results : [];
-      setIncidents(rows);
+      if ((opts?.seedIfEmpty ?? false) && rows.length === 0) {
+        await api.post("/incidents/seed/", { count: 280, regenerate: true });
+        const retry = await api.get("/incidents/");
+        const retryPayload = retry.data;
+        const retryRows = Array.isArray(retryPayload)
+          ? retryPayload
+          : Array.isArray(retryPayload?.results)
+          ? retryPayload.results
+          : [];
+        setIncidents(retryRows);
+      } else {
+        setIncidents(rows);
+      }
     } catch (err) {
       console.error("Failed to fetch incidents", err);
       setIncidents([]);
@@ -92,7 +117,12 @@ const IncidentAnalysis = () => {
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
-    refreshData(true);
+    fetchIncidents({ seedIfEmpty: true });
+
+    const pollId = window.setInterval(() => {
+      fetchIncidents({ seedIfEmpty: false });
+    }, 15000);
+    return () => window.clearInterval(pollId);
   }, []);
 
   const normalized = useMemo(() => {
@@ -137,6 +167,79 @@ const IncidentAnalysis = () => {
     });
     return years.map((y) => ({ label: String(y), issues: byYear[y] || 0 }));
   }, [normalized, rangeMode]);
+
+  const lineTrendData = useMemo(() => {
+    const recent = [...normalized]
+      .sort((a, b) => a.date.getTime() - b.date.getTime())
+      .slice(-14);
+    let cumulative = 0;
+    return recent.map(({ row, date }) => {
+      cumulative += 1;
+      const severity = String(row.severity || "medium").toLowerCase();
+      return {
+        label: date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
+        cumulative,
+        severityScore: severity === "critical" ? 4 : severity === "high" ? 3 : severity === "medium" ? 2 : 1,
+      };
+    });
+  }, [normalized]);
+
+  const severityPieData = useMemo(() => {
+    const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+    incidents.forEach((incident) => {
+      const s = String(incident.severity || "medium").toLowerCase();
+      if (s in counts) counts[s] += 1;
+      else counts.medium += 1;
+    });
+    return [
+      { name: "Critical", value: counts.critical, color: "#ef4444" },
+      { name: "High", value: counts.high, color: "#f97316" },
+      { name: "Medium", value: counts.medium, color: "#facc15" },
+      { name: "Low", value: counts.low, color: "#22c55e" },
+    ].filter((x) => x.value > 0);
+  }, [incidents]);
+
+  const neoGraph = useMemo(() => {
+    const gatewayCounts: Record<string, number> = {};
+    const typeCounts: Record<string, number> = {};
+    const edgeCounts: Record<string, number> = {};
+    incidents.forEach((incident) => {
+      const gateway = String(incident.gateway_id || "Unknown Gateway");
+      const type = String(incident.incident_type || "unknown").replace(/_/g, " ");
+      gatewayCounts[gateway] = (gatewayCounts[gateway] || 0) + 1;
+      typeCounts[type] = (typeCounts[type] || 0) + 1;
+      const key = `${gateway}__${type}`;
+      edgeCounts[key] = (edgeCounts[key] || 0) + 1;
+    });
+
+    const gatewayNodes = Object.entries(gatewayCounts).slice(0, 5).map(([id, count], idx) => ({
+      id,
+      label: id,
+      count,
+      x: 110,
+      y: 70 + idx * 58,
+      color: "#0ea5e9",
+    }));
+    const typeNodes = Object.entries(typeCounts).slice(0, 5).map(([id, count], idx) => ({
+      id,
+      label: id,
+      count,
+      x: 430,
+      y: 70 + idx * 58,
+      color: "#22c55e",
+    }));
+    const edges = Object.entries(edgeCounts)
+      .map(([key, count]) => {
+        const [gateway, type] = key.split("__");
+        const from = gatewayNodes.find((n) => n.id === gateway);
+        const to = typeNodes.find((n) => n.id === type);
+        if (!from || !to) return null;
+        return { from, to, count };
+      })
+      .filter(Boolean) as Array<{ from: any; to: any; count: number }>;
+
+    return { gatewayNodes, typeNodes, edges };
+  }, [incidents]);
 
   const recentRows = useMemo(() => {
     return [...normalized]
@@ -297,6 +400,81 @@ const IncidentAnalysis = () => {
               <Bar dataKey="issues" name="Issues" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Incident Momentum (14 points)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={lineTrendData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" />
+                <YAxis stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="cumulative" name="Cumulative incidents" stroke="hsl(var(--primary))" strokeWidth={2} />
+                <Line type="monotone" dataKey="severityScore" name="Severity score" stroke="#22c55e" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Severity Distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie data={severityPieData} dataKey="value" nameKey="name" outerRadius={95} innerRadius={45} paddingAngle={3}>
+                  {severityPieData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Incident Relationship Graph (Neo-style)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <svg width="560" height="360" className="w-full rounded-lg border border-border bg-muted/20">
+              {neoGraph.edges.map((edge, idx) => (
+                <g key={`edge-${idx}`}>
+                  <line
+                    x1={edge.from.x}
+                    y1={edge.from.y}
+                    x2={edge.to.x}
+                    y2={edge.to.y}
+                    stroke="#94a3b8"
+                    strokeWidth={Math.min(6, 1 + edge.count)}
+                    opacity={0.6}
+                  />
+                </g>
+              ))}
+              {neoGraph.gatewayNodes.map((node) => (
+                <g key={`gw-${node.id}`}>
+                  <circle cx={node.x} cy={node.y} r={16 + Math.min(10, node.count)} fill={node.color} opacity={0.9} />
+                  <text x={node.x + 22} y={node.y + 4} fontSize="11" fill="#0f172a">{node.label}</text>
+                </g>
+              ))}
+              {neoGraph.typeNodes.map((node) => (
+                <g key={`type-${node.id}`}>
+                  <circle cx={node.x} cy={node.y} r={16 + Math.min(10, node.count)} fill={node.color} opacity={0.9} />
+                  <text x={node.x + 22} y={node.y + 4} fontSize="11" fill="#0f172a">{node.label}</text>
+                </g>
+              ))}
+            </svg>
+          </div>
         </CardContent>
       </Card>
 

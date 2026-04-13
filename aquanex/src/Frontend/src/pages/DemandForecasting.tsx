@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Breadcrumbs from "@/components/Breadcrumbs";
-import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, CloudSun, MapPin, Building2, Wind } from "lucide-react";
+import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, CloudSun, MapPin } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { MapContainer, Polygon, TileLayer, Tooltip, useMap, CircleMarker, Popup } from "react-leaflet";
 import { Button } from "@/components/ui/button";
 import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
+import api from "@/lib/api";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -83,15 +84,19 @@ const forecastData = [
   }
 ];
 
-const weeklyForecast = [
-  { day: "Mon", demand: 4200, predicted: 4350, weather: "Sunny" },
-  { day: "Tue", demand: 4100, predicted: 4500, weather: "Sunny" },
-  { day: "Wed", demand: 3900, predicted: 3800, weather: "Cloudy" },
-  { day: "Thu", demand: 4300, predicted: 4200, weather: "Sunny" },
-  { day: "Fri", demand: 4500, predicted: 4600, weather: "Hot" },
-  { day: "Sat", demand: 4000, predicted: 3900, weather: "Cloudy" },
-  { day: "Sun", demand: 3800, predicted: 3700, weather: "Mild" }
-];
+const weeklyForecast = Array.from({ length: 7 }).map((_, idx) => {
+  const d = new Date();
+  d.setDate(d.getDate() + idx);
+  const demandBase = [4200, 4100, 3900, 4300, 4500, 4000, 3800][idx] || 4000;
+  const predictedBase = [4350, 4500, 3800, 4200, 4600, 3900, 3700][idx] || 4000;
+  const weatherBase = ["Sunny", "Sunny", "Cloudy", "Sunny", "Hot", "Cloudy", "Mild"][idx] || "Sunny";
+  return {
+    date: d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
+    demand: demandBase,
+    predicted: predictedBase,
+    weather: weatherBase,
+  };
+});
 
 const insights = [
   {
@@ -240,15 +245,19 @@ const clipPolygonWithRect = (
 
 const DemandForecasting = () => {
   const { workspace } = useAuth();
+  const [forceSetup, setForceSetup] = useState(false);
+  const [wasScanning, setWasScanning] = useState(false);
   const moduleSetup = useModuleDeviceSetup(["soil_moisture_sensor"]);
   const {
     gatewayIdInput,
     setGatewayIdInput,
     scanning,
     error,
+    scanStatus,
     missingTypes,
     geolocatedModuleDevices,
     isConfigured,
+    stripModuleDevices,
   } = moduleSetup;
   const deviceTypeLabels: Record<string, string> = {
     soil_moisture_sensor: "Soil Moisture Sensor",
@@ -256,6 +265,27 @@ const DemandForecasting = () => {
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
   const [weatherData, setWeatherData] = useState<any>(null);
+  const [zonePlants, setZonePlants] = useState<Array<{ zone: string; plants: Array<{ name: string; count: number }> }>>([
+    { zone: "Zone A", plants: [{ name: "", count: 0 }] },
+  ]);
+  const [zoneForecastsAi, setZoneForecastsAi] = useState<any[]>([]);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastError, setForecastError] = useState("");
+
+  useEffect(() => {
+    if (scanning) setWasScanning(true);
+  }, [scanning]);
+  useEffect(() => {
+    if (wasScanning && !scanning && !error && forceSetup) {
+      setWasScanning(false);
+      setForceSetup(false);
+    }
+  }, [error, forceSetup, scanning, wasScanning]);
+
+  const handleStartRescan = async () => {
+    setForceSetup(true);
+    await stripModuleDevices();
+  };
 
   const workspaceLocation = String(workspace?.location || "").trim();
   const companyName = String(workspace?.company_name || "").trim();
@@ -309,72 +339,100 @@ const DemandForecasting = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
+      const apiBase = String(import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api").replace(/\/$/, "");
+      const dubaiFallback = { lat: 25.2048, lng: 55.2708, name: "Dubai, AE" };
       let lat: number | null = null;
       let lng: number | null = null;
       let resolvedName = workspaceLocation || "Unknown Location";
 
-      if (layoutCentroid) {
+      if (workspaceLocation) {
+        const queries = normalizeLocationQueries(workspaceLocation);
+        for (const query of queries) {
+          try {
+            const geoResp = await fetch(
+              `${apiBase}/weather/geocode/?q=${encodeURIComponent(query)}`
+            );
+            if (!geoResp.ok) continue;
+            const geoJson = await geoResp.json();
+            if (
+              typeof geoJson?.lat === "number" &&
+              typeof geoJson?.lng === "number" &&
+              Number.isFinite(geoJson.lat) &&
+              Number.isFinite(geoJson.lng)
+            ) {
+              lat = geoJson.lat;
+              lng = geoJson.lng;
+              const place = [geoJson.name, geoJson.state, geoJson.country].filter(Boolean).join(", ");
+              resolvedName = place || resolvedName;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+
+      if ((lat === null || lng === null) && layoutCentroid) {
         lat = layoutCentroid.lat;
         lng = layoutCentroid.lng;
         try {
-            const revGeo = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
-            const revData = await revGeo.json();
-            if (revData && revData.city) {
-                resolvedName = `${revData.city}, ${revData.principalSubdivision || revData.countryName}`;
-            } else if (revData && revData.locality) {
-                resolvedName = `${revData.locality}, ${revData.countryName}`;
-            }
-        } catch (e) {
-            console.warn("Reverse geocode failed", e);
+          const revGeo = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
+          const revData = await revGeo.json();
+          if (revData && revData.city) {
+            resolvedName = `${revData.city}, ${revData.principalSubdivision || revData.countryName}`;
+          } else if (revData && revData.locality) {
+            resolvedName = `${revData.locality}, ${revData.countryName}`;
+          } else {
             resolvedName = "Layout Location";
-        }
-      } else if (workspaceLocation) {
-          const queries = normalizeLocationQueries(workspaceLocation);
-          for (const query of queries) {
-            try {
-                const geoResp = await fetch(
-                  `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
-                );
-                if (!geoResp.ok) continue;
-                const geoJson = await geoResp.json();
-                const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
-                if (first && typeof first.latitude === "number" && typeof first.longitude === "number") {
-                  lat = first.latitude;
-                  lng = first.longitude;
-                  resolvedName = `${first.name}, ${first.country || ""}`;
-                  break;
-                }
-            } catch (e) { continue; }
           }
+        } catch (e) {
+          console.warn("Reverse geocode failed", e);
+          resolvedName = "Layout Location";
+        }
       }
 
       if (lat === null || lng === null) {
-        setWeatherError("No valid location found (add layout or text location).");
-        setWeatherData(null);
-        return;
+        lat = dubaiFallback.lat;
+        lng = dubaiFallback.lng;
+        resolvedName = dubaiFallback.name;
       }
 
       setWeatherLoading(true);
       setWeatherError("");
       try {
-        const baseUrl = import.meta.env.VITE_API_URL || '';
-        const currentResp = await fetch(`${baseUrl}/api/weather/current/?lat=${lat}&lng=${lng}`);
-        if (!currentResp.ok) {
-          const errData = await currentResp.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to fetch current weather");
-        }
-        const currentData = await currentResp.json();
+        const loadWeatherByCoords = async (targetLat: number, targetLng: number) => {
+          const currentResp = await fetch(`${apiBase}/weather/current/?lat=${targetLat}&lng=${targetLng}`);
+          if (!currentResp.ok) {
+            const errData = await currentResp.json().catch(() => ({}));
+            throw new Error(errData.error || "Failed to fetch current weather");
+          }
+          const currentData = await currentResp.json();
 
-        const forecastResp = await fetch(`${baseUrl}/api/weather/forecast/?lat=${lat}&lng=${lng}`);
-        if (!forecastResp.ok) {
-          const errData = await forecastResp.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to fetch forecast");
+          const forecastResp = await fetch(`${apiBase}/weather/forecast/?lat=${targetLat}&lng=${targetLng}`);
+          if (!forecastResp.ok) {
+            const errData = await forecastResp.json().catch(() => ({}));
+            throw new Error(errData.error || "Failed to fetch forecast");
+          }
+          const forecastData = await forecastResp.json();
+          return { currentData, forecastData };
+        };
+
+        let weatherBundle: { currentData: any; forecastData: any };
+        try {
+          weatherBundle = await loadWeatherByCoords(lat, lng);
+        } catch {
+          lat = dubaiFallback.lat;
+          lng = dubaiFallback.lng;
+          resolvedName = dubaiFallback.name;
+          weatherBundle = await loadWeatherByCoords(lat, lng);
         }
-        const forecastData = await forecastResp.json();
+
+        const currentData = weatherBundle.currentData;
+        const forecastData = weatherBundle.forecastData;
 
         const daily = forecastData.daily || [];
         const sevenDay = daily.map((day: any) => ({
-            date: new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' }),
+            date: new Date(day.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
             maxTemp: day.temp_max,
             minTemp: day.temp_min,
             weatherCode: day.weather_main,
@@ -383,7 +441,7 @@ const DemandForecasting = () => {
 
         setWeatherData({
           current: currentData.current,
-          locationName: currentData.location?.name || resolvedName,
+          locationName: currentData.location?.name || resolvedName || dubaiFallback.name,
           sevenDayForecast: sevenDay
         });
       } catch (err: any) {
@@ -421,7 +479,52 @@ const DemandForecasting = () => {
     return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
   };
 
-  if (!isConfigured) {
+  const addZone = () => {
+    setZonePlants((prev) => [...prev, { zone: `Zone ${String.fromCharCode(65 + prev.length)}`, plants: [{ name: "", count: 0 }] }]);
+  };
+  const addPlantField = (zoneIdx: number) => {
+    setZonePlants((prev) =>
+      prev.map((z, idx) => (idx === zoneIdx ? { ...z, plants: [...z.plants, { name: "", count: 0 }] } : z))
+    );
+  };
+  const updatePlant = (zoneIdx: number, plantIdx: number, key: "name" | "count", value: string) => {
+    setZonePlants((prev) =>
+      prev.map((z, idx) => {
+        if (idx !== zoneIdx) return z;
+        return {
+          ...z,
+          plants: z.plants.map((p, pIdx) =>
+            pIdx === plantIdx ? { ...p, [key]: key === "count" ? Number(value || 0) : value } : p
+          ),
+        };
+      })
+    );
+  };
+  const updateZoneName = (zoneIdx: number, value: string) => {
+    setZonePlants((prev) => prev.map((z, idx) => (idx === zoneIdx ? { ...z, zone: value } : z)));
+  };
+
+  const requestDemandForecast = async () => {
+    setForecastLoading(true);
+    setForecastError("");
+    try {
+      const payload = {
+        zones: zonePlants,
+        weather_context: weatherData?.current || {},
+      };
+      const res = await api.post("/demand-forecast/assistant/", payload);
+      const rows = Array.isArray(res.data?.zone_forecasts) ? res.data.zone_forecasts : [];
+      setZoneForecastsAi(rows);
+    } catch (err: any) {
+      setForecastError(err?.response?.data?.error || "Failed to generate demand forecast.");
+      setZoneForecastsAi([]);
+    } finally {
+      setForecastLoading(false);
+    }
+  };
+
+
+  if (!isConfigured || forceSetup) {
     return (
       <div className="min-h-screen bg-gray-50">
         <div className="bg-white border-b">
@@ -478,7 +581,12 @@ const DemandForecasting = () => {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Devices Not Configured</CardTitle>
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle>{forceSetup ? "Rescan Devices" : "Devices Not Configured"}</CardTitle>
+                {forceSetup && (
+                  <Button variant="outline" size="sm" onClick={() => setForceSetup(false)}>Cancel</Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
@@ -495,10 +603,11 @@ const DemandForecasting = () => {
                   placeholder="Gateway ID"
                   className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
                 />
-                <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
-                  {scanning ? "Scanning..." : "Configure Devices"}
+                <Button onClick={() => moduleSetup.scanAndConfigure({ rescan: forceSetup })} disabled={scanning}>
+                  {scanning ? "Scanning..." : forceSetup ? "Rescan Devices" : "Configure Devices"}
                 </Button>
               </div>
+              {scanStatus && <p className="text-xs text-muted-foreground">{scanStatus}</p>}
               {error && <p className="text-sm text-destructive">{error}</p>}
             </CardContent>
           </Card>
@@ -519,6 +628,9 @@ const DemandForecasting = () => {
             AI-powered water demand predictions and optimization
             {companyName ? ` for ${companyName}` : ""}
           </p>
+          <div className="mt-4">
+            <Button variant="outline" size="sm" onClick={handleStartRescan}>Rescan Devices</Button>
+          </div>
         </div>
       </div>
 
@@ -598,50 +710,49 @@ const DemandForecasting = () => {
             <CardDescription>Map View</CardDescription>
           </CardHeader>
           <CardContent>
-            {layoutLatLng.length >= 3 ? (
-              <div className="rounded-xl border border-border overflow-hidden">
-                <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
-                  <TileLayer
-                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    attribution="Tiles &copy; Esri"
-                  />
-                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
-                  {zonedLayout.length > 0 ? (
-                    zonedLayout.map((zone) => (
-                      <Polygon
-                        key={zone.label}
-                        positions={zone.polygon}
-                        pathOptions={{ color: zone.color, weight: 2, fillOpacity: 0.22 }}
-                      >
-                        <Tooltip sticky>{zone.label}</Tooltip>
-                      </Polygon>
-                    ))
-                  ) : (
+            <div className="rounded-xl border border-border overflow-hidden">
+              <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles &copy; Esri"
+                />
+                <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
+                {zonedLayout.length > 0 ? (
+                  zonedLayout.map((zone) => (
                     <Polygon
-                      positions={layoutLatLng}
-                      pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
-                    />
-                  )}
-                  {geolocatedModuleDevices.map((device: any) => (
-                    <CircleMarker
-                      key={device.id}
-                      center={[device.lat, device.lng]}
-                      radius={6}
-                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                      key={zone.label}
+                      positions={zone.polygon}
+                      pathOptions={{ color: zone.color, weight: 2, fillOpacity: 0.22 }}
                     >
-                      <Popup>
-                        <div className="text-xs space-y-1">
-                          <p className="font-semibold">{device.id}</p>
-                          <p>{device.type}</p>
-                        </div>
-                      </Popup>
-                    </CircleMarker>
-                  ))}
-                </MapContainer>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No layout polygon saved for this workspace yet. Set it in onboarding.
+                      <Tooltip sticky>{zone.label}</Tooltip>
+                    </Polygon>
+                  ))
+                ) : layoutLatLng.length >= 3 ? (
+                  <Polygon
+                    positions={layoutLatLng}
+                    pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
+                  />
+                ) : null}
+                {geolocatedModuleDevices.map((device: any) => (
+                  <CircleMarker
+                    key={device.id}
+                    center={[device.lat, device.lng]}
+                    radius={6}
+                    pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                  >
+                    <Popup>
+                      <div className="text-xs space-y-1">
+                        <p className="font-semibold">{device.id}</p>
+                        <p>{device.type}</p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+            {layoutLatLng.length < 3 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Layout polygon not set. Showing pipelines/devices by coordinates.
               </p>
             )}
           </CardContent>
@@ -691,17 +802,77 @@ const DemandForecasting = () => {
         </div>
 
         {/* Zone Forecasts */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle>Plant Inputs by Zone</CardTitle>
+            <CardDescription>Enter number of plants and names to generate demand forecast with current weather context.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {zonePlants.map((zone, zoneIdx) => (
+              <div key={zoneIdx} className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={zone.zone}
+                    onChange={(e) => updateZoneName(zoneIdx, e.target.value)}
+                    className="px-3 py-2 rounded-lg border border-border bg-background text-sm w-40"
+                    placeholder="Zone Name"
+                  />
+                  <Button type="button" size="sm" variant="outline" onClick={() => addPlantField(zoneIdx)}>
+                    Add Plant
+                  </Button>
+                </div>
+                {zone.plants.map((plant, plantIdx) => (
+                  <div key={plantIdx} className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <input
+                      value={plant.name}
+                      onChange={(e) => updatePlant(zoneIdx, plantIdx, "name", e.target.value)}
+                      className="px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                      placeholder="Plant name"
+                    />
+                    <input
+                      type="number"
+                      value={plant.count || ""}
+                      onChange={(e) => updatePlant(zoneIdx, plantIdx, "count", e.target.value)}
+                      className="px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                      placeholder="Number of plants"
+                      min={0}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={addZone}>Add Zone</Button>
+              <Button type="button" onClick={requestDemandForecast} disabled={forecastLoading}>
+                {forecastLoading ? "Generating..." : "Generate Forecast"}
+              </Button>
+            </div>
+            {forecastError && <p className="text-sm text-destructive">{forecastError}</p>}
+          </CardContent>
+        </Card>
+
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-4">Zone-Level Forecasts</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {forecastData.map((zone, index) => (
+            {(zoneForecastsAi.length > 0
+              ? zoneForecastsAi.map((row: any) => ({
+                  zone: row.zone,
+                  currentUsage: Math.round((Number(row.daily_demand_liters) || 0) * 0.88),
+                  predictedUsage: Math.round(Number(row.daily_demand_liters) || 0),
+                  trend: Number(row.daily_demand_liters) > 1200 ? "increase" : "stable",
+                  confidence: 90,
+                  recommendation: row.recommendation || "Adjust irrigation based on weather and plant mix.",
+                  status: row.risk === "high" ? "warning" : row.risk === "low" ? "optimal" : "warning",
+                  weather: row.weather,
+                }))
+              : forecastData).map((zone, index) => (
               <Card key={index} className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <div className="flex justify-between items-start">
                     <div>
                       <CardTitle className="text-xl">{zone.zone}</CardTitle>
                       <CardDescription className="text-sm text-gray-500 mt-1">
-                        7-day forecast analysis
+                        7-day forecast analysis{(zone as any).weather ? ` • Weather: ${(zone as any).weather}` : ""}
                       </CardDescription>
                     </div>
                     <Badge className={`${getStatusColor(zone.status)} border`}>
@@ -768,7 +939,7 @@ const DemandForecasting = () => {
             <div className="space-y-3">
               {weeklyForecast.map((day, index) => (
                 <div key={index} className="flex items-center space-x-4">
-                  <div className="w-16 text-sm font-medium text-gray-700">{day.day}</div>
+                  <div className="w-20 text-sm font-medium text-gray-700">{day.date}</div>
                   <div className="flex-1">
                     <div className="flex items-center space-x-2 mb-1">
                       <div className="flex-1 bg-gray-200 rounded-full h-8 relative overflow-hidden">

@@ -68,7 +68,6 @@ const getWorkspaceLayout = (workspace: any) => {
 const Settings = () => {
   const { user, workspace, updateWorkspaceLayout } = useAuth();
   const { toast } = useToast();
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // ── password state ──────────────────────────────────────────────────────
   const [currentPassword, setCurrentPassword]     = useState("");
@@ -264,9 +263,10 @@ useEffect(() => {
       setCurrentPassword(""); setSecretKey(""); setNewPassword(""); setConfirmPassword("");
     } catch (error: any) {
       const errors = error?.response?.data;
+      const pick = (value: any) => Array.isArray(value) ? value[0] : value;
       const message =
-        errors?.current_password?.[0] || errors?.secret_key?.[0] ||
-        errors?.new_password?.[0]     || errors?.non_field_errors?.[0] ||
+        pick(errors?.current_password) || pick(errors?.secret_key) ||
+        pick(errors?.new_password)     || pick(errors?.non_field_errors) ||
         errors?.detail || "Failed to update password.";
       toast({ title: "Error", description: message, variant: "destructive" });
     } finally { setResettingPassword(false); }
@@ -283,7 +283,6 @@ useEffect(() => {
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="layout">Layout</TabsTrigger>
-          <TabsTrigger value="alerts">Alert Thresholds</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
         </TabsList>
@@ -686,48 +685,6 @@ useEffect(() => {
           )}
         </TabsContent>
         
-        {/* ── Alerts ─────────────────────────────────────────────────── */}
-        <TabsContent value="alerts" className="space-y-6">
-          <Card>
-            <CardHeader><CardTitle>Alert Thresholds</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="pressure">Pressure Drop Threshold (PSI)</Label>
-                <Input id="pressure" type="number" defaultValue={15} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="flow">Flow Rate Minimum (L/min)</Label>
-                <Input id="flow" type="number" defaultValue={600} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="salinity">Salinity Alert Level (dS/m)</Label>
-                <Input id="salinity" type="number" defaultValue={6.5} />
-              </div>
-              <Button>Save Thresholds</Button>
-            </CardContent>
-          </Card>
-          {!showAdvanced && (
-            <Button variant="outline" onClick={() => setShowAdvanced(true)}>Show Advanced Settings</Button>
-          )}
-          {showAdvanced && (
-            <Card>
-              <CardHeader><CardTitle>Advanced Settings</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="acoustic">Acoustic Detection Sensitivity</Label>
-                  <Input id="acoustic" type="number" defaultValue={0.85} step={0.01} />
-                  <p className="text-xs text-muted-foreground">Range: 0.0 - 1.0</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="variance">Per-Zone Variance Tolerance</Label>
-                  <Input id="variance" type="number" defaultValue={15} />
-                </div>
-                <Button>Save Advanced Settings</Button>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-
         {/* ── Notifications ──────────────────────────────────────────── */}
         <TabsContent value="notifications" className="space-y-6">
           <Card>

@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle, Droplet, Activity, RefreshCw, XCircle, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { MapContainer, Polygon, TileLayer, useMap, CircleMarker, Popup } from "react-leaflet";
+import { MapContainer, Polygon, TileLayer, useMap, CircleMarker, Popup, Polyline } from "react-leaflet";
 import { Button } from "@/components/ui/button";
 import { useModuleDeviceSetup } from "@/hooks/useModuleDeviceSetup";
 import api from "@/lib/api";
@@ -42,6 +42,81 @@ interface WqReadings {
   gateway_id: string;
   sensors: WqSensor[];
   alerts: WqAlert[];
+}
+
+function buildDemoReadings(): WqReadings {
+  const now = new Date();
+  return {
+    gateway_id: "WQ-GATEWAY-01",
+    sensors: [
+      {
+        device_id: "AQN-PH-001",
+        device_type: "ph_sensor",
+        metric: "ph",
+        value: 8.6,
+        ts: now.toISOString(),
+        lat: 25.2058,
+        lng: 55.2718,
+        mcu_id: "WQ-MCU-01",
+        status: "online",
+      },
+      {
+        device_id: "AQN-TB-001",
+        device_type: "turbidity_sensor",
+        metric: "turbidity_ntu",
+        value: 9.4,
+        ts: now.toISOString(),
+        lat: 25.2042,
+        lng: 55.2699,
+        mcu_id: "WQ-MCU-01",
+        status: "online",
+      },
+      {
+        device_id: "AQN-PH-002",
+        device_type: "ph_sensor",
+        metric: "ph",
+        value: 7.1,
+        ts: now.toISOString(),
+        lat: 25.2036,
+        lng: 55.2729,
+        mcu_id: "WQ-MCU-02",
+        status: "online",
+      },
+      {
+        device_id: "AQN-TB-002",
+        device_type: "turbidity_sensor",
+        metric: "turbidity_ntu",
+        value: 2.7,
+        ts: now.toISOString(),
+        lat: 25.2064,
+        lng: 55.2688,
+        mcu_id: "WQ-MCU-02",
+        status: "online",
+      },
+    ],
+    alerts: [
+      {
+        id: "demo-ph-critical",
+        incident_type: "ph_critical",
+        severity: "critical",
+        status: "open",
+        device_id: "AQN-PH-001",
+        detected_at: now.toISOString(),
+        last_seen_at: now.toISOString(),
+        details: { reason: "pH above threshold" },
+      },
+      {
+        id: "demo-turbidity-warning",
+        incident_type: "turbidity_warning",
+        severity: "high",
+        status: "recovering",
+        device_id: "AQN-TB-001",
+        detected_at: now.toISOString(),
+        last_seen_at: now.toISOString(),
+        details: { reason: "High NTU level" },
+      },
+    ],
+  };
 }
 
 // ─── thresholds ──────────────────────────────────────────────────────────────
@@ -170,6 +245,8 @@ function formatTs(iso: string | null): string {
 const WaterQualityMonitoring = () => {
   const { workspace } = useAuth();
   const navigate = useNavigate();
+  const [forceSetup, setForceSetup] = useState(false);
+  const [wasScanning, setWasScanning] = useState(false);
 
   const moduleSetup = useModuleDeviceSetup(["ph_sensor", "turbidity_sensor"]);
   const {
@@ -177,10 +254,27 @@ const WaterQualityMonitoring = () => {
     setGatewayIdInput,
     scanning,
     error,
+    scanStatus,
     missingTypes,
     geolocatedModuleDevices,
     isConfigured,
+    stripModuleDevices,
   } = moduleSetup;
+
+  useEffect(() => {
+    if (scanning) setWasScanning(true);
+  }, [scanning]);
+  useEffect(() => {
+    if (wasScanning && !scanning && !error && forceSetup) {
+      setWasScanning(false);
+      setForceSetup(false);
+    }
+  }, [error, forceSetup, scanning, wasScanning]);
+
+  const handleStartRescan = async () => {
+    setForceSetup(true);
+    await stripModuleDevices();
+  };
 
   const deviceTypeLabels: Record<string, string> = {
     ph_sensor: "pH Sensor",
@@ -191,6 +285,24 @@ const WaterQualityMonitoring = () => {
   const [readings, setReadings] = useState<WqReadings | null>(null);
   const [loadingReadings, setLoadingReadings] = useState(false);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [registeredPipelines, setRegisteredPipelines] = useState<any[]>([]);
+  const [registryMode, setRegistryMode] = useState<"existing" | "new">("existing");
+  const [selectedExistingPipeId, setSelectedExistingPipeId] = useState("");
+  const [pipelineForm, setPipelineForm] = useState<any>({
+    pipeline_category: "mainline",
+    material: "",
+    pressure_class: "",
+    nominal_dia: "",
+    depth: "",
+    water_capacity: "",
+    start_lat: "",
+    start_lng: "",
+    end_lat: "",
+    end_lng: "",
+  });
+  const [pipelineSaveError, setPipelineSaveError] = useState("");
+  const [savingPipeline, setSavingPipeline] = useState(false);
+  const demoReadings = useMemo(() => buildDemoReadings(), []);
 
   // Track the latest accepted ISO timestamp per sensor so we never
   // overwrite a newer value with an older one (out-of-order responses).
@@ -250,6 +362,10 @@ const WaterQualityMonitoring = () => {
     return () => clearInterval(id);
   }, [isConfigured, fetchReadings]);
 
+  useEffect(() => {
+    fetchPipelines();
+  }, [workspace?.id]);
+
   // Map polygon
   const layoutPolygon = Array.isArray((workspace as any)?.layout_polygon)
     ? ((workspace as any).layout_polygon as any[])
@@ -261,30 +377,102 @@ const WaterQualityMonitoring = () => {
   }, [layoutPolygon]);
 
   // Merge geolocated devices from workspace with live readings for map markers
+  const hasLiveData = Boolean((readings?.sensors?.length || 0) > 0 || (readings?.alerts?.length || 0) > 0);
+  const effectiveReadings = hasLiveData ? readings : demoReadings;
   const mapSensors = useMemo(() => {
     const liveById: Record<string, WqSensor> = {};
-    (readings?.sensors || []).forEach((s) => { liveById[s.device_id] = s; });
+    (effectiveReadings?.sensors || []).forEach((s) => { liveById[s.device_id] = s; });
 
-    return geolocatedModuleDevices.map((d: any) => {
+    const merged = geolocatedModuleDevices.map((d: any) => {
       const live = liveById[d.id];
       const st = live ? sensorStatus(live) : "unknown";
       return { ...d, liveStatus: st, liveValue: live?.value, liveMetric: live?.metric };
     });
-  }, [geolocatedModuleDevices, readings]);
+    if (merged.length > 0) return merged;
+
+    return (effectiveReadings?.sensors || [])
+      .filter((s) => typeof s.lat === "number" && Number.isFinite(s.lat) && typeof s.lng === "number" && Number.isFinite(s.lng))
+      .map((s) => ({
+        id: s.device_id,
+        type: s.device_type,
+        lat: s.lat as number,
+        lng: s.lng as number,
+        liveStatus: sensorStatus(s),
+        liveValue: s.value,
+        liveMetric: s.metric,
+      }));
+  }, [demoReadings, effectiveReadings, geolocatedModuleDevices]);
 
   const mapFocusPoints = useMemo<[number, number][]>(
-    () => [
-      ...layoutLatLng,
-      ...mapSensors
-        .filter((d) => typeof d.lat === "number" && typeof d.lng === "number")
-        .map((d) => [d.lat, d.lng] as [number, number]),
-    ],
-    [layoutLatLng, mapSensors]
+    () => {
+      const pipelinePoints: [number, number][] = [];
+      registeredPipelines.forEach((pipe) => {
+        const sLat = Number(pipe?.start_lat);
+        const sLng = Number(pipe?.start_lng);
+        const eLat = Number(pipe?.end_lat);
+        const eLng = Number(pipe?.end_lng);
+        if (Number.isFinite(sLat) && Number.isFinite(sLng)) pipelinePoints.push([sLat, sLng]);
+        if (Number.isFinite(eLat) && Number.isFinite(eLng)) pipelinePoints.push([eLat, eLng]);
+      });
+      return [
+        ...layoutLatLng,
+        ...mapSensors
+          .filter((d) => typeof d.lat === "number" && typeof d.lng === "number")
+          .map((d) => [d.lat, d.lng] as [number, number]),
+        ...pipelinePoints,
+      ];
+    },
+    [layoutLatLng, mapSensors, registeredPipelines]
   );
 
+  async function fetchPipelines() {
+    const selectedWorkspaceId = localStorage.getItem("selected_workspace_id");
+    const primaryWorkspaceId = String(selectedWorkspaceId || workspace?.id || "").trim();
+    if (!primaryWorkspaceId) return;
+    try {
+      const res = await api.get("/pipelines/", { params: { workspace_id: primaryWorkspaceId } });
+      const rows = Array.isArray(res.data?.results || res.data) ? (res.data?.results || res.data) : [];
+      setRegisteredPipelines(rows);
+      if (!selectedExistingPipeId && rows.length > 0) setSelectedExistingPipeId(String(rows[0].pipe_id || ""));
+    } catch (err) {
+      console.error("Failed to fetch pipelines", err);
+      setRegisteredPipelines([]);
+    }
+  }
+
+  const handleSavePipeline = async () => {
+    if (!workspace?.id) return;
+    setSavingPipeline(true);
+    setPipelineSaveError("");
+    const generatedPipeId = `${pipelineForm.pipeline_category || "mainline"}-${pipelineForm.material || "mat"}-${pipelineForm.nominal_dia || "0"}-${pipelineForm.pressure_class || "press"}-${pipelineForm.depth || "0"}-${pipelineForm.water_capacity || "0"}`;
+    try {
+      await api.post("/pipelines/", {
+        pipe_id: generatedPipeId,
+        workspace_id: workspace.id,
+        start_lat: parseFloat(pipelineForm.start_lat),
+        start_lng: parseFloat(pipelineForm.start_lng),
+        end_lat: parseFloat(pipelineForm.end_lat),
+        end_lng: parseFloat(pipelineForm.end_lng),
+        pipeline_category: pipelineForm.pipeline_category,
+        material: pipelineForm.material,
+        pressure_class: pipelineForm.pressure_class,
+        nominal_dia: parseFloat(pipelineForm.nominal_dia) || 0,
+        depth: parseFloat(pipelineForm.depth) || 0,
+        water_capacity: parseFloat(pipelineForm.water_capacity) || 0,
+      });
+      await fetchPipelines();
+      setSelectedExistingPipeId(generatedPipeId);
+      setRegistryMode("existing");
+    } catch (err: any) {
+      setPipelineSaveError(err?.response?.data?.error || "Failed to save pipeline.");
+    } finally {
+      setSavingPipeline(false);
+    }
+  };
+
   // Summary counts
-  const sensors = readings?.sensors ?? [];
-  const alerts = readings?.alerts ?? [];
+  const sensors = effectiveReadings?.sensors ?? [];
+  const alerts = effectiveReadings?.alerts ?? [];
 
   const sensorsWithReadings = sensors.filter((s) => s.value !== null && s.value !== undefined);
   const optimal  = sensorsWithReadings.filter((s) => sensorStatus(s) === "optimal").length;
@@ -298,81 +486,7 @@ const WaterQualityMonitoring = () => {
   // True all-clear: has readings, none are warning/critical, and no active alerts
   const allClear = sensorsWithReadings.length > 0 && warning === 0 && critical === 0 && activeAlerts.length === 0;
 
-  // ── not configured view ────────────────────────────────────────────────────
-  if (!isConfigured) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="bg-white border-b">
-          <div className="container mx-auto px-6 py-8">
-            <nav className="text-sm text-gray-500 mb-4">
-              <a href="/" className="hover:text-teal-600">Home</a>
-              <span className="mx-2">›</span>
-              <span className="text-gray-900">Water Quality</span>
-            </nav>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Water Quality Monitoring</h1>
-            <p className="text-gray-600">Real-time water quality analysis and management</p>
-          </div>
-        </div>
-        <div className="container mx-auto px-6 py-8 space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Droplet className="w-5 h-5 text-teal-600" />
-                Irrigation Space Layout
-              </CardTitle>
-              <CardDescription>Default layout and configured device coordinates</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-xl border border-border overflow-hidden">
-                <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
-                  <TileLayer
-                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    attribution="Tiles &copy; Esri"
-                  />
-                  <FitMapToPointsOnce points={mapFocusPoints} fallbackZoom={12} maxZoom={16} />
-                  {layoutLatLng.length >= 3 && (
-                    <Polygon positions={layoutLatLng} pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }} />
-                  )}
-                  {mapSensors.map((device: any) => (
-                    <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={6}
-                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}>
-                      <Popup><div className="text-xs space-y-1"><p className="font-semibold">{device.id}</p><p>{device.type}</p></div></Popup>
-                    </CircleMarker>
-                  ))}
-                </MapContainer>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Devices Not Configured</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">Configure required water quality devices to continue.</p>
-              <p className="text-sm">
-                Missing:{" "}
-                <span className="font-medium">{missingTypes.map((t) => deviceTypeLabels[t] || t).join(", ")}</span>
-              </p>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  value={gatewayIdInput}
-                  onChange={(e) => setGatewayIdInput(e.target.value)}
-                  placeholder="Gateway ID (e.g. WQ-GATEWAY-01)"
-                  className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
-                />
-                <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>
-                  {scanning ? "Scanning..." : "Configure Devices"}
-                </Button>
-              </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  const showSetupPanel = !isConfigured || forceSetup;
 
   // ── configured view ────────────────────────────────────────────────────────
   return (
@@ -391,6 +505,15 @@ const WaterQualityMonitoring = () => {
               <p className="text-gray-600">Real-time water quality analysis and management</p>
             </div>
             <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1.5"
+                onClick={handleStartRescan}
+              >
+                <RefreshCw className="w-4 h-4" />
+                Rescan Devices
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -413,6 +536,39 @@ const WaterQualityMonitoring = () => {
       </div>
 
       <div className="container mx-auto px-6 py-8 space-y-6">
+        {showSetupPanel && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle>{forceSetup ? "Rescan Devices" : "Devices Not Configured"}</CardTitle>
+                {forceSetup && (
+                  <Button variant="outline" size="sm" onClick={() => setForceSetup(false)}>Cancel</Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">Configure required water quality devices to continue.</p>
+              <p className="text-sm">
+                Missing:{" "}
+                <span className="font-medium">{missingTypes.map((t) => deviceTypeLabels[t] || t).join(", ")}</span>
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={gatewayIdInput}
+                  onChange={(e) => setGatewayIdInput(e.target.value)}
+                  placeholder="Gateway ID (e.g. WQ-GATEWAY-01)"
+                  className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
+                />
+                <Button onClick={() => moduleSetup.scanAndConfigure({ rescan: forceSetup })} disabled={scanning}>
+                  {scanning ? "Scanning..." : forceSetup ? "Rescan Devices" : "Configure Devices"}
+                </Button>
+              </div>
+              {scanStatus && <p className="text-xs text-muted-foreground">{scanStatus}</p>}
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── Active Alerts panel ── */}
         {activeAlerts.length > 0 && (
@@ -527,6 +683,20 @@ const WaterQualityMonitoring = () => {
                   {layoutLatLng.length >= 3 && (
                     <Polygon positions={layoutLatLng} pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }} />
                   )}
+                {registeredPipelines.map((pipe: any, idx: number) => {
+                  const sLat = Number(pipe?.start_lat);
+                  const sLng = Number(pipe?.start_lng);
+                  const eLat = Number(pipe?.end_lat);
+                  const eLng = Number(pipe?.end_lng);
+                  if (!Number.isFinite(sLat) || !Number.isFinite(sLng) || !Number.isFinite(eLat) || !Number.isFinite(eLng)) return null;
+                  return (
+                    <Polyline
+                      key={pipe?.pipe_id || idx}
+                      positions={[[sLat, sLng], [eLat, eLng]]}
+                      pathOptions={{ color: "#2e8b57", weight: 5, lineCap: "round" }}
+                    />
+                  );
+                })}
                   {mapSensors.map((device: any) => (
                     <CircleMarker
                       key={device.id}

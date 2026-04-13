@@ -117,7 +117,7 @@ class PipeSpecification(models.Model):
     def __str__(self):
         return f"Section {self.section_id}: {self.material} - {self.pipe_category}"
 class FlowMeter(models.Model):
-    pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
+    pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE, db_column='section_id')
     flow       = models.DecimalField(max_digits=10, decimal_places=2)
     type       = models.CharField(max_length=100)
     lng        = models.DecimalField(max_digits=10, decimal_places=7)
@@ -131,7 +131,7 @@ class FlowMeter(models.Model):
         return f"FlowMeter {self.id} - {self.type}"
 
 class PressureSensor(models.Model):
-    pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
+    pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE, db_column='section_id')
     pressure   = models.DecimalField(max_digits=10, decimal_places=2)
     type       = models.CharField(max_length=100)
     lng        = models.DecimalField(max_digits=10, decimal_places=7)
