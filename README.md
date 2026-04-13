@@ -5,7 +5,7 @@ AquaNex is an advanced, AI-driven smart irrigation and water management platform
 ## Access Links
 The official production version is available at: [https://aquanex.app](https://aquanex.app)
 
-Youtube product demo video link: 
+Youtube product demo video link: https://youtu.be/lELn8OGBGAc
 
 ---
 
