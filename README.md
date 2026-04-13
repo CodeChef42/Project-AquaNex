@@ -2,7 +2,7 @@
 
 AquaNex is an advanced, AI-driven smart irrigation and water management platform designed for large-scale agricultural and industrial workspaces. It integrates real-time IoT telemetry, machine learning for anomaly detection, and comprehensive workspace management to optimize water usage and detect infrastructure failures like leaks and pipe breakages.
 
-## 🚀 Cloud Access
+## Access Links
 The official production version is available at: [https://aquanex.app](https://aquanex.app)
 
 Youtube product demo video link: 
