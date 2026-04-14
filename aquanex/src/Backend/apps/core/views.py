@@ -21,14 +21,19 @@ import os
 import re
 import math
 import tempfile
+import threading
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone, timedelta
 from kombu.exceptions import OperationalError as KombuOperationalError
 from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.db import DatabaseError, IntegrityError, transaction
+from django.db import DatabaseError, IntegrityError, transaction, connection
 from django.core.files.storage import default_storage
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
 from .models import Pipe, PipeSpecification
 from django.http import JsonResponse
@@ -55,6 +60,14 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _email_verification_code_key(email: str) -> str:
+    return f"email_verify_code:{str(email or '').strip().lower()}"
+
+
+def _email_verified_flag_key(email: str) -> str:
+    return f"email_verify_ok:{str(email or '').strip().lower()}"
 
 
 def _optional_float(value):
@@ -340,6 +353,29 @@ def _slot_device_ids_from_telemetry(telemetry_rows):
     return slot_device_ids
 
 
+def _normalize_gateway_id_for_match(value: str) -> str:
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    return v.replace("_", "-").upper()
+
+
+def _gateway_id_match_variants(value: str) -> set[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    a = raw
+    b = raw.replace("_", "-")
+    c = raw.replace("-", "_")
+    return {v for v in {a, b, c} if v}
+
+
+def _canonical_gateway_id_for_workspace(workspace, incoming_gateway_id: str) -> str:
+    ws_gateway_id = str(getattr(workspace, "gateway_id", "") or "").strip()
+    selected = ws_gateway_id or str(incoming_gateway_id or "").strip()
+    return _normalize_gateway_id_for_match(selected)
+
+
 def _resolve_comp_id_from_workspace_devices(workspace, candidate_device_ids):
     devices = workspace.devices if isinstance(getattr(workspace, "devices", None), list) else []
     candidates = [str(d or "").strip() for d in (candidate_device_ids or []) if str(d or "").strip()]
@@ -384,7 +420,10 @@ def _upsert_component_incident(
     slot_device_ids=None,
     pipe_context=None,
     source="ml_api",
+    skip_if_open_exists=False,
+    lock_gateway_id=False,
 ):
+    gateway_id = _normalize_gateway_id_for_match(gateway_id) if lock_gateway_id else _canonical_gateway_id_for_workspace(workspace, gateway_id)
     incident_type = _incident_type_from_anomaly(anomaly_type)
     resolved_slot_ids = slot_device_ids if isinstance(slot_device_ids, dict) else {}
     candidate_device_ids = []
@@ -421,6 +460,33 @@ def _upsert_component_incident(
         )
         return {"error": "comp_id_unresolved"}
 
+    # STRICT GUARD (requested): if comp_id already exists in incidents table for this workspace,
+    # do not log a new incident again.
+    existing_any = Incident.objects.filter(
+        workspace=workspace,
+        comp_id=comp_id,
+    ).order_by("-created_at").first()
+    if existing_any:
+        logger.error(
+            "INCIDENT EXISTS: skipping new log for comp_id=%s (existing_incident_id=%s, status=%s, gateway_id=%s)",
+            comp_id,
+            existing_any.id,
+            existing_any.status,
+            existing_any.gateway_id,
+        )
+        print(
+            f"❌ INCIDENT EXISTS: comp_id={comp_id}, existing_id={existing_any.id}, "
+            f"status={existing_any.status} — skipping DB insert."
+        )
+        return {
+            "id": str(existing_any.id),
+            "alert_id": str((existing_any.details or {}).get("alert_id") or "").strip() or None,
+            "pipe_id": comp_id,
+            "comp_id": comp_id,
+            "created": False,
+            "skipped_existing": True,
+        }
+
     existing = Incident.objects.filter(
         workspace=workspace,
         comp_id=comp_id,
@@ -450,6 +516,18 @@ def _upsert_component_incident(
     )
 
     if existing:
+        if skip_if_open_exists:
+            if str(existing.gateway_id or "").strip() != gateway_id:
+                existing.gateway_id = gateway_id
+                existing.save(update_fields=["gateway_id"])
+            return {
+                "id": str(existing.id),
+                "alert_id": alert_id,
+                "pipe_id": comp_id,
+                "comp_id": comp_id,
+                "created": False,
+                "skipped_existing": True,
+            }
         existing.last_seen_at = detected_at
         existing.severity = severity
         existing.details = payload_details
@@ -545,9 +623,11 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction, telemetr
             None,
         )
 
+    pipeline_gateway_id = "AQN-GW-001"
+    print(f"🔒 PIPELINE GATEWAY FIXED: {pipeline_gateway_id}")
     incident_summary = _upsert_component_incident(
         workspace=workspace,
-        gateway_id=gateway_id,
+        gateway_id=pipeline_gateway_id,
         anomaly_type=anomaly_type,
         severity=severity,
         detected_at=detected_at,
@@ -556,6 +636,8 @@ def _record_incident_from_prediction(workspace, gateway_id, prediction, telemetr
         slot_device_ids=slot_device_ids,
         pipe_context=pipe_context,
         source="ml_gateway_telemetry",
+        skip_if_open_exists=True,
+        lock_gateway_id=True,
     )
     if not incident_summary or incident_summary.get("error"):
         print("❌ INCIDENT NOT CREATED: comp_id unresolved.")
@@ -1231,6 +1313,232 @@ def _groq_pipeline_resource_plan(pipe_specs, incident_context):
     }
 
 
+def _heuristic_soil_recommendation(current_ec):
+    try:
+        ec = float(current_ec)
+    except (TypeError, ValueError):
+        ec = 6.5
+    if ec >= 7.0:
+        level = "critical"
+        primary = "Apply gypsum 45-55 kg/ha and run leaching irrigation in two 24h cycles."
+    elif ec >= 5.5:
+        level = "warning"
+        primary = "Apply gypsum 25-35 kg/ha and schedule one 24h leaching cycle."
+    else:
+        level = "stable"
+        primary = "Maintain current irrigation schedule and monitor weekly."
+    return {
+        "risk_level": level,
+        "summary": f"Soil EC at {ec:.1f} dS/m indicates {level} salinity risk.",
+        "recommendations": [
+            primary,
+            "Increase organic matter with compost application to improve salt buffering.",
+            "Re-check EC, pH and moisture after mitigation cycle.",
+        ],
+        "mitigation_actions": [
+            {"title": "Gypsum Application", "detail": "Field dosage based on current EC and soil texture."},
+            {"title": "Leaching Schedule", "detail": "Controlled irrigation to flush salts below root zone."},
+            {"title": "Verification Sampling", "detail": "Collect post-action EC readings for 7 days."},
+        ],
+    }
+
+
+def _groq_soil_recommendation(zone_id, current_ec, chart_view, chart_data):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(
+            {
+                "model": model,
+                "temperature": 0.2,
+                "max_tokens": 600,
+                "messages": [
+                    {"role": "system", "content": "You are a soil salinity agronomy assistant. Return strict JSON only."},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "task": "Generate actionable salinity recommendations.",
+                                "zone_id": zone_id,
+                                "current_ec": current_ec,
+                                "chart_view": chart_view,
+                                "chart_data_points": chart_data,
+                                "response_schema": {
+                                    "risk_level": "critical|warning|stable",
+                                    "summary": "short text",
+                                    "recommendations": ["3-5 concise recommendations"],
+                                    "mitigation_actions": [{"title": "action", "detail": "practical detail"}],
+                                },
+                                "rules": [
+                                    "Use practical field actions.",
+                                    "No markdown.",
+                                    "JSON only.",
+                                ],
+                            }
+                        ),
+                    },
+                ],
+            }
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    content = ((choices[0] or {}).get("message") or {}).get("content") if choices else ""
+    parsed = _extract_json_object(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("Groq soil recommendation not valid JSON")
+    recs = parsed.get("recommendations")
+    actions = parsed.get("mitigation_actions")
+    if not isinstance(recs, list) or not isinstance(actions, list):
+        raise ValueError("Groq soil recommendation missing fields")
+    return {
+        "risk_level": str(parsed.get("risk_level") or "").strip() or "warning",
+        "summary": str(parsed.get("summary") or "").strip(),
+        "recommendations": [str(x).strip() for x in recs if str(x).strip()],
+        "mitigation_actions": [
+            {"title": str(a.get("title") or "").strip(), "detail": str(a.get("detail") or "").strip()}
+            for a in actions if isinstance(a, dict)
+        ],
+    }
+
+
+def _groq_soil_chat_reply(question, zone_id=None, current_ec=None):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    context_bits = []
+    if zone_id:
+        context_bits.append(f"Zone: {zone_id}")
+    if current_ec is not None:
+        context_bits.append(f"Current EC: {current_ec} dS/m")
+    context_text = " | ".join(context_bits) if context_bits else "No additional context"
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(
+            {
+                "model": model,
+                "temperature": 0.3,
+                "max_tokens": 500,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a practical soil salinity assistant for municipal irrigation teams. Keep answers concise and actionable.",
+                    },
+                    {"role": "user", "content": f"Context: {context_text}\nQuestion: {question}"},
+                ],
+            }
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    reply = str(message.get("content") or "").strip()
+    if not reply:
+        raise ValueError("Empty chat reply")
+    return reply
+
+
+def _heuristic_demand_zone_forecast(zone_name, plants, weather):
+    weather_main = str((weather or {}).get("weather_main") or "Unknown")
+    temp_c = float((weather or {}).get("temperature") or 30.0)
+    humidity = float((weather or {}).get("humidity") or 50.0)
+    total_plants = sum(max(0, int(p.get("count") or 0)) for p in plants if isinstance(p, dict))
+    per_plant_liters = 0.9 if temp_c < 26 else 1.15 if temp_c < 34 else 1.45
+    if humidity < 35:
+        per_plant_liters += 0.15
+    demand_liters = round(max(50.0, total_plants * per_plant_liters), 1)
+    return {
+        "zone": zone_name or "Zone",
+        "weather": weather_main,
+        "daily_demand_liters": demand_liters,
+        "recommendation": "Use split irrigation cycles (early morning + evening) and monitor moisture drift.",
+        "risk": "high" if temp_c >= 35 else "medium" if temp_c >= 30 else "low",
+    }
+
+
+def _groq_demand_zone_forecast(zone_payloads, weather_context):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(
+            {
+                "model": model,
+                "temperature": 0.2,
+                "max_tokens": 800,
+                "messages": [
+                    {"role": "system", "content": "You are an agricultural water-demand forecasting assistant. Return JSON only."},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "task": "Forecast daily irrigation demand per zone from plants and weather context.",
+                                "weather_context": weather_context,
+                                "zones": zone_payloads,
+                                "response_schema": {
+                                    "zone_forecasts": [
+                                        {
+                                            "zone": "Zone A",
+                                            "weather": "Clear",
+                                            "daily_demand_liters": 1200.5,
+                                            "recommendation": "text",
+                                            "risk": "low|medium|high",
+                                        }
+                                    ]
+                                },
+                                "rules": ["No markdown", "JSON only", "Use practical irrigation recommendations"],
+                            }
+                        ),
+                    },
+                ],
+            }
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    content = ((choices[0] or {}).get("message") or {}).get("content") if choices else ""
+    parsed = _extract_json_object(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("Groq demand forecast not valid JSON")
+    zone_forecasts = parsed.get("zone_forecasts")
+    if not isinstance(zone_forecasts, list):
+        raise ValueError("Groq demand forecast missing zone_forecasts")
+    normalized = []
+    for item in zone_forecasts:
+        if not isinstance(item, dict):
+            continue
+        zone = str(item.get("zone") or "").strip()
+        if not zone:
+            continue
+        normalized.append(
+            {
+                "zone": zone,
+                "weather": str(item.get("weather") or "").strip() or str((weather_context or {}).get("weather_main") or "Unknown"),
+                "daily_demand_liters": float(item.get("daily_demand_liters") or 0.0),
+                "recommendation": str(item.get("recommendation") or "").strip(),
+                "risk": str(item.get("risk") or "medium").strip().lower(),
+            }
+        )
+    if not normalized:
+        raise ValueError("Groq demand forecast returned no valid zones")
+    return normalized
+
+
 def _infer_metric_family(metric, device_type):
     metric_key = str(metric or "").strip().lower()
     if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
@@ -1316,7 +1624,7 @@ def _ml_predict_sync(snapshot):
 def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
     ml_service_url = f"{ml_base_url}/telemetry/ingest"
-    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "15"))  # was "5"
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "4"))
     try:
         response = requests.post(
             ml_service_url,
@@ -1336,6 +1644,36 @@ def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     except requests.exceptions.Timeout:
         logger.warning("ML service timed out after %ss for gateway=%s", timeout, gateway_id)
         return {}
+
+
+def _ml_ingest_background_and_record(workspace_id, gateway_id, telemetry, devices):
+    """Run ML ingest off the request thread so telemetry and discovery stay responsive."""
+    try:
+        sync_result = _ml_ingest_sync(
+            gateway_id=gateway_id,
+            workspace_id=str(workspace_id),
+            telemetry=telemetry or [],
+            devices=devices or [],
+        )
+        prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+        if not prediction:
+            snapshot = _extract_predict_snapshot(telemetry or [])
+            if snapshot:
+                try:
+                    prediction = _ml_predict_sync(snapshot)
+                except requests.exceptions.RequestException:
+                    prediction = None
+        if isinstance(prediction, dict):
+            workspace = Workspace.objects.filter(id=workspace_id).first()
+            if workspace:
+                _record_incident_from_prediction(
+                    workspace,
+                    gateway_id,
+                    prediction,
+                    telemetry_rows=telemetry or [],
+                )
+    except Exception as exc:
+        logger.warning("Background ML ingest failed for gateway=%s: %s", gateway_id, str(exc))
 
 
 def _normalize_device(raw, fallback_mcu_id, index):
@@ -1629,6 +1967,30 @@ def _tb_pick_metric_reading(timeseries, device_type_hint=None):
     return "value", 0
 
 
+def _tb_pick_metric_from_attrs(attrs, device_type_hint=None):
+    attrs = attrs if isinstance(attrs, dict) else {}
+    hint = (device_type_hint or "").lower()
+    if hint == "ph_sensor":
+        preferred = ["ph", "potential_hydrogen"]
+    elif hint == "turbidity_sensor":
+        preferred = ["turbidity_ntu", "turbidity", "ntu"]
+    elif hint == "soil_salinity_sensor":
+        preferred = ["ec_ds_m", "ec_ms_cm", "ec", "tds"]
+    elif hint == "soil_moisture_sensor":
+        preferred = ["soil_moisture_pct", "soil_moisture", "moisture"]
+    elif hint == "pressure_sensor":
+        preferred = ["pressure_bar", "pressure", "psi"]
+    elif hint == "flowmeter":
+        preferred = ["q_m3h", "flow_lpm", "flow"]
+    else:
+        preferred = ["ph", "turbidity_ntu", "turbidity", "ec_ds_m", "soil_moisture_pct", "pressure_bar", "q_m3h", "flow_lpm", "flow"]
+
+    for key in preferred:
+        if key in attrs and attrs.get(key) not in (None, ""):
+            return key, attrs.get(key)
+    return "value", 0
+
+
 def _tb_canonical_type(value):
     raw = str(value or "").strip().lower()
     if not raw:
@@ -1699,7 +2061,7 @@ def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
     name = str(device_name or "").lower()
     if "salinity" in name or metric in {"ec_ds_m", "ec_ms_cm"}:
         return "soil_salinity_sensor"
-    if "soil" in name or metric == "soil_moisture_pct":
+    if "soil" in name or metric == "soil_moisture_pct" or re.search(r"(^|[^a-z0-9])(ms|moisture)([^a-z0-9]|$)", name):
         return "soil_moisture_sensor"
     if re.search(r"(^|[^a-z0-9])(ps|pressure)([^a-z0-9]|$)", name) or metric in {"pressure_bar", "pressure"}:
         return "pressure_sensor"
@@ -1967,13 +2329,28 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None, fast_scan=False):
     if not mcu_objects and direct_devices:
         mcu_objects = [{"id": "virtual-mcu-01", "name": f"{gateway_id}-MCU-01"}]
 
+    fallback_lat, fallback_lng = 25.2048, 55.2708
+    layout_polygon = getattr(workspace, "layout_polygon", None)
+    if isinstance(layout_polygon, list) and layout_polygon:
+        coords = []
+        for p in layout_polygon:
+            if not isinstance(p, (list, tuple)) or len(p) < 2:
+                continue
+            lng = _optional_float(p[0])
+            lat = _optional_float(p[1])
+            if lat is not None and lng is not None:
+                coords.append((lat, lng))
+        if coords:
+            fallback_lat = sum(lat for lat, _ in coords) / len(coords)
+            fallback_lng = sum(lng for _, lng in coords) / len(coords)
+
     devices = []
     missing_coordinates = []
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
         provisional_type = _tb_infer_type(d["name"], attrs, "", d.get("tb_type"), d.get("tb_label"))
         if fast_scan:
-            metric, reading = "value", 0
+            metric, reading = _tb_pick_metric_from_attrs(attrs, provisional_type)
         else:
             ts = _tb_get_latest_values(token, d["id"])
             metric, reading = _tb_pick_metric_reading(ts, provisional_type)
@@ -1981,7 +2358,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None, fast_scan=False):
         lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
         if lat_val is None or lng_val is None:
             missing_coordinates.append(d["name"])
-            continue
+            lat_val, lng_val = fallback_lat, fallback_lng
         devices.append({
             "id": d["name"],
             "microcontroller_id": d["mcu_name"],
@@ -2021,7 +2398,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None, fast_scan=False):
                 dev_obj.get("label") if isinstance(dev_obj, dict) else None,
             )
             if fast_scan:
-                metric, reading = "value", 0
+                metric, reading = _tb_pick_metric_from_attrs(attrs, provisional_type)
             else:
                 ts = _tb_get_latest_values(token, dev_id)
                 metric, reading = _tb_pick_metric_reading(ts, provisional_type)
@@ -2029,7 +2406,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None, fast_scan=False):
             lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
             if lat_val is None or lng_val is None:
                 missing_coordinates.append(dev_name)
-                continue
+                lat_val, lng_val = fallback_lat, fallback_lng
             devices.append({
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
@@ -2121,6 +2498,58 @@ class CheckAvailabilityView(APIView):
             ).exists()
 
         return Response(result, status=200)
+
+
+class SendEmailVerificationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email") or "").strip().lower()
+        if not email:
+            return Response({"error": "email is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            return Response({"error": "Invalid email format"}, status=status.HTTP_400_BAD_REQUEST)
+        User = get_user_model()
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"error": "Email is already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        code = f"{random.randint(0, 999999):06d}"
+        cache.set(_email_verification_code_key(email), code, timeout=10 * 60)
+        cache.delete(_email_verified_flag_key(email))
+
+        try:
+            send_mail(
+                subject="AquaNex Email Verification Code",
+                message=f"Your AquaNex verification code is: {code}\nThis code expires in 10 minutes.",
+                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                recipient_list=[email],
+                fail_silently=False,
+            )
+        except Exception as exc:
+            logger.warning("Email verification send failed: %s", str(exc))
+            return Response({"error": "Failed to send verification email"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({"detail": "Verification code sent"}, status=status.HTTP_200_OK)
+
+
+class ConfirmEmailVerificationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email") or "").strip().lower()
+        code = str(request.data.get("code") or "").strip()
+        if not email or not code:
+            return Response({"error": "email and code are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        expected = cache.get(_email_verification_code_key(email))
+        if not expected or str(expected) != code:
+            return Response({"error": "Invalid or expired verification code"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache.delete(_email_verification_code_key(email))
+        cache.set(_email_verified_flag_key(email), True, timeout=30 * 60)
+        return Response({"detail": "Email verified"}, status=status.HTTP_200_OK)
     
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -2270,13 +2699,16 @@ class OnboardingView(APIView):
 
         workspace = _resolve_user_workspace(request, create_if_missing=False)
         create_new_workspace = _is_truthy(data.get("createNewWorkspace"))
+        explicit_workspace_id = _workspace_id_from_request(request)
         existing_workspaces = Workspace.objects.filter(owner=user).order_by("created_at")
         fallback_workspace = existing_workspaces.first()
         incoming_company_name = _clean_text(data.get("companyName"))
         fallback_company_name = _clean_text(fallback_workspace.company_name if fallback_workspace else "")
         resolved_company_name = incoming_company_name or fallback_company_name
 
-        if workspace and create_new_workspace:
+        # Only force creation when caller did not provide a concrete workspace ID.
+        # If workspaceId/workspace_id is provided, we must update that same workspace.
+        if workspace and create_new_workspace and not explicit_workspace_id:
             workspace = None
 
         if workspace is None:
@@ -2529,7 +2961,82 @@ class WorkspaceDeleteView(APIView):
         except Workspace.DoesNotExist:
             return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        workspace.delete()
+        # Use explicit SQL delete order to satisfy legacy FK constraints.
+        # Some DB constraints are not ON DELETE CASCADE at runtime.
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                def _table_exists(table_name: str) -> bool:
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = current_schema() AND table_name = %s
+                        LIMIT 1
+                        """,
+                        [table_name],
+                    )
+                    return cursor.fetchone() is not None
+
+                def _table_has_column(table_name: str, column_name: str) -> bool:
+                    if not _table_exists(table_name):
+                        return False
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema() AND table_name = %s AND column_name = %s
+                        LIMIT 1
+                        """,
+                        [table_name, column_name],
+                    )
+                    return cursor.fetchone() is not None
+
+                def _delete_workspace_scoped(table_name: str):
+                    if _table_has_column(table_name, "workspace_id"):
+                        cursor.execute(f'DELETE FROM "{table_name}" WHERE "workspace_id" = %s', [str(pk)])
+
+                # Pipeline subtree (schema-aware: supports both legacy and current column names)
+                if _table_exists("pipes") and _table_has_column("pipes", "workspace_id"):
+                    for table_name in ("flow_meters", "pressure_sensors"):
+                        fk_col = next(
+                            (
+                                candidate
+                                for candidate in ("section_id", "pipe_id", "pipe_id_id")
+                                if _table_has_column(table_name, candidate)
+                            ),
+                            None,
+                        )
+                        if fk_col:
+                            cursor.execute(
+                                f'DELETE FROM "{table_name}" WHERE "{fk_col}" IN (SELECT "pipe_id" FROM "pipes" WHERE "workspace_id" = %s)',
+                                [str(pk)],
+                            )
+
+                    specs_fk_col = next(
+                        (candidate for candidate in ("section_id", "pipe_id") if _table_has_column("pipe_specs", candidate)),
+                        None,
+                    )
+                    if specs_fk_col:
+                        cursor.execute(
+                            f'DELETE FROM "pipe_specs" WHERE "{specs_fk_col}" IN (SELECT "pipe_id" FROM "pipes" WHERE "workspace_id" = %s)',
+                            [str(pk)],
+                        )
+
+                    cursor.execute('DELETE FROM "pipes" WHERE "workspace_id" = %s', [str(pk)])
+
+                # Workspace-scoped operational tables
+                for tbl in (
+                    "workspace_invites",
+                    "incidents",
+                    "device_readings_latest",
+                    "device_readings",
+                    "field_devices",
+                    "microcontrollers",
+                    "gateways",
+                ):
+                    _delete_workspace_scoped(tbl)
+
+                cursor.execute('DELETE FROM "workspaces" WHERE "id" = %s AND "owner_id" = %s', [str(pk), str(request.user.pk)])
         return Response({"success": True}, status=status.HTTP_204_NO_CONTENT)
     
 class LayoutModuleRecommendationView(APIView):
@@ -2858,7 +3365,7 @@ class GatewayTelemetryIngestView(APIView):
             or request.data.get("workspace_id")
             or ""
         ).strip()
-        prefer_sync_ml = True
+        prefer_sync_ml = _is_truthy(os.environ.get("ML_PREFER_SYNC_TELEMETRY", "false"))
         if "prefer_sync_ml" in request.data:
             prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
         elif _is_truthy(request.data.get("allow_async_ml")):
@@ -2867,69 +3374,24 @@ class GatewayTelemetryIngestView(APIView):
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-
-
-        if workspace_id_hint:
-            workspace = Workspace.objects.filter(id=workspace_id_hint).first()
-            if not workspace:
-                return Response({"error": "workspace not found for X-Workspace-Id"}, status=status.HTTP_404_NOT_FOUND)
-            expected_gateway = str(workspace.gateway_id or "").strip()
-            if expected_gateway and expected_gateway != gateway_id:
-                return Response(
-                    {
-                        "error": "gateway_id does not match selected workspace",
-                        "expected_gateway_id": expected_gateway,
-                        "received_gateway_id": gateway_id,
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
-        else:
-            matches = Workspace.objects.filter(gateway_id=gateway_id).order_by("created_at")
-            count = matches.count()
-            if count == 0:
-                return Response({"error": "gateway_id not registered"}, status=status.HTTP_404_NOT_FOUND)
-            if count > 1:
-                return Response(
-                    {
-                        "error": "gateway_id is mapped to multiple workspaces; include X-Workspace-Id",
-                        "gateway_id": gateway_id,
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
-            workspace = matches.first()
-
-        gateway = Gateway.objects.filter(id=gateway_id).first()
-        if gateway and gateway.workspace_id != workspace.id:
-            # Re-assign gateway to the resolved workspace
-            gateway.workspace = workspace
-            gateway.save(update_fields=["workspace"])
-        if not gateway:
-            gateway = Gateway.objects.create(
-                id=gateway_id,
-                workspace=workspace,
-                status="online",
-                last_seen=timezone.now(),
-            )
-
-        known_devices = {}
-        for device in workspace.devices or []:
-            if not isinstance(device, dict):
-                continue
-            dev_id = str(device.get("id") or "").strip()
-            if dev_id:
-                known_devices[dev_id] = device
-
-        if not known_devices:
-            return Response({"error": "No devices registered for gateway"}, status=status.HTTP_400_BAD_REQUEST)
-
-
         records = request.data.get("telemetry")
         if not isinstance(records, list):
             records = [request.data]
 
         # ── Workspace resolution ───────────────────────────────────────────────
         # 1. Exact match: workspaces that already have this gateway_id registered.
-        workspaces = list(Workspace.objects.filter(gateway_id=gateway_id))
+        workspaces = []
+        if workspace_id_hint:
+            hinted = Workspace.objects.filter(id=workspace_id_hint).first()
+            if not hinted:
+                return Response({"error": "workspace not found for X-Workspace-Id"}, status=status.HTTP_404_NOT_FOUND)
+            gateway_id = _canonical_gateway_id_for_workspace(hinted, gateway_id)
+            workspaces = [hinted]
+        else:
+            gateway_id_match = _normalize_gateway_id_for_match(gateway_id)
+            variants = _gateway_id_match_variants(gateway_id)
+            candidates = Workspace.objects.filter(gateway_id__in=list(variants))
+            workspaces = [w for w in candidates if _normalize_gateway_id_for_match(w.gateway_id) == gateway_id_match]
 
         if not workspaces:
             # 2. Device-ID match: find a workspace whose devices JSON contains any
@@ -2953,34 +3415,23 @@ class GatewayTelemetryIngestView(APIView):
                         auto_ws = candidate
                         break
 
-            # 3. Last resort: use the first workspace in the DB so data is never
-            #    silently dropped — the gateway gets auto-registered there.
-            if not auto_ws:
-                auto_ws = Workspace.objects.order_by("created_at").first()
-
             if not auto_ws:
                 return Response(
-                    {"error": "No workspace found. Create a workspace in AquaNex first."},
-                    status=status.HTTP_404_NOT_FOUND,
+                    {
+                        "error": "No matching workspace found for telemetry payload",
+                        "hint": "Send X-Workspace-Id header or register this gateway to a workspace first.",
+                        "gateway_id": gateway_id,
+                    },
+                    status=status.HTTP_409_CONFLICT,
                 )
 
-            # Persist the gateway_id so future requests hit path 1.
-            auto_ws.gateway_id = gateway_id
-            auto_ws.save(update_fields=["gateway_id"])
-            logger.info("Auto-registered gateway %s → workspace %s", gateway_id, auto_ws.id)
+            gateway_id = _canonical_gateway_id_for_workspace(auto_ws, gateway_id)
+            if not str(auto_ws.gateway_id or "").strip():
+                auto_ws.gateway_id = gateway_id
+                auto_ws.save(update_fields=["gateway_id"])
             workspaces = [auto_ws]
 
-        # Ensure the Gateway row exists (satisfies FK on related tables).
-        gateway = Gateway.objects.filter(id=gateway_id).first()
-        if not gateway:
-            gateway = Gateway.objects.create(
-                id=gateway_id, workspace=workspaces[0],
-                status="online", last_seen=timezone.now(),
-            )
-        else:
-            gateway.status = "online"
-            gateway.last_seen = timezone.now()
-            gateway.save(update_fields=["status", "last_seen"])
+        gateway_id_for_request = gateway_id
 
         now_label = timezone.now().isoformat()
         
@@ -2989,6 +3440,21 @@ class GatewayTelemetryIngestView(APIView):
 
         # 🚀 Loop through EVERY workspace and apply the telemetry updates independently
         for workspace in workspaces:
+            workspace_gateway_id = _canonical_gateway_id_for_workspace(workspace, gateway_id_for_request)
+            gateway = Gateway.objects.filter(id=workspace_gateway_id).first()
+            if not gateway:
+                gateway = Gateway.objects.create(
+                    id=workspace_gateway_id,
+                    workspace=workspace,
+                    status="online",
+                    last_seen=timezone.now(),
+                )
+            else:
+                if gateway.workspace_id != workspace.id:
+                    gateway.workspace = workspace
+                gateway.status = "online"
+                gateway.last_seen = timezone.now()
+                gateway.save(update_fields=["workspace", "status", "last_seen"])
             known_devices = {}
             for device in workspace.devices or []:
                 if not isinstance(device, dict):
@@ -3037,7 +3503,7 @@ class GatewayTelemetryIngestView(APIView):
 
                     known_devices[device_id] = {
                         "id": device_id,
-                        "microcontroller_id": mcu_id or f"{gateway_id}-MCU-AUTO",
+                        "microcontroller_id": mcu_id or f"{workspace_gateway_id}-MCU-AUTO",
                         "type": inferred_type,
                         "status": "online",
                         "last_seen": now_label,
@@ -3156,7 +3622,7 @@ class GatewayTelemetryIngestView(APIView):
                         anomalies.append({
                             "source": "water_quality_threshold",
                             "device_id": wq_device_id,
-                            "gateway_id": gateway_id,
+                            "gateway_id": workspace_gateway_id,
                             "device_type": str(known_devices[wq_device_id].get("type", "")),
                             "incident_id": wq_result.get("id"),
                         })
@@ -3186,21 +3652,32 @@ class GatewayTelemetryIngestView(APIView):
                 force_sync_on_celery_error = _is_truthy(
                     os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
                 )
-                if use_celery_ml and not prefer_sync_ml:
+                if (not prefer_sync_ml) and (not use_celery_ml):
+                    threading.Thread(
+                        target=_ml_ingest_background_and_record,
+                        args=(str(workspace.id), workspace_gateway_id, ml_records, list(known_devices.values())),
+                        daemon=True,
+                    ).start()
+                    ml_job = {
+                        "queued": True,
+                        "mode": "local_async_thread",
+                        "records": len(ml_records),
+                    }
+                if ml_job is None and use_celery_ml and not prefer_sync_ml:
                     try:
                         task = run_ml_breakage_inference.delay(
                             telemetry=ml_records,
-                            gateway_id=gateway_id,
+                            gateway_id=workspace_gateway_id,
                             workspace_id=str(workspace.id),
                             devices=list(known_devices.values()),
                         )
                         ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
                     except Exception as exc:
-                        logger.warning("Failed to queue ML task for gateway=%s, workspace=%s: %s", gateway_id, workspace.id, str(exc))
+                        logger.warning("Failed to queue ML task for gateway=%s, workspace=%s: %s", workspace_gateway_id, workspace.id, str(exc))
                         if force_sync_on_celery_error:
                             try:
                                 sync_result = _ml_ingest_sync(
-                                    gateway_id=gateway_id,
+                                    gateway_id=workspace_gateway_id,
                                     workspace_id=str(workspace.id),
                                     telemetry=ml_records,
                                     devices=list(known_devices.values()),
@@ -3225,10 +3702,10 @@ class GatewayTelemetryIngestView(APIView):
                                 ml_job = {"queued": False, "mode": "sync_fallback", "error": str(sync_exc), "records": len(ml_records)}
                         else:
                             ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
-                else:
+                elif ml_job is None:
                     try:
                         sync_result = _ml_ingest_sync(
-                            gateway_id=gateway_id,
+                            gateway_id=workspace_gateway_id,
                             workspace_id=str(workspace.id),
                             telemetry=ml_records,
                             devices=list(known_devices.values()),
@@ -3250,39 +3727,60 @@ class GatewayTelemetryIngestView(APIView):
                             "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
                         }
                     except requests.exceptions.RequestException as exc:
-                        logger.warning("Synchronous ML inference failed for gateway=%s: %s", gateway_id, str(exc))
+                        logger.warning("Synchronous ML inference failed for gateway=%s: %s", workspace_gateway_id, str(exc))
                         ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
-        else:
-            ml_job = {
-                "queued": False,
-                "reason": "no_accepted_records",
+            if ml_job is None:
+                ml_job = {
+                    "queued": False,
+                    "reason": "no_accepted_records",
+                }
+
+            ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
+            incident_summary = None
+            if isinstance(ml_prediction, dict):
+                incident_summary = _record_incident_from_prediction(
+                    workspace,
+                    workspace_gateway_id,
+                    ml_prediction,
+                    telemetry_rows=ml_records,
+                )
+
+                if ml_prediction.get("is_anomaly") is True:
+                    deltas = ml_prediction.get("deltas") or {}
+                    anomalies.append({
+                        "source": "ml",
+                        "device_id": workspace_gateway_id,
+                        "gateway_id": workspace_gateway_id,
+                        "metric": str(ml_prediction.get("anomaly_type") or "anomaly"),
+                        "delta": deltas.get("flow_delta"),
+                        "reason": f"ml_confidence={ml_prediction.get('confidence')}",
+                        "deltas": deltas,
+                        "timestamp": ml_prediction.get("timestamp"),
+                        "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                        "alert_id": incident_summary.get("alert_id") if isinstance(incident_summary, dict) else None,
+                        "pipe_id": incident_summary.get("pipe_id") if isinstance(incident_summary, dict) else None,
+                    })
+
+            workspace_result = {
+                "success": True,
+                "gateway_id": workspace_gateway_id,
+                "workspace_id": str(workspace.id),
+                "accepted": accepted,
+                "rejected": rejected,
+                "anomalies": anomalies,
+                # Backward-compatible keys expected by existing simulation UI.
+                "ml_inference": ml_job,
+                "ml": ml_job,
+                "incident": incident_summary,
+                "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                "alert_id": incident_summary.get("alert_id") if isinstance(incident_summary, dict) else None,
+                "pipe_id": incident_summary.get("pipe_id") if isinstance(incident_summary, dict) else None,
             }
-
-        ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
-        incident_summary = None
-        if isinstance(ml_prediction, dict):
-            incident_summary = _record_incident_from_prediction(
-                workspace,
-                gateway_id,
-                ml_prediction,
-                telemetry_rows=ml_records,
-            )
-
-            if ml_prediction.get("is_anomaly") is True:
-                deltas = ml_prediction.get("deltas") or {}
-                anomalies.append({
-                    "source": "ml",
-                    "device_id": gateway_id,
-                    "gateway_id": gateway_id,
-                    "metric": str(ml_prediction.get("anomaly_type") or "anomaly"),
-                    "delta": deltas.get("flow_delta"),
-                    "reason": f"ml_confidence={ml_prediction.get('confidence')}",
-                    "deltas": deltas,
-                    "timestamp": ml_prediction.get("timestamp"),
-                    "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
-                    "alert_id": incident_summary.get("alert_id") if isinstance(incident_summary, dict) else None,
-                    "pipe_id": incident_summary.get("pipe_id") if isinstance(incident_summary, dict) else None,
-                })
+            if response_payload is None:
+                response_payload = workspace_result
+            else:
+                response_payload.setdefault("workspaces", [])
+                response_payload["workspaces"].append(workspace_result)
 
         return Response(response_payload, status=status.HTTP_200_OK)
 
@@ -3586,6 +4084,7 @@ class IncidentIngestView(View):
             device_id=device_id,
             slot_device_ids=slot_device_ids if isinstance(slot_device_ids, dict) else {},
             source="ml_api",
+        skip_if_open_exists=True,
         )
         if not incident_summary or incident_summary.get("error"):
             return JsonResponse({
@@ -3595,9 +4094,10 @@ class IncidentIngestView(View):
                              "or as a SERVER_SCOPE attribute in ThingsBoard.",
             }, status=422)
         created = bool(incident_summary.get("created"))
+        skipped_existing = bool(incident_summary.get("skipped_existing"))
         return JsonResponse({
             "success":     True,
-            "action":      "created" if created else "updated",
+            "action":      "created" if created else "skipped" if skipped_existing else "updated",
             "incident_id": incident_summary.get("id"),
             "comp_id":     incident_summary.get("comp_id"),
         }, status=201 if created else 200)
@@ -3977,6 +4477,87 @@ class PipelineResourcePlanView(APIView):
                 },
                 status=200,
             )
+
+
+class SoilSalinityAssistantView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data if hasattr(request, "data") else {}
+        mode = str(data.get("mode") or "recommendation").strip().lower()
+        zone_id = str(data.get("zone_id") or "").strip()
+        current_ec = data.get("current_ec")
+
+        if mode == "chat":
+            question = str(data.get("question") or "").strip()
+            if not question:
+                return Response({"error": "question is required for chat mode"}, status=400)
+            try:
+                reply = _groq_soil_chat_reply(question, zone_id=zone_id or None, current_ec=current_ec)
+                return Response({"source": "groq_llm", "reply": reply}, status=200)
+            except Exception as exc:
+                logger.warning("SoilSalinityAssistantView chat fallback: %s", str(exc))
+                fallback = "I could not reach the AI service. Try: reduce salinity via gypsum + controlled leaching and monitor EC daily for one week."
+                return Response({"source": "fallback", "reply": fallback, "llm_error": str(exc)}, status=200)
+
+        chart_view = str(data.get("chart_view") or "april_weekly").strip()
+        chart_data = data.get("chart_data")
+        if not isinstance(chart_data, list):
+            chart_data = []
+        try:
+            result = _groq_soil_recommendation(zone_id, current_ec, chart_view, chart_data)
+            return Response({"source": "groq_llm", **result}, status=200)
+        except Exception as exc:
+            logger.warning("SoilSalinityAssistantView recommendation fallback: %s", str(exc))
+            heuristic = _heuristic_soil_recommendation(current_ec)
+            return Response({"source": "heuristic_fallback", "llm_error": str(exc), **heuristic}, status=200)
+
+
+class DemandForecastAssistantView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data if hasattr(request, "data") else {}
+        zones = data.get("zones")
+        weather_context = data.get("weather_context") if isinstance(data.get("weather_context"), dict) else {}
+        if not isinstance(zones, list) or not zones:
+            return Response({"error": "zones is required"}, status=400)
+
+        cleaned_zones = []
+        for z in zones:
+            if not isinstance(z, dict):
+                continue
+            zone_name = str(z.get("zone") or "").strip()
+            plants = z.get("plants")
+            if not zone_name or not isinstance(plants, list):
+                continue
+            cleaned_plants = []
+            for p in plants:
+                if not isinstance(p, dict):
+                    continue
+                name = str(p.get("name") or "").strip()
+                try:
+                    count = int(p.get("count") or 0)
+                except (TypeError, ValueError):
+                    count = 0
+                if name and count > 0:
+                    cleaned_plants.append({"name": name, "count": count})
+            if cleaned_plants:
+                cleaned_zones.append({"zone": zone_name, "plants": cleaned_plants})
+
+        if not cleaned_zones:
+            return Response({"error": "zones must include at least one plant with name and count"}, status=400)
+
+        try:
+            llm = _groq_demand_zone_forecast(cleaned_zones, weather_context)
+            return Response({"source": "groq_llm", "zone_forecasts": llm}, status=200)
+        except Exception as exc:
+            logger.warning("DemandForecastAssistantView fallback: %s", str(exc))
+            fallback = [
+                _heuristic_demand_zone_forecast(z.get("zone"), z.get("plants"), weather_context)
+                for z in cleaned_zones
+            ]
+            return Response({"source": "heuristic_fallback", "llm_error": str(exc), "zone_forecasts": fallback}, status=200)
 
 
 def _openweather_error_response(status_code, response_text=None):

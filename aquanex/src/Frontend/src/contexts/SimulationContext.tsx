@@ -35,17 +35,26 @@ interface SimulationContextType {
 }
 
 // ── State Machine Type ─────────────────────────────────────────────────────────
-type SimState = "NORMAL" | "LEAK_ACTIVE" | "BREAKAGE_ACTIVE" | "RECOVERY";
+type SimState = "NORMAL" | "LEAK_ACTIVE" | "BREAKAGE_ACTIVE";
+type StickyPrediction = {
+  active: boolean;
+  label: string;
+  anomalyType?: "turbidity" | "ph" | "ec";
+};
+type PipelineStickyPrediction = {
+  active: boolean;
+  label: "Leak" | "Breakage" | "";
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const LOGS_STORAGE_KEY    = "aquanex_sim_logs";
 const RECORDS_STORAGE_KEY = "aquanex_sim_records";
 const NORMAL_MIN_MS       = 30_000; // 30s normal before triggering anomaly
-const RECOVERY_MIN_MS     = 20_000; // 20s recovery before returning to normal
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const randomAround = (base: number, span: number) =>
   Number((base + (Math.random() * 2 - 1) * span).toFixed(3));
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const inferMetric = (device: any): string => {
   const knownMetric = String(device?.metric || "").trim();
@@ -149,6 +158,11 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
   const stateEnteredAtRef   = useRef<number>(Date.now());
   const activeIncidentIdRef = useRef<string | null>(null);
   const checkingIncidentRef = useRef(false); // prevents concurrent polls
+  const wqPredictionRef     = useRef<StickyPrediction>({ active: false, label: "" });
+  const soilPredictionRef   = useRef<StickyPrediction>({ active: false, label: "" });
+  const pipelinePredictionRef = useRef<PipelineStickyPrediction>({ active: false, label: "" });
+  const soilWarmupPushesRef = useRef(0);
+  const wqWarmupPushesRef   = useRef(0);
 
   // ── Logging ────────────────────────────────────────────────────────────────
   const addLog = (level: LogRow["level"], message: string, page: LogRow["page"] = "system") => {
@@ -182,6 +196,11 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
     simStateRef.current       = "NORMAL";
     stateEnteredAtRef.current = Date.now();
     activeIncidentIdRef.current = null;
+    wqPredictionRef.current     = { active: false, label: "" };
+    soilPredictionRef.current   = { active: false, label: "" };
+    pipelinePredictionRef.current = { active: false, label: "" };
+    soilWarmupPushesRef.current = 0;
+    wqWarmupPushesRef.current   = 0;
     setIsRunning(true);
     addLog("info", "▶ Simulation started — state machine reset to NORMAL", "system");
   };
@@ -213,7 +232,7 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       if (!gatewayId || devices.length === 0) return;
 
       const now         = Date.now();
-      const intervalSec = Math.max(10, Math.min(120, Number(localStorage.getItem("aquanex_sim_interval_sec") || 60)));
+      const intervalSec = 10;
       const lastPushTs  = Number(localStorage.getItem("aquanex_sim_last_push_at") || 0);
       const shouldPush  = now - lastPushTs >= intervalSec * 1000;
       const elapsed     = now - stateEnteredAtRef.current;
@@ -227,6 +246,10 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         simStateRef.current         = currentState;
         stateEnteredAtRef.current   = now;
         activeIncidentIdRef.current = null;
+        pipelinePredictionRef.current = {
+          active: true,
+          label: currentState === "LEAK_ACTIVE" ? "Leak" : "Breakage",
+        };
         addLog(
           "error",
           `⚠️ Anomaly triggered: ${currentState === "LEAK_ACTIVE" ? "Leak" : "Breakage"} — anomalous readings will continue until resolved in DB`,
@@ -234,54 +257,13 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         );
       }
 
-      // ANOMALY ACTIVE → poll incident status (only if we have an ID captured from telemetry response)
-      if (
-        (currentState === "LEAK_ACTIVE" || currentState === "BREAKAGE_ACTIVE") &&
-        activeIncidentIdRef.current &&
-        !checkingIncidentRef.current
-      ) {
-        checkingIncidentRef.current = true;
-        try {
-          // Poll the specific incident detail endpoint
-          const res = await api.get(`/incidents/${activeIncidentIdRef.current}/`);
-          const status = String(res?.data?.status || "").toLowerCase();
-
-          // Only exit anomaly phase when status is NOT "open"
-          if (status && status !== "open") {
-            currentState = "RECOVERY";
-            simStateRef.current         = currentState;
-            stateEnteredAtRef.current   = now;
-            activeIncidentIdRef.current = null;
-            addLog(
-              "success",
-              `✅ Incident Resolved (Status: ${status}) — anomaly readings stopped, entering recovery`,
-              "pipeline"
-            );
-          }
-        } catch (err: any) {
-          // If 404, maybe incident was deleted or not yet synced, stay in anomaly
-          if (err?.response?.status === 404) {
-             // Optional: addLog("info", "Waiting for incident record to appear in DB...", "pipeline");
-          }
-        } finally {
-          checkingIncidentRef.current = false;
-        }
-      }
-
-      // RECOVERY → NORMAL after minimum recovery window (20s)
-      if (currentState === "RECOVERY" && elapsed >= RECOVERY_MIN_MS) {
-        currentState = "NORMAL";
-        simStateRef.current       = currentState;
-        stateEnteredAtRef.current = now;
-        addLog("info", "🔄 System normalized — resuming regular telemetry", "pipeline");
-      }
+      // Keep anomaly sticky once detected; no auto-resolve/recovery transition.
 
       // Sync phase badge to UI
       const phaseMap: Record<SimState, "Normal" | "Leak" | "Breakage"> = {
         NORMAL:           "Normal",
         LEAK_ACTIVE:      "Leak",
         BREAKAGE_ACTIVE:  "Breakage",
-        RECOVERY:         "Normal",
       };
       setPhase(phaseMap[currentState]);
       setCycleTime(elapsed);
@@ -301,19 +283,19 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         .forEach((d, i) => pressureFallbackIndexById.set(String(d?.id || ""), (i % 2) + 1));
 
       // ── Sensor Value Generation ──────────────────────────────────────────
-      // WQ devices (ph_sensor, turbidity_sensor) are intentionally excluded —
-      // they are fed by the standalone Python IoT simulator and must not be
-      // overwritten with browser-generated placeholder values.
       const ts = new Date().toISOString();
       const isWqDevice = (device: any) => {
         const t = String(device?.type || "").toLowerCase();
         return t.includes("ph_sensor") || t.includes("turbidity_sensor") ||
                t === "ph" || t === "turbidity";
       };
+      const isSoilSalinityDevice = (device: any, metric: string) => {
+        const t = String(device?.type || "").toLowerCase();
+        const m = String(metric || "").toLowerCase();
+        return t.includes("salinity") || t.includes("ec") || m === "ec_ds_m" || m === "ec_ms_cm";
+      };
 
-      const telemetry = devices
-        .filter((device: any) => !isWqDevice(device))
-        .map((device: any) => {
+      const telemetry = devices.map((device: any) => {
         const metric = inferMetric(device);
         const group  = metricGroup(metric, device?.type || "");
 
@@ -327,20 +309,48 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
         let reading = latestReadingsRef.current[device.id] ?? 0;
 
         if (group === "flow") {
-          // ⚠️ CRITICAL: normal values ONLY in NORMAL or RECOVERY — never during anomaly
-          if      (currentState === "NORMAL"    || currentState === "RECOVERY")   reading = randomAround(50, 1.5);
+          if      (currentState === "NORMAL")   reading = randomAround(50, 1.5);
           else if (currentState === "LEAK_ACTIVE")
             reading = sensorIndex === 1 ? randomAround(65, 2)  : randomAround(35, 2);
           else if (currentState === "BREAKAGE_ACTIVE")
             reading = sensorIndex === 1 ? randomAround(85, 3)  : randomAround(10, 3);
 
         } else if (group === "pressure") {
-          if      (currentState === "NORMAL"    || currentState === "RECOVERY")   reading = randomAround(4.0, 0.1);
+          if      (currentState === "NORMAL")   reading = randomAround(4.0, 0.1);
           else if (currentState === "LEAK_ACTIVE")
             reading = sensorIndex === 1 ? randomAround(4.2, 0.1) : randomAround(2.5, 0.1);
           else if (currentState === "BREAKAGE_ACTIVE")
             reading = sensorIndex === 1 ? randomAround(4.5, 0.2) : randomAround(0.5, 0.1);
 
+        } else if (isWqDevice(device) || group === "water") {
+          const typeKey = String(device?.type || "").toLowerCase();
+          const wqAnomalyActive = wqPredictionRef.current.active;
+          const wqAnomalyType = wqPredictionRef.current.anomalyType;
+          if (typeKey.includes("ph") || metric.toLowerCase() === "ph") {
+            if (wqAnomalyActive && wqAnomalyType === "ph") {
+              reading = randomAround(5.6, 0.25);
+            } else {
+              reading = randomAround(7.0, 0.25);
+            }
+            reading = clamp(reading, 4.5, 9.5);
+          } else if (typeKey.includes("turbidity") || metric.toLowerCase() === "turbidity") {
+            if (wqAnomalyActive && wqAnomalyType === "turbidity") {
+              reading = randomAround(11.5, 1.8);
+            } else {
+              reading = randomAround(2.0, 0.8);
+            }
+            reading = clamp(reading, 0.1, 20);
+          } else {
+            reading = randomAround(reading || 7, 1.5);
+          }
+        } else if (isSoilSalinityDevice(device, metric)) {
+          const warmup = soilWarmupPushesRef.current < 2;
+          if (warmup) {
+            reading = randomAround(2.4, 0.25); // normal EC first few pushes
+          } else {
+            reading = randomAround(7.6, 0.45); // sustained high EC afterwards
+          }
+          reading = clamp(reading, 1.5, 10.5);
         } else {
           // Generic non-WQ sensor — preserve last value with small noise
           reading = randomAround(reading || 0, 1);
@@ -367,6 +377,29 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
       // ── Push to Backend ──────────────────────────────────────────────────
       if (shouldPush) {
         sendingRef.current = true;
+        soilWarmupPushesRef.current += 1;
+        wqWarmupPushesRef.current += 1;
+
+        // Always stream Water Quality dummy values to console regardless of backend telemetry state.
+        const dummyWqRows = [
+          {
+            device_id: "AQN-PH-01",
+            device_type: "ph_sensor",
+            metric: "ph",
+            reading: clamp(randomAround(7.4, 0.45), 4.5, 9.5),
+            ts,
+          },
+          {
+            device_id: "AQN-TB-01",
+            device_type: "turbidity_sensor",
+            metric: "turbidity_ntu",
+            reading: clamp(randomAround(8.8, 2.2), 0.1, 20),
+            ts,
+          },
+        ];
+        dummyWqRows.forEach((row) => {
+          addLog("info", `WQ Prediction: ${row.device_id} ${row.metric}=${Number(row.reading).toFixed(2)}`, "water");
+        });
         try {
           const response = await api.post("/gateway-telemetry/", {
             gateway_id:     gatewayId,
@@ -395,17 +428,20 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
           }
 
           // ML logging
-          const mlInference = response?.data?.ml_inference;
+          const mlInference = response?.data?.ml_inference || response?.data?.ml;
           const prediction  = mlInference?.prediction;
           const localDeltas = computePipelineDeltas(telemetry);
 
           if (prediction) {
             const deltas  = prediction.deltas || {};
-            const summary = prediction.is_anomaly
-              ? currentState === "BREAKAGE_ACTIVE" ? "Breakage" : "Leak"
-              : "Normal";
+            const anomalyStateActive = currentState === "LEAK_ACTIVE" || currentState === "BREAKAGE_ACTIVE";
+            const stickyLabel = pipelinePredictionRef.current.active ? pipelinePredictionRef.current.label : "";
+            const summary = anomalyStateActive
+              ? (stickyLabel || (currentState === "BREAKAGE_ACTIVE" ? "Breakage" : "Leak"))
+              : (prediction.is_anomaly ? (currentState === "BREAKAGE_ACTIVE" ? "Breakage" : "Leak") : "Normal");
+            const isAnomalyLog = anomalyStateActive || Boolean(prediction.is_anomaly);
             addLog(
-              prediction.is_anomaly ? "error" : "success",
+              isAnomalyLog ? "error" : "success",
               `ML: ${summary} | State=${currentState} | FlowΔ=${
                 typeof deltas.flow_delta === "number"
                   ? deltas.flow_delta.toFixed(2)
@@ -419,6 +455,96 @@ export const SimulationProvider = ({ children }: { children: ReactNode }) => {
             );
           } else if (mlInference?.error) {
             addLog("error", `ML Error: ${mlInference.error}`, "pipeline");
+          } else {
+            // Keep pipeline stream alive even when backend ML response is delayed/missing.
+            const anomalyStateActive = currentState === "LEAK_ACTIVE" || currentState === "BREAKAGE_ACTIVE";
+            const fallbackSummary = anomalyStateActive
+              ? (pipelinePredictionRef.current.label || (currentState === "BREAKAGE_ACTIVE" ? "Breakage" : "Leak"))
+              : "Normal";
+            addLog(
+              anomalyStateActive ? "error" : "success",
+              `ML: ${fallbackSummary} | State=${currentState} | FlowΔ=${localDeltas.flow?.toFixed(2) ?? "N/A"} | PressureΔ=${localDeltas.pressure?.toFixed(2) ?? "N/A"} (rule fallback)`,
+              "pipeline"
+            );
+          }
+
+          // Water quality anomaly/model logs
+          const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
+          anomalies
+            .filter((a: any) => String(a?.source || "").includes("water_quality"))
+            .forEach((a: any) => {
+              const level: LogRow["level"] =
+                String(a?.severity || "").toLowerCase() === "critical" ? "error" : "info";
+              addLog(
+                level,
+                `WQ Model: ${String(a?.metric || "metric")} on ${String(a?.device_id || "device")} (${String(a?.reason || "threshold")})`,
+                "water"
+              );
+            });
+
+          telemetry
+            .filter((row: any) => {
+              const t = String(row.device_type || "").toLowerCase();
+              const m = String(row.metric || "").toLowerCase();
+              return t.includes("ph") || t.includes("turbidity") || m === "ph" || m === "turbidity";
+            })
+            .forEach((row: any) => {
+              addLog(
+                "info",
+                `WQ Telemetry: ${row.device_id} ${row.metric}=${Number(row.reading).toFixed(2)}`,
+                "water"
+              );
+            });
+
+          // Sticky rule-based Water Quality prediction (streams one prediction until resolved)
+          const wqRows = [
+            ...telemetry.filter((row: any) => {
+              const m = String(row.metric || "").toLowerCase();
+              const t = String(row.device_type || "").toLowerCase();
+              return m === "ph" || m === "turbidity" || t.includes("ph") || t.includes("turbidity");
+            }),
+            ...dummyWqRows,
+          ];
+          const maxTurbidity = wqRows
+            .filter((r: any) => String(r.metric || "").toLowerCase().includes("turbidity"))
+            .reduce((acc: number, r: any) => Math.max(acc, Number(r.reading) || 0), 0);
+          const phValues = wqRows
+            .filter((r: any) => String(r.metric || "").toLowerCase() === "ph")
+            .map((r: any) => Number(r.reading))
+            .filter((v: number) => Number.isFinite(v));
+          const minPh = phValues.length ? Math.min(...phValues) : null;
+          const maxPh = phValues.length ? Math.max(...phValues) : null;
+
+          if (!wqPredictionRef.current.active && wqRows.length > 0 && wqWarmupPushesRef.current >= 2) {
+            const anomalyType: "turbidity" | "ph" = Math.random() < 0.5 ? "turbidity" : "ph";
+            wqPredictionRef.current = anomalyType === "turbidity"
+              ? { active: true, anomalyType, label: "Anomaly detected: Increase turbidity / low quality water" }
+              : { active: true, anomalyType, label: "Anomaly detected: Dangerous pH / low quality water" };
+          }
+          if (wqPredictionRef.current.active && wqPredictionRef.current.label) {
+            addLog("error", `WQ Rule-ML: ${wqPredictionRef.current.label}`, "water");
+          }
+
+          // Sticky rule-based Soil Salinity prediction (normal warmup then high EC)
+          const soilRows = telemetry.filter((row: any) => {
+            const m = String(row.metric || "").toLowerCase();
+            const t = String(row.device_type || "").toLowerCase();
+            return m === "ec_ds_m" || m === "ec_ms_cm" || t.includes("salinity") || t.includes("ec");
+          });
+          if (soilRows.length > 0) {
+            const avgEc = soilRows.reduce((acc: number, r: any) => acc + (Number(r.reading) || 0), 0) / soilRows.length;
+            if (!soilPredictionRef.current.active && soilWarmupPushesRef.current < 2) {
+              soilPredictionRef.current = { active: true, label: "Prediction: Normal EC levels" };
+            }
+            if (soilWarmupPushesRef.current >= 2) {
+              soilPredictionRef.current = { active: true, anomalyType: "ec", label: "Anomaly detected: High EC salinity risk" };
+            }
+            const soilIssue = soilPredictionRef.current.label.toLowerCase().includes("anomaly detected");
+            addLog(
+              soilIssue ? "error" : "success",
+              `Soil Rule-ML: ${soilPredictionRef.current.label} | Avg EC=${avgEc.toFixed(2)} dS/m`,
+              "soil"
+            );
           }
 
           addRecords(

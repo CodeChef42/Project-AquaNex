@@ -204,12 +204,13 @@ const PipelineResources = () => {
   const pipeSpec = useMemo(() => {
   const source = matchedPipe || firstPipeWithCoordinates(pipes) || details?.pipe_specs || alert?.pipeSpecs;
   if (!source) return {
-    section_id: "N/A",
+    section_id: "N/A", flowmeter_id: null, sensor_id: null,
     material: "N/A", pressure_class: "N/A", depth: null,
     nominal_dia: null, pipe_category: "N/A", water_capacity: null, pipe_id: "N/A",
   };
   return {
     section_id:     source.section_id     || "N/A",
+ 
     material:       source.material       || "N/A",
     pressure_class: source.pressure_class || "N/A",
     depth:          source.depth          ?? null,
@@ -241,6 +242,8 @@ const PipelineResources = () => {
           pipe_specs: {
             section_id: pipeSpec.section_id,
             pipe_id: pipeSpec.pipe_id,
+            flowmeter_id: pipeSpec.flowmeter_id,
+            sensor_id: pipeSpec.sensor_id,
             material: pipeSpec.material,
             pressure_class: pipeSpec.pressure_class,
             depth: pipeSpec.depth,
@@ -363,6 +366,8 @@ const PipelineResources = () => {
             </TableHeader>
             <TableBody>
               <TableRow><TableCell>section_id</TableCell><TableCell>varchar</TableCell><TableCell>NO</TableCell><TableCell>{pipeSpec.section_id}</TableCell></TableRow>
+              <TableRow><TableCell>flowmeter_id</TableCell><TableCell>bigint</TableCell><TableCell>YES</TableCell><TableCell>{pipeSpec.flowmeter_id}</TableCell></TableRow>
+              <TableRow><TableCell>sensor_id</TableCell><TableCell>bigint</TableCell><TableCell>YES</TableCell><TableCell>{pipeSpec.sensor_id}</TableCell></TableRow>
               <TableRow><TableCell>material</TableCell><TableCell>text</TableCell><TableCell>NO</TableCell><TableCell>{pipeSpec.material}</TableCell></TableRow>
               <TableRow><TableCell>pressure_class</TableCell><TableCell>text</TableCell><TableCell>YES</TableCell><TableCell>{pipeSpec.pressure_class}</TableCell></TableRow>
               <TableRow><TableCell>depth</TableCell><TableCell>numeric(10,2)</TableCell><TableCell>YES</TableCell><TableCell>{pipeSpec.depth ?? "N/A"}{pipeSpec.depth != null ? " m" : ""}</TableCell></TableRow>

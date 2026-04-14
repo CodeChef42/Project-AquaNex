@@ -119,6 +119,8 @@ const PipelinesManagementPage = () => {
   const { workspace } = useAuth();
   const [incidents, setIncidents] = useState<any[]>([]);
   const [registeredPipelines, setRegisteredPipelines] = useState<any[]>([]);
+  const [forceSetup, setForceSetup] = useState(false);
+  const [wasScanning, setWasScanning] = useState(false);
 
   // Form State
   const [pipelineForm, setPipelineForm] = useState<any>({ 
@@ -135,6 +137,8 @@ const PipelinesManagementPage = () => {
   });
   
   const [pipelineState, setPipelineState] = useState<"form" | "success" | "done">("form");
+  const [registryMode, setRegistryMode] = useState<"existing" | "new">("existing");
+  const [selectedExistingPipeId, setSelectedExistingPipeId] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
@@ -209,6 +213,7 @@ const PipelinesManagementPage = () => {
       await api.post("/pipelines/", payloadToSave);
       await fetchPipelines(); 
 
+      setSelectedExistingPipeId(generatedPipeId);
       setPipelineState("success");
       setPipelineForm({ 
         pipeline_category: "mainline", material: "", pressure_class: "", nominal_dia: "", depth: "", water_capacity: "", start_lat: "", start_lng: "", end_lat: "", end_lng: "" 
@@ -227,9 +232,27 @@ const PipelinesManagementPage = () => {
     setGatewayIdInput,
     scanning,
     error,
+    scanStatus,
     geolocatedModuleDevices,
     isConfigured,
+    stripModuleDevices,
   } = moduleSetup;
+
+  useEffect(() => {
+    if (scanning) setWasScanning(true);
+  }, [scanning]);
+  useEffect(() => {
+    if (wasScanning && !scanning && !error && forceSetup) {
+      setWasScanning(false);
+      setForceSetup(false);
+    }
+  }, [error, forceSetup, scanning, wasScanning]);
+
+  const handleStartRescan = async () => {
+    setForceSetup(true);
+    setIncidents([]);
+    await stripModuleDevices();
+  };
   
   const fetchIncidents = async () => {
     try {
@@ -371,12 +394,57 @@ const PipelinesManagementPage = () => {
 
   const topAlerts = sortedAlerts.slice(0, 3);
 
-  if (!isConfigured) {
+  if (!isConfigured || forceSetup) {
     return (
       <div className="p-8 space-y-6">
         <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
         <Card>
-          <CardHeader><CardTitle>Devices Not Configured</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Pipeline Layout Map</CardTitle></CardHeader>
+          <CardContent>
+            <div className="rounded-xl border border-border overflow-hidden relative">
+              <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "420px", width: "100%" }}>
+                <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
+                <FitMapToPoints points={mapFocusPoints} fallbackZoom={11} maxZoom={16} />
+                {layoutPolygon.length > 2 && (
+                  <Polygon positions={layoutPolygon.map((point: any) => [point[1], point[0]])} pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }} />
+                )}
+                {registeredPipelines.map((pipe, idx) => {
+                  const sLat = parseFloat(pipe.start_lat);
+                  const sLng = parseFloat(pipe.start_lng);
+                  const eLat = parseFloat(pipe.end_lat);
+                  const eLng = parseFloat(pipe.end_lng);
+                  if (isNaN(sLat) || isNaN(sLng) || isNaN(eLat) || isNaN(eLng)) return null;
+                  return (
+                    <Polyline
+                      key={pipe.pipe_id || idx}
+                      positions={[[sLat, sLng], [eLat, eLng]]}
+                      pathOptions={{
+                        color: "#2e8b57",
+                        weight: 5,
+                        dashArray: undefined,
+                        lineCap: "round",
+                      }}
+                    />
+                  );
+                })}
+                {geolocatedModuleDevices.map((device: any) => (
+                  <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={6} pathOptions={{ color: "#ef4444", fillOpacity: 0.9, weight: 1 }}>
+                    <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle>{forceSetup ? "Rescan Devices" : "Devices Not Configured"}</CardTitle>
+              {forceSetup && (
+                <Button variant="outline" size="sm" onClick={() => setForceSetup(false)}>Cancel</Button>
+              )}
+            </div>
+          </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-2">
               <input
@@ -385,8 +453,11 @@ const PipelinesManagementPage = () => {
                 placeholder="Gateway ID"
                 className="flex-1 px-4 py-2 rounded-lg border border-border bg-background text-sm"
               />
-              <Button onClick={moduleSetup.scanAndConfigure} disabled={scanning}>{scanning ? "Scanning..." : "Configure Devices"}</Button>
+              <Button onClick={() => moduleSetup.scanAndConfigure({ rescan: forceSetup })} disabled={scanning}>
+                {scanning ? "Scanning..." : forceSetup ? "Rescan Devices" : "Configure Devices"}
+              </Button>
             </div>
+            {scanStatus && <p className="text-xs text-muted-foreground">{scanStatus}</p>}
             {error && <p className="text-sm text-destructive">{error}</p>}
           </CardContent>
         </Card>
@@ -397,6 +468,9 @@ const PipelinesManagementPage = () => {
   return (
     <div className="p-8 space-y-6">
       <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Pipelines Management" }]} />
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={handleStartRescan}>Rescan Devices</Button>
+      </div>
 
       <Card>
         <CardHeader><CardTitle>Pipeline Map</CardTitle></CardHeader>
@@ -421,13 +495,16 @@ const PipelinesManagementPage = () => {
 
                 return (
                   <LayerGroup key={pipe.pipe_id || idx}>
+                    {(() => {
+                      return (
+                        <>
                     <Polyline 
                       positions={[[sLat, sLng], [eLat, eLng]]} 
-                      pathOptions={{ color: "#0284c7", weight: 12, opacity: 0.3, lineCap: "round" }} 
+                      pathOptions={{ color: "#66cdaa", weight: 12, opacity: 0.35, lineCap: "round" }} 
                     />
                     <Polyline 
                       positions={[[sLat, sLng], [eLat, eLng]]} 
-                      pathOptions={{ color: "#38bdf8", weight: 4, dashArray: "10, 8", lineCap: "round" }}
+                      pathOptions={{ color: "#2e8b57", weight: 5, lineCap: "round" }}
                     >
                       <Popup>
                         <div className="text-xs space-y-2 min-w-[200px] p-1">
@@ -445,6 +522,9 @@ const PipelinesManagementPage = () => {
                         </div>
                       </Popup>
                     </Polyline>
+                        </>
+                      );
+                    })()}
                   </LayerGroup>
                 );
               })}
@@ -482,6 +562,48 @@ const PipelinesManagementPage = () => {
         <Card>
           <CardHeader><CardTitle>Pipeline Registry</CardTitle></CardHeader>
           <CardContent className="space-y-6">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={registryMode === "existing" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setRegistryMode("existing")}
+              >
+                Select Existing
+              </Button>
+              <Button
+                type="button"
+                variant={registryMode === "new" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setRegistryMode("new")}
+              >
+                Register New
+              </Button>
+            </div>
+
+            {registryMode === "existing" && (
+              <div className="space-y-3 rounded-lg border p-4">
+                <p className="text-sm font-medium">Select Existing Pipeline</p>
+                <select
+                  value={selectedExistingPipeId}
+                  onChange={(e) => setSelectedExistingPipeId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                >
+                  <option value="">Choose a pipeline...</option>
+                  {registeredPipelines.map((pipe: any) => (
+                    <option key={pipe.pipe_id} value={pipe.pipe_id}>
+                      {pipe.pipe_id} ({pipe.pipeline_category || "pipeline"})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Selected pipeline is displayed on the map.
+                </p>
+              </div>
+            )}
+
+            {registryMode === "new" && (
+              <>
             <div className="bg-muted/30 p-4 rounded-lg border border-border">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Descriptor</p>
               <p className="text-lg font-mono font-medium text-primary">
@@ -550,6 +672,8 @@ const PipelinesManagementPage = () => {
                 {isSaving ? "Saving..." : "Save Pipeline"}
               </Button>
             </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}

@@ -247,8 +247,15 @@ const SoilSalinity = () => {
   const {
     gatewayIdInput, setGatewayIdInput,
     scanning, error, missingTypes,
+    scanStatus,
     geolocatedModuleDevices, isConfigured,
+    stripModuleDevices,
   } = moduleSetup;
+
+  const handleStartRescan = async () => {
+    setForceSetup(true);
+    await stripModuleDevices();
+  };
 
   // Track scan lifecycle for auto-dismiss
   useEffect(()=>{ if (scanning) setWasScanning(true); },[scanning]);
@@ -306,6 +313,33 @@ const SoilSalinity = () => {
         </div>
         <Card>
           <CardHeader>
+            <CardTitle className="text-base">Zone Layout Map</CardTitle>
+            <CardDescription>Layout is always visible; devices appear after scan/rescan.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-lg border border-border overflow-hidden" style={{height:340}}>
+              <MapContainer center={DUBAI_CENTER} zoom={11} style={{height:"100%",width:"100%"}}>
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles © Esri"
+                />
+                <FitMapToPointsOnce points={mapFocusPoints.length?mapFocusPoints:[DUBAI_CENTER]}/>
+                {layoutPolygon.length >= 3 && (
+                  <Polygon positions={layoutPolygon}
+                    pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.18, dashArray: "6 4" }}/>
+                )}
+                {sensors.map(s => (
+                  <CircleMarker key={s.id} center={[s.lat, s.lng]} radius={5}
+                    pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.85 }}>
+                    <Popup><div className="text-xs"><p className="font-semibold">{s.id}</p><p>{s.zone_id}</p></div></Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
             <CardTitle className="text-base">
               {forceSetup?"Rescan Devices":"Configure Sensors"}
             </CardTitle>
@@ -324,7 +358,7 @@ const SoilSalinity = () => {
                 placeholder="Gateway ID (e.g. AQN-GW-001)"
                 className="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-sm"
               />
-              <Button type="button" onClick={moduleSetup.scanAndConfigure} disabled={scanning}
+              <Button type="button" onClick={() => moduleSetup.scanAndConfigure({ rescan: forceSetup })} disabled={scanning}
                 className="min-w-[140px]">
                 {scanning ? (
                   <span className="flex items-center gap-2">
@@ -338,6 +372,7 @@ const SoilSalinity = () => {
                 ) : forceSetup ? "Rescan" : "Configure Devices"}
               </Button>
             </div>
+            {scanStatus&&<p className="text-xs text-muted-foreground">{scanStatus}</p>}
             {error&&<p className="text-sm text-destructive">{error}</p>}
           </CardContent>
         </Card>
@@ -360,7 +395,7 @@ const SoilSalinity = () => {
           </p>
         </div>
         <Button type="button" variant="outline" size="sm" className="gap-2 text-xs"
-          onClick={()=>setForceSetup(true)}>
+          onClick={handleStartRescan}>
           <RefreshCw className="w-3.5 h-3.5"/>
           Rescan Devices
         </Button>

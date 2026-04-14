@@ -11,10 +11,11 @@ const api = axios.create({
 
 // 1. Request Interceptor: Attaches the token to every outgoing request
 api.interceptors.request.use((config) => {
-  const publicRoutes = ['/auth/register/', '/auth/login/', '/auth/refresh/', '/auth/google/'];
+  const publicRoutes = ['/auth/register/', '/auth/login/', '/auth/refresh/', '/auth/google/', '/gateway-telemetry/'];
   
   // Safety check to ensure config.url exists
   const isPublic = config.url ? publicRoutes.some(route => config.url.includes(route)) : false;
+  const workspaceId = localStorage.getItem('selected_workspace_id');
 
   if (!isPublic) {
     // 🔥 CRITICAL: Must match the key saved in your Google Auth ("access")
@@ -22,11 +23,11 @@ api.interceptors.request.use((config) => {
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
-    const workspaceId = localStorage.getItem('selected_workspace_id');
-    if (workspaceId) {
-      config.headers['X-Workspace-Id'] = workspaceId;
-    }
+  }
+
+  // Keep workspace scoping on all API routes, including public telemetry ingest.
+  if (workspaceId) {
+    config.headers['X-Workspace-Id'] = workspaceId;
   }
   return config;
 }, (error) => {
@@ -38,9 +39,11 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const requestUrl = String(originalRequest?.url || '');
+    const isTelemetryRoute = requestUrl.includes('/gateway-telemetry/');
 
     // If we get a 401 and haven't tried to retry yet
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && !originalRequest?._retry && !isTelemetryRoute) {
       originalRequest._retry = true;
 
       try {
@@ -62,6 +65,7 @@ api.interceptors.response.use(
         localStorage.setItem('access_token', access);
 
         // Update the header of the original failed request and retry it
+        originalRequest.headers = originalRequest.headers || {};
         originalRequest.headers.Authorization = `Bearer ${access}`;
         return api(originalRequest);
         

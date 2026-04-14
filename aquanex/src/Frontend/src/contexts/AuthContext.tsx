@@ -197,7 +197,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
 
   const deleteWorkspace = async (workspaceId: string) => {
-    await api.delete(`/onboarding/${workspaceId}/delete/`);
+    try {
+      await api.delete(`/workspaces/${workspaceId}/delete/`);
+    } catch {
+      // Backward-compatible fallback route.
+      await api.delete(`/onboarding/${workspaceId}/delete/`);
+    }
+    setWorkspaces((prev) => prev.filter((w) => w.id !== workspaceId));
     if (workspace?.id === workspaceId) {
       setWorkspace(null);
       setSelectedWorkspaceId(null);

@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-type SimPage = "pipeline" | "soil" | "demand" | "water";
-
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+type SimPage = "pipeline" | "soil" | "water";
 
 const isPipelineDeviceType = (type = "") => {
   const t = String(type || "").toLowerCase();
@@ -38,7 +36,6 @@ const matchesPage = (metric: string, type = "", id = "", page: SimPage) => {
   if (page === "pipeline") return isPipelineDeviceType(type);
   const group = metricGroup(metric, type, id);
   if (page === "soil") return group === "salinity";
-  if (page === "demand") return group === "soil";
   return group === "water";
 };
 
@@ -61,9 +58,6 @@ const Simulation = () => {
 
   const [activePage, setActivePage] = useState<SimPage>("pipeline");
   const [deviceEnabled, setDeviceEnabled] = useState<Record<string, boolean>>({});
-  const [intervalSec, setIntervalSec] = useState(
-    Number(localStorage.getItem("aquanex_sim_interval_sec") || 60)
-  );
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo(
@@ -106,7 +100,6 @@ const Simulation = () => {
   const subpages: Array<{ id: SimPage; label: string }> = [
     { id: "pipeline", label: "Pipeline Data" },
     { id: "soil", label: "Soil Salinity" },
-    { id: "demand", label: "Demand Forecasting" },
     { id: "water", label: "Water Quality" },
   ];
 
@@ -116,12 +109,6 @@ const Simulation = () => {
       case "Breakage": return "destructive";
       default: return "secondary";
     }
-  };
-
-  const handleIntervalChange = (val: number) => {
-      const safe = clamp(val, 1, 60); // Allow up to 60s
-      setIntervalSec(safe);
-      localStorage.setItem("aquanex_sim_interval_sec", String(safe));
   };
 
   return (
@@ -154,15 +141,6 @@ const Simulation = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium">Interval (seconds)</label>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={intervalSec}
-              onChange={(e) => handleIntervalChange(Number(e.target.value))}
-              className="w-24 px-3 py-2 rounded-lg border border-border bg-background text-sm"
-            />
             <Button onClick={startSimulation} disabled={isRunning || !gatewayId || activeDevices.length === 0}>
               Start Global Sim
             </Button>

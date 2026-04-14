@@ -62,11 +62,15 @@ class ChangePasswordSerializer(serializers.Serializer):
         if not check_password(data['secret_key'], user.secret_key_hash):
             raise serializers.ValidationError({'secret_key': 'Invalid secret key.'})
 
+        if data['current_password'] == data['new_password']:
+            raise serializers.ValidationError({'new_password': 'New password must be different from current password.'})
+
         return data
 
     def save(self):
         user = self.context['request'].user
-        user.set_password(self.validated_data['new_password'])
+        # Always persist a hashed password in DB.
+        user.password = make_password(self.validated_data['new_password'])
         user.save(update_fields=['password'])
         return user
 

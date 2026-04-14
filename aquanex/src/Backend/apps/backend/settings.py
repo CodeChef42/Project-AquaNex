@@ -141,6 +141,10 @@ import psycopg2
 logger = logging.getLogger(__name__)
 
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_NAME = os.environ.get('DB_NAME', 'postgres')
+DB_USER = os.environ.get('DB_USER', 'postgres.xxiojmtocfiawqzcxffi')
+DB_HOST = os.environ.get('DB_HOST', 'aws-1-ap-northeast-1.pooler.supabase.com')
+DB_PORT = os.environ.get('DB_PORT', '6543')
 
 DATABASES = {
     'default': {
@@ -152,11 +156,11 @@ DATABASES = {
 if DB_PASSWORD:
     try:
         conn = psycopg2.connect(
-            dbname='postgres',
-            user='postgres.xxiojmtocfiawqzcxffi',
+            dbname=DB_NAME,
+            user=DB_USER,
             password=DB_PASSWORD,
-            host='aws-1-ap-northeast-1.pooler.supabase.com',
-            port='6543',
+            host=DB_HOST,
+            port=DB_PORT,
             sslmode='require',
             connect_timeout=5,
         )
@@ -164,11 +168,11 @@ if DB_PASSWORD:
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.postgresql',
-                'NAME': 'postgres',
-                'USER': 'postgres.xxiojmtocfiawqzcxffi',
+                'NAME': DB_NAME,
+                'USER': DB_USER,
                 'PASSWORD': DB_PASSWORD,
-                'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
-                'PORT': '6543',
+                'HOST': DB_HOST,
+                'PORT': DB_PORT,
                 'OPTIONS': {
                     'sslmode': 'require',
                     'connect_timeout': 5,
@@ -177,7 +181,7 @@ if DB_PASSWORD:
                 'CONN_HEALTH_CHECKS': True,
             }
         }
-        print(" Connected to Supabase PostgreSQL")
+        print(f" Connected to PostgreSQL host={DB_HOST} port={DB_PORT}")
     except Exception as e:
         print(f" Supabase connection failed: {e}")
         print(" Falling back to SQLite")
