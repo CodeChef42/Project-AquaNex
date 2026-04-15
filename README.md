@@ -102,5 +102,28 @@ For detailed instructions on each component, please refer to the specific README
 -   [ML API Documentation](./aquanex/src/ML_Api/README.md)
 
 ---
+## ⚙️ Web Platform Configuration
 
+### Common Configurations
+
+- The platform requires users to partake in entering information to be able to make full use of the features.
+- For the IoT layer, we have configured sample devices on the thingsboard IoT platform. The devices are connected to specific gateways that act as the bridge between the IoT layer and the AquaNex platform.
+
+- Below are the gateway configurations users are required to enter in the scan devices field for each page, except the incidents analytics page:
+  1. Pipelines Management: AQN-GW-001   
+  2. Soil Salinity Console: AQN-GW-002   
+  3. Water Quality Monitoring: WQ-GATEWAY-01  
+  4. Water Demand Forecasting: AQN-GW-003   
+
+#### NOTE: If the device registration does not work as expected, or it maybe displaying invalid coordinates, please use the 'rescan devices' option which is found at the beginning of the page.
+
+
+### Page-specific Configuration
+
+1. Pipeline registry: This action applies to the pipelines management and water quality monitoring pages, where the user is required to register a new pipeline based on specification documents, or select an existing pipeline depending on the workspace.
+2. Plant data registry: This action applies only to the water demand forecasting page, where the user is required to enter details of a zone, a type of plant in that zone, and the number of plants. This is used as a demand forecasting metric.
+
+---
 Developed by **Technium**.
+
+Developers: Israr, Saad, Bilal, Abrar and Atsushi.
