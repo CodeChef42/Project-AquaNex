@@ -26,8 +26,7 @@ AquaNex is built on a distributed microservices architecture:
 -   **Multi-Workspace Management:** Create and manage multiple farms or industrial sites under a single account.
 -   **Interactive Map Visualization:** Geofencing and layout definition using Leaflet. Visualize pipelines, sensors, and field devices on an interactive map.
 -   **Real-Time Monitoring:** Live telemetry stream for flow rates, pressure, and soil salinity/moisture.
--   **AI Anomaly Detection:** Automated detection of pipe breakages and leakages using a combination of hydraulic rules and Machine Learning.----0-09
-
+-   **AI Anomaly Detection:** Automated detection of pipe breakages and leakages using a combination of hydraulic rules and Machine Learning.
 -   **Incident Management:** Automated incident logging, severity assessment, and recovery tracking.
 -   **Demand Forecasting:** Predict water requirements based on crop types, soil conditions, and system efficiency.
 -   **User Onboarding:** A streamlined process for setting up organizations, inviting team members, and configuring IoT gateways/devices.
@@ -36,9 +35,9 @@ AquaNex is built on a distributed microservices architecture:
 
 ## 🔐 Authentication & Security
 
+-   **Password Strength Check (zxcvbn-ts):** Passwords are scored based on password strength and must meet all requirements before registering.
 -   **JWT-Based Auth:** Secure token-based authentication (Access & Refresh tokens).
 -   **Google OAuth:** Support for seamless Social Login.
--   **Role-Based Access:** Support for Owners, Technicians, and Customers with varying permission levels.
 -   **Secure API:** Internal communication between services is protected via internal tokens.
 
 ---
