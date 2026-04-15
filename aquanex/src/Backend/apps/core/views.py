@@ -82,6 +82,24 @@ def _optional_float(value):
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
+def _canonical_module_id(value):
+    token = str(value or "").strip().lower()
+    aliases = {
+        "pipeline_management": "pipeline_management",
+        "pipeline": "pipeline_management",
+        "soil_salinity": "soil_salinity",
+        "salinity": "soil_salinity",
+        "water_quality": "water_quality",
+        "water": "water_quality",
+        "demand_forecasting": "demand_forecasting",
+        "demand": "demand_forecasting",
+        "incident_analytics": "incident_analytics",
+        "analytics": "incident_analytics",
+        "history_log": "history_log",
+        "history": "history_log",
+    }
+    return aliases.get(token, "")
+
 def _workspace_id_from_request(request):
     """Extracts the active workspace ID from request data, query params, or headers."""
     data = getattr(request, "data", None)
@@ -1539,6 +1557,116 @@ def _groq_demand_zone_forecast(zone_payloads, weather_context):
     return normalized
 
 
+def _groq_docs_navigation_reply(question, workspace=None):
+    api_key = str(os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is required")
+    model = str(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+    workspace_modules = []
+    if workspace and isinstance(getattr(workspace, "modules", None), list):
+        workspace_modules = [str(m) for m in workspace.modules]
+
+    setup_context = {
+        "pipeline_management": {
+            "required_device_types": ["flowmeter", "pressure_sensor"],
+            "expected_behavior_when_unconfigured": "Pipeline page shows device setup/scan panel until required gateway devices are configured.",
+            "quick_fix": [
+                "Open /pipeline",
+                "Enter gateway ID",
+                "Click Configure Devices (or Rescan Devices)",
+                "Wait for registration to finish, then page switches to main pipeline view",
+            ],
+        },
+        "water_quality": {
+            "required_device_types": ["ph_sensor", "turbidity_sensor"],
+        },
+        "soil_salinity": {
+            "required_device_types": ["soil_moisture_sensor", "soil_salinity_sensor"],
+        },
+    }
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(
+            {
+                "model": model,
+                "temperature": 0.25,
+                "max_tokens": 450,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are AquaNex navigation assistant. Help users navigate pages, explain where features are, "
+                            "and provide concise step-by-step guidance. "
+                            "When user says a module page shows Scan Devices/setup instead of dashboard, explain that required gateway devices are not configured yet and they must scan/register gateway first."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "question": str(question or ""),
+                                "workspace_modules": workspace_modules,
+                                "available_pages": [
+                                    "/home",
+                                    "/pipeline",
+                                    "/water-quality",
+                                    "/soil-salinity",
+                                    "/demand-forecasting",
+                                    "/incident-analytics",
+                                    "/history",
+                                    "/settings",
+                                    "/workspaces",
+                                    "/info",
+                                ],
+                                "module_setup_context": setup_context,
+                                "response_style": "short actionable bullets, mention exact page path where relevant. prioritize concrete next steps over generic troubleshooting.",
+                            }
+                        ),
+                    },
+                ],
+            }
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    choices = payload.get("choices") if isinstance(payload, dict) else []
+    content = ((choices[0] or {}).get("message") or {}).get("content") if choices else ""
+    answer = str(content or "").strip()
+    if not answer:
+        raise ValueError("Empty assistant reply")
+    return answer
+
+
+def _docs_rule_based_reply(question, workspace=None):
+    q = str(question or "").strip().lower()
+    if not q:
+        return None
+    pipeline_terms = ["pipeline", "/pipeline", "scan devices", "configure devices", "rescan"]
+    if any(term in q for term in pipeline_terms):
+        modules = workspace.modules if workspace and isinstance(getattr(workspace, "modules", None), list) else []
+        module_enabled = "pipeline_management" in [str(m) for m in modules]
+        gateway_hint = str(getattr(workspace, "gateway_id", "") or "").strip()
+        gateway_line = (
+            f"- Use gateway ID `{gateway_hint}` in the scan field if that is your active pipeline gateway.\n"
+            if gateway_hint
+            else "- Enter your pipeline gateway ID in the scan field (example: `AQN-GW-001`).\n"
+        )
+        return (
+            "You are seeing the setup panel because pipeline required devices are not configured yet.\n\n"
+            "Do this to unlock the full pipeline page:\n"
+            "- Go to `/pipeline`.\n"
+            f"{gateway_line}"
+            "- Click `Configure Devices` (or `Rescan Devices`).\n"
+            "- Wait for scan/registration to finish.\n"
+            "- After success, pipeline map/cards load automatically.\n\n"
+            f"Module check: `pipeline_management` is {'enabled' if module_enabled else 'not enabled'} for this workspace.\n"
+            "If still stuck: open `/settings` -> Workspace Modules and enable `Pipeline Management`, then rescan."
+        )
+    return None
+
+
 def _infer_metric_family(metric, device_type):
     metric_key = str(metric or "").strip().lower()
     if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
@@ -2829,7 +2957,12 @@ class WorkspaceInviteView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        workspace = _resolve_user_workspace(request, create_if_missing=True)
+        requested_workspace_id = request.data.get("workspace_id") or _workspace_id_from_request(request)
+        workspace = None
+        if requested_workspace_id:
+            workspace = Workspace.objects.filter(id=requested_workspace_id, owner=request.user).first()
+        if workspace is None:
+            workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
             return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2862,14 +2995,43 @@ class WorkspaceInviteView(APIView):
 
         try:
             from .utils import send_workspace_invite
-            success = send_workspace_invite(email, workspace_name, inviter_name, invite_link)
+            success, delivery_debug = send_workspace_invite(
+                email,
+                workspace_name,
+                inviter_name,
+                invite_link,
+                return_meta=True,
+            )
             if success:
-                return Response({"success": True, "message": f"Invitation sent to {email}"})
+                return Response({
+                    "success": True,
+                    "message": f"Invitation sent to {email}",
+                    "invite_link": invite_link,
+                    "email": email,
+                    "delivery_debug": delivery_debug,
+                })
             else:
-                return Response({"success": False, "error": "Failed to send email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Failed to send email",
+                        "invite_link": invite_link,
+                        "email": email,
+                        "delivery_debug": delivery_debug,
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
         except Exception as e:
             logger.error(f"Failed to send invite email: {e}")
-            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "invite_link": invite_link,
+                    "email": email,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class AcceptInviteView(APIView):
@@ -2898,6 +3060,7 @@ class AcceptInviteView(APIView):
         invite, error = self._get_valid_invite(token)
         if error:
             return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+        UserModel = get_user_model()
 
         full_name = str(request.data.get('full_name', '')).strip()
         password = str(request.data.get('password', '')).strip()
@@ -2907,38 +3070,78 @@ class AcceptInviteView(APIView):
         if len(password) < 8:
             return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(email=invite.email).exists():
+        if UserModel.objects.filter(email=invite.email).exists():
             return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Derive a unique username from the email local-part
         base = re.sub(r'[^a-zA-Z0-9_]', '', invite.email.split('@')[0]) or 'user'
         username = base
         counter = 1
-        while User.objects.filter(username=username).exists():
+        while UserModel.objects.filter(username=username).exists():
             username = f"{base}{counter}"
             counter += 1
 
         import secrets as _secrets
         from django.contrib.auth.hashers import make_password as _make_password
 
-        user = User.objects.create_user(
-            username=username,
-            password=password,
-            full_name=full_name,
-            email=invite.email,
-        )
-        user.secret_key_hash = _make_password(_secrets.token_urlsafe(16))
-        user.save(update_fields=['secret_key_hash'])
+        try:
+            user = UserModel.objects.create_user(
+                username=username,
+                password=password,
+                full_name=full_name,
+                email=invite.email,
+            )
+            user.secret_key_hash = _make_password(_secrets.token_urlsafe(16))
+            user.save(update_fields=['secret_key_hash'])
 
-        invite.status = 'accepted'
-        invite.save(update_fields=['status'])
+            # Current data model is owner-scoped (no collaborator join table),
+            # so provision a cloned workspace for the invited user.
+            source_ws = invite.workspace
+            cloned_workspace = Workspace.objects.create(
+                owner=user,
+                workspace_name=source_ws.workspace_name or "Untitled Workspace",
+                company_name=source_ws.company_name or "AquaNex",
+                company_type=source_ws.company_type,
+                location=source_ws.location,
+                logo_url=source_ws.logo_url,
+                team_size=source_ws.team_size,
+                modules=(source_ws.modules or []).copy() if isinstance(source_ws.modules, list) else [],
+                gateway_id=source_ws.gateway_id,
+                devices=(source_ws.devices or []).copy() if isinstance(source_ws.devices, list) else [],
+                invite_emails=[],
+                threshold_soil_moisture=(source_ws.threshold_soil_moisture or []).copy() if isinstance(source_ws.threshold_soil_moisture, list) else [],
+                threshold_ph=(source_ws.threshold_ph or []).copy() if isinstance(source_ws.threshold_ph, list) else [],
+                threshold_pressure=(source_ws.threshold_pressure or []).copy() if isinstance(source_ws.threshold_pressure, list) else [],
+                notifications=(source_ws.notifications or []).copy() if isinstance(source_ws.notifications, list) else [],
+                demand_forecasting_plants=(source_ws.demand_forecasting_plants or []).copy() if isinstance(source_ws.demand_forecasting_plants, list) else [],
+                demand_forecasting_systems=(source_ws.demand_forecasting_systems or []).copy() if isinstance(source_ws.demand_forecasting_systems, list) else [],
+                layout_polygon=(source_ws.layout_polygon or []).copy() if isinstance(source_ws.layout_polygon, list) else [],
+                layout_area_m2=source_ws.layout_area_m2,
+                layout_notes=source_ws.layout_notes,
+                layout_file_name=source_ws.layout_file_name,
+                layout_status=source_ws.layout_status or "ready",
+                layout=(source_ws.layout or {}).copy() if isinstance(source_ws.layout, dict) else {},
+                layout_job_error=source_ws.layout_job_error,
+                status="active",
+            )
 
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-            'user': UserSerializer(user).data,
-        }, status=status.HTTP_201_CREATED)
+            invite.status = 'accepted'
+            invite.save(update_fields=['status'])
+
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'user': UserSerializer(user).data,
+                'workspace_id': str(cloned_workspace.id),
+                'workspace_name': cloned_workspace.workspace_name or "Untitled Workspace",
+            }, status=status.HTTP_201_CREATED)
+        except Exception as exc:
+            logger.exception("Accept invite failed for token=%s email=%s", token, invite.email)
+            return Response(
+                {"error": f"Invite acceptance failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class WorkspaceListView(APIView):
@@ -2951,6 +3154,56 @@ class WorkspaceListView(APIView):
             "workspaces": WorkspaceSerializer(workspaces, many=True).data,
             "active_workspace_id": str(active.id) if active else None,
         })
+
+    def patch(self, request):
+        data = request.data if hasattr(request, "data") else {}
+        workspace_id = data.get("workspace_id") or _workspace_id_from_request(request)
+        if workspace_id:
+            workspace = Workspace.objects.filter(id=workspace_id, owner=request.user).first()
+        else:
+            workspace = _resolve_user_workspace(request, create_if_missing=False)
+        if not workspace:
+            return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if "modules" in data:
+            modules = data.get("modules")
+            if not isinstance(modules, list):
+                return Response({"error": "modules must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+            allowed = {
+                "pipeline_management",
+                "soil_salinity",
+                "water_quality",
+                "demand_forecasting",
+                "incident_analytics",
+            }
+            normalized = []
+            for module_name in modules:
+                key = _canonical_module_id(module_name)
+                if key and key in allowed and key not in normalized:
+                    normalized.append(key)
+            if not normalized:
+                return Response({"error": "At least one module must be selected"}, status=status.HTTP_400_BAD_REQUEST)
+            workspace.modules = normalized
+
+        if "workspace_name" in data:
+            workspace_name = str(data.get("workspace_name") or "").strip()
+            if not workspace_name:
+                return Response({"error": "workspace_name cannot be empty"}, status=status.HTTP_400_BAD_REQUEST)
+            workspace.workspace_name = workspace_name
+
+        if "company_name" in data:
+            company_name = str(data.get("company_name") or "").strip()
+            if not company_name:
+                return Response({"error": "company_name cannot be empty"}, status=status.HTTP_400_BAD_REQUEST)
+            apply_company_to_all = _is_truthy(data.get("apply_company_to_all"))
+            if apply_company_to_all:
+                Workspace.objects.filter(owner=request.user).update(company_name=company_name)
+                workspace.company_name = company_name
+            else:
+                workspace.company_name = company_name
+
+        workspace.save()
+        return Response({"workspace": WorkspaceSerializer(workspace).data}, status=status.HTTP_200_OK)
 
 class WorkspaceDeleteView(APIView):
     permission_classes = [IsAuthenticated]
@@ -4558,6 +4811,31 @@ class DemandForecastAssistantView(APIView):
                 for z in cleaned_zones
             ]
             return Response({"source": "heuristic_fallback", "llm_error": str(exc), "zone_forecasts": fallback}, status=200)
+
+
+class InfoAssistantView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data if hasattr(request, "data") else {}
+        question = str(data.get("question") or "").strip()
+        if not question:
+            return Response({"error": "question is required"}, status=400)
+
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
+        rule_reply = _docs_rule_based_reply(question, workspace=workspace)
+        if rule_reply:
+            return Response({"source": "rule_based", "reply": rule_reply}, status=200)
+        try:
+            reply = _groq_docs_navigation_reply(question, workspace=workspace)
+            return Response({"source": "groq_llm", "reply": reply}, status=200)
+        except Exception as exc:
+            logger.warning("InfoAssistantView fallback: %s", str(exc))
+            fallback_reply = (
+                "Open /home for overview, /settings for workspace configuration, /pipeline for leak detection, "
+                "/water-quality for pH & turbidity, /soil-salinity for EC insights, and /demand-forecasting for demand planning."
+            )
+            return Response({"source": "heuristic_fallback", "llm_error": str(exc), "reply": fallback_reply}, status=200)
 
 
 def _openweather_error_response(status_code, response_text=None):

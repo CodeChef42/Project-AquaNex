@@ -134,29 +134,55 @@ const IncidentAnalysis = () => {
   const reportedIssues = incidents.length;
   const ongoingAlerts = incidents.filter((i) => isOngoing(String(i.status || ""))).length;
   const criticalAlerts = incidents.filter((i) => ["critical", "high"].includes(String(i.severity || "").toLowerCase())).length;
+  const trendStats = useMemo(() => {
+    const now = new Date();
+    const currentStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const previousStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    let current = 0;
+    let previous = 0;
+    normalized.forEach(({ date }) => {
+      if (date >= currentStart && date <= now) current += 1;
+      else if (date >= previousStart && date < currentStart) previous += 1;
+    });
+    const delta = current - previous;
+    const pct = previous > 0 ? (delta / previous) * 100 : current > 0 ? 100 : 0;
+    return { current, previous, delta, pct };
+  }, [normalized]);
 
   const chartData = useMemo(() => {
     const now = new Date();
 
     if (rangeMode === "weekly") {
-      const weekLabels = ["W1", "W2", "W3", "W4", "W5"];
-      const counts = [0, 0, 0, 0, 0];
+      // Rolling 5 weeks from current date (dynamic, not fixed calendar buckets).
+      const buckets = Array.from({ length: 5 }, (_, i) => {
+        const end = new Date(now.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+        const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const label = end.toLocaleDateString("en-US", { month: "short", day: "2-digit" });
+        return { start, end, label, issues: 0 };
+      }).reverse();
       normalized.forEach(({ date }) => {
-        if (date.getFullYear() !== now.getFullYear() || date.getMonth() !== now.getMonth()) return;
-        const idx = Math.min(4, Math.floor((date.getDate() - 1) / 7));
-        counts[idx] += 1;
+        const bucket = buckets.find((b) => date >= b.start && date < b.end);
+        if (bucket) bucket.issues += 1;
       });
-      return weekLabels.map((label, idx) => ({ label, issues: counts[idx] }));
+      return buckets.map((b) => ({ label: b.label, issues: b.issues }));
     }
 
     if (rangeMode === "monthly") {
-      const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const counts = new Array(12).fill(0);
-      normalized.forEach(({ date }) => {
-        if (date.getFullYear() !== now.getFullYear()) return;
-        counts[date.getMonth()] += 1;
+      // Rolling 12 months ending current month.
+      const months = Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+        return {
+          year: d.getFullYear(),
+          month: d.getMonth(),
+          label: d.toLocaleDateString("en-US", { month: "short" }),
+          issues: 0,
+        };
       });
-      return labels.map((label, idx) => ({ label, issues: counts[idx] }));
+      normalized.forEach(({ date }) => {
+        const hit = months.find((m) => m.year === date.getFullYear() && m.month === date.getMonth());
+        if (hit) hit.issues += 1;
+      });
+      return months.map((m) => ({ label: m.label, issues: m.issues }));
     }
 
     const years = [now.getFullYear() - 4, now.getFullYear() - 3, now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear()];
@@ -366,6 +392,19 @@ const IncidentAnalysis = () => {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Trend (Last 7 Days vs Previous 7 Days)</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between">
+          <div className="text-2xl font-bold">{trendStats.current}</div>
+          <div className={`text-sm font-semibold ${trendStats.delta > 0 ? "text-destructive" : trendStats.delta < 0 ? "text-emerald-600" : "text-muted-foreground"}`}>
+            {trendStats.delta > 0 ? "+" : ""}
+            {trendStats.delta} ({trendStats.pct.toFixed(1)}%)
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="space-y-4">

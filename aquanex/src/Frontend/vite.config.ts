@@ -8,6 +8,8 @@ export default defineConfig(() => ({
     host: "::",
     port: 3001,
     strictPort: true,
+    // Add this line here:
+    allowedHosts: ["www.aquanex.app", "aquanex.app"],
   },
   plugins: [react()],
   resolve: {

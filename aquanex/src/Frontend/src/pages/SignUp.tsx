@@ -114,7 +114,6 @@ const SignUp = () => {
   const strength      = score >= 0 ? strengthConfig[score] : null;
   const zxcvbnWarning = zxcvbnResult?.feedback?.warning;
   const zxcvbnHint    = zxcvbnResult?.feedback?.suggestions?.[0];
-  const crackTime     = zxcvbnResult?.crackTimesDisplay?.offlineSlowHashing1e4PerSecond;
 
   const passwordRules = [
     ...staticRules.map((r) => ({ ...r, passed: r.test(password) })),
@@ -481,14 +480,9 @@ const SignUp = () => {
                     </div>
                   )}
 
-                  {/* Crack time + zxcvbn feedback */}
-                  {password && (zxcvbnWarning || zxcvbnHint || crackTime) && (
+                  {/* zxcvbn feedback */}
+                  {password && (zxcvbnWarning || zxcvbnHint) && (
                     <div className="space-y-0.5 mt-1">
-                      {crackTime && (
-                        <p className="text-xs text-slate-400 dark:text-slate-500">
-                          Crack time: {crackTime}
-                        </p>
-                      )}
                       {(zxcvbnWarning || zxcvbnHint) && (
                         <p className="text-xs text-amber-500 dark:text-amber-400">
                           {zxcvbnWarning || zxcvbnHint}

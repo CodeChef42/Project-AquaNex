@@ -235,6 +235,7 @@ const PipelinesManagementPage = () => {
     scanStatus,
     geolocatedModuleDevices,
     isConfigured,
+    fallbackConfigured,
     stripModuleDevices,
   } = moduleSetup;
 
@@ -282,14 +283,35 @@ const PipelinesManagementPage = () => {
     }
   };
 
+  const demoPipelineDevices = useMemo(() => {
+    const pointsFromLayout = (Array.isArray(layoutPolygon) ? layoutPolygon : [])
+      .map((p: any) => {
+        const lng = Number(p?.[0]);
+        const lat = Number(p?.[1]);
+        return Number.isFinite(lat) && Number.isFinite(lng) ? ({ lat, lng }) : null;
+      })
+      .filter(Boolean) as Array<{ lat: number; lng: number }>;
+    const base = pointsFromLayout[0] || { lat: DUBAI_CENTER[0], lng: DUBAI_CENTER[1] };
+    return [
+      { id: "AQN-FM-DEMO-01", type: "flowmeter", lat: base.lat + 0.0008, lng: base.lng + 0.0008 },
+      { id: "AQN-PR-DEMO-01", type: "pressure_sensor", lat: base.lat - 0.0007, lng: base.lng - 0.0006 },
+    ];
+  }, [layoutPolygon]);
+
+  const visibleModuleDevices = useMemo(() => {
+    if (geolocatedModuleDevices.length > 0) return geolocatedModuleDevices;
+    if (fallbackConfigured) return demoPipelineDevices;
+    return geolocatedModuleDevices;
+  }, [demoPipelineDevices, fallbackConfigured, geolocatedModuleDevices]);
+
   // Map focus points calculation
   const mapFocusPoints = useMemo<[number, number][]>(() => {
     const fromLayout = layoutPolygon
       .map((point: any) => [point?.[1], point?.[0]] as [number, number])
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
-      
-    const fromDevices = geolocatedModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
-    
+
+    const fromDevices = visibleModuleDevices.map((d: any) => [d.lat, d.lng] as [number, number]);
+
     const fromPipelines: [number, number][] = [];
     registeredPipelines.forEach(pipe => {
       const sl = parseFloat(pipe.start_lat);
@@ -298,7 +320,7 @@ const PipelinesManagementPage = () => {
       if (!isNaN(el)) fromPipelines.push([el, parseFloat(pipe.end_lng)]);
     });
     return [...fromLayout, ...fromDevices, ...fromPipelines];
-  }, [geolocatedModuleDevices, layoutPolygon, registeredPipelines]);
+  }, [layoutPolygon, registeredPipelines, visibleModuleDevices]);
 
   const sortedAlerts = useMemo(() => {
     const findPipeForIncident = (inc: any, details: any) => {
@@ -427,7 +449,7 @@ const PipelinesManagementPage = () => {
                     />
                   );
                 })}
-                {geolocatedModuleDevices.map((device: any) => (
+                {visibleModuleDevices.map((device: any) => (
                   <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={6} pathOptions={{ color: "#ef4444", fillOpacity: 0.9, weight: 1 }}>
                     <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
                   </CircleMarker>
@@ -458,7 +480,7 @@ const PipelinesManagementPage = () => {
               </Button>
             </div>
             {scanStatus && <p className="text-xs text-muted-foreground">{scanStatus}</p>}
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {!fallbackConfigured && error && <p className="text-sm text-destructive">{error}</p>}
           </CardContent>
         </Card>
       </div>
@@ -475,6 +497,12 @@ const PipelinesManagementPage = () => {
       <Card>
         <CardHeader><CardTitle>Pipeline Map</CardTitle></CardHeader>
         <CardContent>
+          {fallbackConfigured && (
+            <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <p className="text-sm font-medium text-emerald-700">Fallback Active</p>
+              <p className="text-xs text-emerald-700/90">Live scan unavailable. Showing demo pipeline devices.</p>
+            </div>
+          )}
           <div className="rounded-xl border border-border overflow-hidden relative">
             <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "560px", width: "100%" }}>
               <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
@@ -530,7 +558,7 @@ const PipelinesManagementPage = () => {
               })}
 
               {/* Render Devices */}
-              {geolocatedModuleDevices.map((device: any) => (
+              {visibleModuleDevices.map((device: any) => (
                 <CircleMarker key={device.id} center={[device.lat, device.lng]} radius={7} pathOptions={{ color: "#ef4444", fillOpacity: 0.9, weight: 1 }}>
                   <Popup><p className="font-semibold">{device.id}</p><p>{device.type}</p></Popup>
                 </CircleMarker>

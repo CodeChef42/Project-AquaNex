@@ -13,6 +13,7 @@ import MainLayout from "./components/layout/MainLayout";
 const LandingPage             = lazy(() => import("./pages/LandingPage"));
 const Home                    = lazy(() => import("./pages/Home"));
 const InfoPage                = lazy(() => import("./pages/InfoPage")); // ✅ Added InfoPage
+const InfoAssistantPage       = lazy(() => import("./pages/InfoAssistantPage"));
 const PipelinesManagementPage = lazy(() => import("./pages/pipeline/PipelinesManagementPage"));
 const IncidentDetails         = lazy(() => import("./pages/pipeline/IncidentDetails"));
 const AlertList               = lazy(() => import("./pages/pipeline/AlertQueue"));
@@ -98,6 +99,7 @@ const App = () => (
                 <Route element={<ProtectedRoute />}>
                   <Route path="/home"       element={<Home />} />
                   <Route path="/info"       element={<InfoPage />} /> {/* ✅ Registered Route */}
+                  <Route path="/info/assistant" element={<InfoAssistantPage />} />
                   <Route path="/workspaces" element={<Workspaces />} />
                   <Route path="/settings"   element={<Settings />} />
                   <Route path="/simulation" element={<Simulation />} />

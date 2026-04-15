@@ -8,6 +8,7 @@ import {
   History,
   TerminalSquare,
   Settings,
+  Bot,
   Info, // Ensure Info is imported
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
@@ -98,6 +99,22 @@ export function AppSidebar() {
       {/* ✅ NEW: Information button pinned to the absolute bottom */}
       <SidebarFooter className="p-2 border-t border-cyan-100">
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              tooltip="AI Help"
+              className="hover:bg-cyan-50 transition-colors text-slate-500 hover:text-cyan-700"
+            >
+              <NavLink
+                to="/info/assistant"
+                className="flex items-center gap-2"
+                activeClassName="text-cyan-700 font-medium"
+              >
+                <Bot className="w-4 h-4 shrink-0" />
+                {open && <span>AI Help</span>}
+              </NavLink>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild

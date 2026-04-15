@@ -19,6 +19,7 @@ import {
   Marker,
   Popup,
 } from "react-leaflet";
+import { Plus, Minus } from "lucide-react";
 import {
   MapDrawingHandler,
   FitMapToPoints,
@@ -40,6 +41,13 @@ type ExtractedPoint = {
 };
 
 const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "kml", "dwg"];
+const MODULE_OPTIONS = [
+  { id: "pipeline_management", label: "Pipeline Management" },
+  { id: "soil_salinity", label: "Soil Salinity" },
+  { id: "water_quality", label: "Water Quality" },
+  { id: "demand_forecasting", label: "Demand Forecasting" },
+  { id: "incident_analytics", label: "Incident Analytics" },
+];
 
 const getWorkspaceLayout = (workspace: any) => {
   const polygon: [number, number][] =
@@ -66,7 +74,7 @@ const getWorkspaceLayout = (workspace: any) => {
 
 // ── main component ──────────────────────────────────────────────────────────
 const Settings = () => {
-  const { user, workspace, updateWorkspaceLayout } = useAuth();
+  const { user, workspace, updateWorkspaceLayout, fetchWorkspaces } = useAuth();
   const { toast } = useToast();
 
   // ── password state ──────────────────────────────────────────────────────
@@ -94,6 +102,17 @@ const Settings = () => {
   const [layoutFile, setLayoutFile]               = useState<File | null>(null);
   const [layoutNotes, setLayoutNotes]             = useState("");
   const [editingLayout, setEditingLayout] = useState(false);
+  const [selectedModules, setSelectedModules] = useState<string[]>([]);
+  const [savingModules, setSavingModules] = useState(false);
+  const [editingModules, setEditingModules] = useState(false);
+  const [workspaceNameInput, setWorkspaceNameInput] = useState("");
+  const [organizationNameInput, setOrganizationNameInput] = useState("");
+  const [savingNames, setSavingNames] = useState(false);
+  const [inviteInput, setInviteInput] = useState("");
+  const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+  const [sendingInvite, setSendingInvite] = useState(false);
+  const [inviteLinks, setInviteLinks] = useState<Array<{ email: string; link: string }>>([]);
+  const [inviteDebugRows, setInviteDebugRows] = useState<Array<{ email: string; debug: any }>>([]);
 
   // seed from workspace
 useEffect(() => {
@@ -109,6 +128,19 @@ useEffect(() => {
   setLayoutTaskMessage("");
   setLayoutFile(null);
 }, [workspace]);
+
+useEffect(() => {
+  setSelectedModules(Array.isArray(workspace?.modules) ? workspace.modules : []);
+}, [workspace?.id, JSON.stringify(workspace?.modules || [])]);
+
+useEffect(() => {
+  setWorkspaceNameInput(String(workspace?.workspace_name || "").trim());
+  setOrganizationNameInput(String(workspace?.company_name || "").trim());
+}, [workspace?.id, workspace?.workspace_name, workspace?.company_name]);
+
+useEffect(() => {
+  setInviteEmails(Array.isArray((workspace as any)?.invite_emails) ? (workspace as any).invite_emails : []);
+}, [workspace?.id, JSON.stringify((workspace as any)?.invite_emails || [])]);
 
   // ── derived layout values ───────────────────────────────────────────────
   const enabledExtracted = extractedPoints.filter((p) => p.enabled);
@@ -243,6 +275,137 @@ useEffect(() => {
   const clearExtractedPolygon = () => { setExtractedPolygon([]); setExtractedPoints([]); setLayoutConfirmed(false); };
   const clearLayoutSelection = () => { clearManualPolygon(); clearExtractedPolygon(); setLayoutFile(null); setLayoutConfirmed(false); setMapMode("idle"); };
 
+  const toggleModule = (moduleId: string) => {
+    setSelectedModules((prev) =>
+      prev.includes(moduleId) ? prev.filter((m) => m !== moduleId) : [...prev, moduleId]
+    );
+  };
+
+  const handleSaveModules = async () => {
+    if (!workspace?.id) return;
+    if (selectedModules.length === 0) {
+      toast({ title: "Select at least one module", variant: "destructive" });
+      return;
+    }
+    setSavingModules(true);
+    try {
+      await api.patch("/workspaces/", {
+        workspace_id: workspace.id,
+        modules: selectedModules,
+      });
+      await fetchWorkspaces();
+      setEditingModules(false);
+      toast({ title: "Modules updated", description: "Workspace modules have been saved." });
+    } catch (err: any) {
+      toast({
+        title: "Update failed",
+        description: err?.response?.data?.error || "Could not update modules.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingModules(false);
+    }
+  };
+
+  const handleSaveWorkspaceAndOrganization = async () => {
+    if (!workspace?.id) return;
+    const nextWorkspaceName = workspaceNameInput.trim();
+    const nextOrganizationName = organizationNameInput.trim();
+    if (!nextWorkspaceName) {
+      toast({ title: "Workspace name required", variant: "destructive" });
+      return;
+    }
+    if (!nextOrganizationName) {
+      toast({ title: "Organization name required", variant: "destructive" });
+      return;
+    }
+    setSavingNames(true);
+    try {
+      await api.patch("/workspaces/", {
+        workspace_id: workspace.id,
+        workspace_name: nextWorkspaceName,
+        company_name: nextOrganizationName,
+        apply_company_to_all: true,
+      });
+      await fetchWorkspaces();
+      toast({
+        title: "Names updated",
+        description: "Workspace name updated and organization applied to all workspace cards.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Update failed",
+        description: err?.response?.data?.error || "Could not update workspace/organization names.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingNames(false);
+    }
+  };
+
+  const addInviteEmail = () => {
+    const email = inviteInput.trim();
+    if (!email) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast({ title: "Invalid email", description: "Enter a valid email address.", variant: "destructive" });
+      return;
+    }
+    if (inviteEmails.includes(email)) {
+      toast({ title: "Already added", description: "This email is already in the invite list." });
+      return;
+    }
+    setInviteEmails((prev) => [...prev, email]);
+    setInviteInput("");
+  };
+
+  const sendInvitesNow = async () => {
+    if (inviteEmails.length === 0) {
+      toast({ title: "No invite emails", description: "Add at least one email to send invites." });
+      return;
+    }
+    setSendingInvite(true);
+    let successCount = 0;
+    const failed: string[] = [];
+    const links: Array<{ email: string; link: string }> = [];
+    const debugRows: Array<{ email: string; debug: any }> = [];
+    try {
+      for (const email of inviteEmails) {
+        try {
+          const res = await api.post("/workspace-invite/", { email, workspace_id: workspace?.id });
+          const link = String(res?.data?.invite_link || "").trim();
+          const debug = res?.data?.delivery_debug;
+          if (link) links.push({ email, link });
+          if (debug) debugRows.push({ email, debug });
+          if (res?.data?.success) successCount += 1;
+          else failed.push(email);
+        } catch (err: any) {
+          const link = String(err?.response?.data?.invite_link || "").trim();
+          const debug = err?.response?.data?.delivery_debug;
+          if (link) links.push({ email, link });
+          if (debug) debugRows.push({ email, debug });
+          failed.push(email);
+        }
+      }
+      await fetchWorkspaces();
+      setInviteLinks((prev) => [...links, ...prev].slice(0, 10));
+      setInviteDebugRows((prev) => [...debugRows, ...prev].slice(0, 20));
+      if (failed.length === 0) {
+        toast({ title: "Invites sent", description: `Successfully sent ${successCount} invitation(s).` });
+      } else {
+        toast({
+          title: "Partial invite send",
+          description: `Sent ${successCount}. Failed: ${failed.join(", ")}`,
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setSendingInvite(false);
+    }
+  };
+
+  const existingModules = MODULE_OPTIONS.filter((module) => selectedModules.includes(module.id));
+  const additionalModules = MODULE_OPTIONS.filter((module) => !selectedModules.includes(module.id));
+
   // ── password handler ────────────────────────────────────────────────────
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -289,6 +452,210 @@ useEffect(() => {
 
         {/* ── General ────────────────────────────────────────────────── */}
         <TabsContent value="general" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Workspace And Organization</CardTitle>
+              <CardDescription>
+                Update current workspace name and organization name. Organization name is applied to all workspaces and card views.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="workspace-name">Workspace Name</Label>
+                <Input
+                  id="workspace-name"
+                  value={workspaceNameInput}
+                  onChange={(e) => setWorkspaceNameInput(e.target.value)}
+                  placeholder="Enter workspace name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="organization-name">Organization Name</Label>
+                <Input
+                  id="organization-name"
+                  value={organizationNameInput}
+                  onChange={(e) => setOrganizationNameInput(e.target.value)}
+                  placeholder="Enter organization name"
+                />
+              </div>
+              <Button onClick={handleSaveWorkspaceAndOrganization} disabled={savingNames}>
+                {savingNames ? "Saving..." : "Save Workspace And Organization"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Invite Team Members</CardTitle>
+              <CardDescription>Send workspace invite links from Settings, same as onboarding workflow.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="colleague@company.com"
+                  value={inviteInput}
+                  onChange={(e) => setInviteInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addInviteEmail();
+                    }
+                  }}
+                />
+                <Button type="button" variant="outline" onClick={addInviteEmail}>
+                  Add
+                </Button>
+              </div>
+
+              {inviteEmails.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {inviteEmails.map((email) => (
+                    <span key={email} className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm">
+                      {email}
+                      <button
+                        type="button"
+                        onClick={() => setInviteEmails((prev) => prev.filter((e) => e !== email))}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <Button onClick={sendInvitesNow} disabled={sendingInvite || inviteEmails.length === 0}>
+                {sendingInvite ? "Sending..." : "Send Invitations"}
+              </Button>
+
+              {inviteLinks.length > 0 && (
+                <div className="space-y-2 rounded-lg border border-border p-3">
+                  <p className="text-sm font-medium">Latest Invite Links (fallback if email is delayed)</p>
+                  {inviteLinks.map((row, idx) => (
+                    <div key={`${row.email}-${idx}`} className="flex flex-col md:flex-row md:items-center gap-2">
+                      <span className="text-xs text-muted-foreground min-w-[180px]">{row.email}</span>
+                      <Input value={row.link} readOnly className="text-xs" />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(row.link);
+                          toast({ title: "Copied", description: `Invite link copied for ${row.email}` });
+                        }}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {inviteDebugRows.length > 0 && (
+                <div className="space-y-2 rounded-lg border border-border p-3">
+                  <p className="text-sm font-medium">Delivery Debug</p>
+                  {inviteDebugRows.map((row, idx) => (
+                    <div key={`${row.email}-dbg-${idx}`} className="text-xs rounded-md bg-muted/40 p-2">
+                      <p className="font-medium">{row.email}</p>
+                      <p className={`font-semibold ${row.debug?.primary_attempt_ok || row.debug?.verified_retry_ok || row.debug?.insecure_retry_ok ? "text-emerald-700" : "text-destructive"}`}>
+                        {row.debug?.primary_attempt_ok || row.debug?.verified_retry_ok || row.debug?.insecure_retry_ok
+                          ? "SMTP accepted by server"
+                          : "SMTP send failed"}
+                      </p>
+                      <p>
+                        host={String(row.debug?.smtp_host || "")}:{String(row.debug?.smtp_port || "")} ssl=
+                        {String(!!row.debug?.smtp_ssl)} tls={String(!!row.debug?.smtp_tls)} primary_ok=
+                        {String(!!row.debug?.primary_attempt_ok)} verified_retry_used={String(!!row.debug?.verified_retry_used)} verified_retry_ok=
+                        {String(!!row.debug?.verified_retry_ok)} insecure_retry_used={String(!!row.debug?.insecure_retry_used)} insecure_retry_ok=
+                        {String(!!row.debug?.insecure_retry_ok)}
+                      </p>
+                      <p>
+                        certifi_available={String(!!row.debug?.certifi_available)} allow_insecure_retry={String(!!row.debug?.allow_insecure_retry)}
+                      </p>
+                      {row.debug?.primary_error && !(row.debug?.primary_attempt_ok || row.debug?.verified_retry_ok || row.debug?.insecure_retry_ok) && (
+                        <p>primary_error: {String(row.debug.primary_error)}</p>
+                      )}
+                      {row.debug?.verified_retry_error && <p>verified_retry_error: {String(row.debug.verified_retry_error)}</p>}
+                      {row.debug?.retry_error && <p>retry_error: {String(row.debug.retry_error)}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Workspace Modules</CardTitle>
+              <CardDescription>
+                Manage modules for this workspace. Available modules: {MODULE_OPTIONS.length}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!editingModules && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedModules(Array.isArray(workspace?.modules) ? workspace.modules : []);
+                    setEditingModules(true);
+                  }}
+                >
+                  Edit Modules
+                </Button>
+              )}
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Existing Modules</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {existingModules.map((module) => (
+                    <div key={module.id} className="rounded-xl border border-primary/30 bg-primary/10 px-3 py-2 flex items-center justify-between">
+                      <span className="text-sm font-medium">{module.label}</span>
+                      {editingModules && (
+                        <Button variant="ghost" size="icon" onClick={() => toggleModule(module.id)} aria-label={`Remove ${module.label}`}>
+                          <Minus className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Add More Modules</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {additionalModules.map((module) => (
+                    <div key={module.id} className="rounded-xl border border-border px-3 py-2 flex items-center justify-between">
+                      <span className="text-sm">{module.label}</span>
+                      {editingModules ? (
+                        <Button variant="ghost" size="icon" onClick={() => toggleModule(module.id)} aria-label={`Add ${module.label}`}>
+                          <Plus className="w-4 h-4" />
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Not enabled</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {editingModules && (
+                <div className="flex gap-2">
+                  <Button onClick={handleSaveModules} disabled={savingModules}>
+                    {savingModules ? "Saving..." : "Save Modules"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSelectedModules(Array.isArray(workspace?.modules) ? workspace.modules : []);
+                      setEditingModules(false);
+                    }}
+                    disabled={savingModules}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader><CardTitle>Account Information</CardTitle></CardHeader>
             <CardContent className="space-y-4">

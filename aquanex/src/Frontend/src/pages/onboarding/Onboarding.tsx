@@ -1837,8 +1837,8 @@ useEffect(() => {
           <div className="p-4 rounded-2xl bg-blue-50 border border-blue-100 space-y-3">
             <p className="text-sm font-medium">
               {finalLayoutPolygon.length
-                ? `Mapped area: ${formatArea(finalLayoutArea)}`
-                : "Draw an area on the map to estimate its size."}
+                ? "Layout boundary is ready."
+                : "Draw an area on the map to create layout boundary."}
             </p>
             <input
               type="text"
@@ -1976,14 +1976,16 @@ useEffect(() => {
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleLayoutUpload}
-              disabled={!data.layout.layoutFile || uploadingLayout}
-              className="w-full py-3 px-6 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {uploadingLayout ? "Uploading..." : "Upload to Processing Queue"}
-            </button>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={handleLayoutUpload}
+                disabled={!data.layout.layoutFile || uploadingLayout}
+                className="w-full py-3 px-6 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {uploadingLayout ? "Uploading..." : "Upload to Processing Queue"}
+              </button>
+            </div>
 
             <button
               type="button"
@@ -2051,9 +2053,6 @@ useEffect(() => {
                </div>
 
                <div className="space-y-2">
-                 <p className="text-xs text-muted-foreground">
-                   Final area: {formatArea(finalLayoutArea)}
-                 </p>
                  <label className="text-xs font-medium text-muted-foreground">
                    Final coordinates (lng, lat)
                  </label>
@@ -2666,10 +2665,8 @@ useEffect(() => {
                 value: `${data.modules.length} enabled`,
               },
               {
-                label: "Layout Area",
-                value: data.layout.polygon.length
-                  ? formatArea(data.layout.area_m2)
-                  : "Not mapped",
+                label: "Layout",
+                value: data.layout.polygon.length ? "Mapped" : "Not mapped",
               },
             ].map(({ label, value }) => (
               <div

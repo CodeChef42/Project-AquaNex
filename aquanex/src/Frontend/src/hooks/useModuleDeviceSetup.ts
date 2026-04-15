@@ -112,6 +112,7 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
   const [scanStatus, setScanStatus] = useState("");
+  const [fallbackConfigured, setFallbackConfigured] = useState(false);
 
   useEffect(() => {
     const value = String(workspace?.gateway_id || "").trim();
@@ -156,7 +157,14 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
     [configuredTypes, requiredTypes]
   );
 
-  const isConfigured = missingTypes.length === 0;
+  const isConfigured = missingTypes.length === 0 || fallbackConfigured;
+
+  useEffect(() => {
+    // If real devices are configured later, clear fallback mode.
+    if (missingTypes.length === 0 && fallbackConfigured) {
+      setFallbackConfigured(false);
+    }
+  }, [fallbackConfigured, missingTypes.length]);
 
   const stripModuleDevices = useCallback(async () => {
     const gatewayId = gatewayIdInput.trim() || String(workspace?.gateway_id || "").trim();
@@ -165,6 +173,7 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
       return false;
     }
     setScanStatus("Preparing rescan: clearing existing module devices...");
+    setFallbackConfigured(false);
     const filteredDevices = allDevices.filter(
       (device) => !requiredTypes.includes(canonicalDeviceType(String(device?.type || "")))
     );
@@ -279,10 +288,13 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
         }
       }
       if (discoveredDevices.length === 0) {
-        setScanStatus("Scan completed: no matching devices found for this module.");
-        setError("No required geolocated devices found for this module.");
+        // Global fail-safe mode across modules: never block module page on scan mismatch.
+        setFallbackConfigured(true);
+        setError("");
+        setScanStatus("Scan found no matching sensors. Module is running in fallback mode with demo values.");
         return;
       }
+      setFallbackConfigured(false);
       setScanStatus(`Found ${discoveredDevices.length} matching device(s). Registering to workspace...`);
       const normalizedDiscovered = discoveredDevices.map((device) => {
         const inferredType = inferredRequiredType(device, requiredTypes);
@@ -309,8 +321,10 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
         scanError?.response?.data?.error ||
         scanError?.message ||
         "Failed to configure devices.";
-      setScanStatus("Scan failed.");
-      setError(String(message));
+      // Hard fail-safe across modules: never block page on scan exceptions/timeouts.
+      setFallbackConfigured(true);
+      setError("");
+      setScanStatus("Scan failed to match live sensors. Module is running in fallback mode with demo values.");
     } finally {
       setScanning(false);
     }
@@ -327,6 +341,7 @@ export const useModuleDeviceSetup = (requiredDeviceTypes: string[]) => {
     moduleDevices,
     geolocatedModuleDevices,
     isConfigured,
+    fallbackConfigured,
     scanAndConfigure,
     stripModuleDevices,
   };

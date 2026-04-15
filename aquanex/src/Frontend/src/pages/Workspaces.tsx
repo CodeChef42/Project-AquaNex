@@ -64,7 +64,7 @@ const Workspaces = () => {
       if (polygon.length < 3) return null;
       return {
         id: item.id,
-        name: item.workspace_name || item.company_name || "Untitled Workspace",
+        name: item.workspace_name || "Untitled Workspace",
         area: item.layout_area_m2 || 0,
         positions: polygon.map(([lng, lat]) => [lat, lng] as [number, number]),
       };
@@ -187,7 +187,13 @@ const Workspaces = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {workspaces.map((item) => {
-            const title = item.workspace_name || item.company_name || "Untitled Workspace";
+            const workspaceName = String(item.workspace_name || "").trim();
+            const companyName = String(item.company_name || "").trim();
+            const title = workspaceName || "Untitled Workspace";
+            const organizationDisplay =
+              companyName && companyName.toLowerCase() !== workspaceName.toLowerCase()
+                ? companyName
+                : "Not set";
             const isActive = workspace?.id === item.id;
             return (
               <Card
@@ -198,7 +204,7 @@ const Workspaces = () => {
                   <CardTitle className="text-base font-semibold text-slate-700">{title}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1.5 text-sm">
-                  <p className="text-slate-500">Organization: {item.company_name || "—"}</p>
+                  <p className="text-slate-500">Organization: {organizationDisplay}</p>
                   <p className="text-slate-500">
                     Area: {item.layout_area_m2 ? formatArea(item.layout_area_m2) : "Not mapped"}
                   </p>

@@ -181,9 +181,6 @@ const Dashboard = () => {
                 />
               </MapContainer>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Area: {workspace?.layout_area_m2 ? `${(workspace.layout_area_m2 / 1000).toFixed(2)}k m²` : "—"}
-            </p>
             {workspace?.layout_notes && (
               <p className="text-xs text-muted-foreground">Notes: {workspace.layout_notes}</p>
             )}

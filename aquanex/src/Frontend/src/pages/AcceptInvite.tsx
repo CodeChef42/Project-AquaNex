@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react';
+import { zxcvbn, zxcvbnOptions, type ZxcvbnResult } from "@zxcvbn-ts/core";
+import * as zxcvbnCommonPackage from "@zxcvbn-ts/language-common";
+import * as zxcvbnEnPackage from "@zxcvbn-ts/language-en";
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
@@ -10,6 +13,15 @@ import { LeafDecor } from '../components/LeafDecor';
 import Logo from '@/components/Logo';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+
+zxcvbnOptions.setOptions({
+  dictionary: {
+    ...zxcvbnCommonPackage.dictionary,
+    ...zxcvbnEnPackage.dictionary,
+  },
+  graphs: zxcvbnCommonPackage.adjacencyGraphs,
+  translations: zxcvbnEnPackage.translations,
+});
 
 type InviteInfo = {
   email: string;
@@ -31,6 +43,30 @@ const AcceptInvite = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [zxcvbnResult, setZxcvbnResult] = useState<ZxcvbnResult | null>(null);
+
+  const staticRules = [
+    { label: "At least 8 characters", test: (p: string) => p.length >= 8 },
+    { label: "One uppercase letter (A-Z)", test: (p: string) => /[A-Z]/.test(p) },
+    { label: "One special character (!@#$...)", test: (p: string) => /[!@#$%^&*(),.?":{}|<>]/.test(p) },
+    { label: "One number (0-9)", test: (p: string) => /[0-9]/.test(p) },
+  ];
+  const strengthConfig = [
+    { label: "Too Weak", color: "bg-red-500", text: "text-red-500" },
+    { label: "Weak", color: "bg-red-400", text: "text-red-400" },
+    { label: "Fair", color: "bg-amber-400", text: "text-amber-500" },
+    { label: "Strong", color: "bg-cyan-500", text: "text-cyan-500" },
+    { label: "Very Strong", color: "bg-emerald-500", text: "text-emerald-500" },
+  ];
+  const score = zxcvbnResult?.score ?? -1;
+  const strength = score >= 0 ? strengthConfig[score] : null;
+  const zxcvbnWarning = zxcvbnResult?.feedback?.warning;
+  const zxcvbnHint = zxcvbnResult?.feedback?.suggestions?.[0];
+  const passwordRules = [
+    ...staticRules.map((r) => ({ ...r, passed: r.test(password) })),
+    { label: "Not easily guessable", passed: score >= 2 },
+  ];
+  const allRulesPassed = passwordRules.every((r) => r.passed);
 
   useEffect(() => {
     if (!token) return;
@@ -45,9 +81,21 @@ const AcceptInvite = () => {
       .finally(() => setLoadingInvite(false));
   }, [token]);
 
+  useEffect(() => {
+    if (!password) {
+      setZxcvbnResult(null);
+      return;
+    }
+    setZxcvbnResult(zxcvbn(password, [fullName, inviteInfo?.email || ""].filter(Boolean)));
+  }, [password, fullName, inviteInfo?.email]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!allRulesPassed) {
+      toast({ title: 'Weak password', description: 'Please meet all password requirements.', variant: 'destructive' });
+      return;
+    }
     if (password !== confirmPassword) {
       toast({ title: 'Passwords do not match', variant: 'destructive' });
       return;
@@ -61,12 +109,28 @@ const AcceptInvite = () => {
       });
       localStorage.setItem('access_token', res.data.access);
       localStorage.setItem('refresh_token', res.data.refresh);
+      if (res.data.workspace_id) {
+        localStorage.setItem('selected_workspace_id', res.data.workspace_id);
+      }
       toast({ title: 'Account created!', description: `Welcome to ${inviteInfo?.workspace_name}.` });
       window.location.href = '/home';
     } catch (err: any) {
+      const data = err?.response?.data;
+      const detailed =
+        data?.error ||
+        data?.detail ||
+        (Array.isArray(data) ? data.join(", ") : "") ||
+        (typeof data === "object" && data
+          ? Object.values(data)
+              .flat()
+              .map((x: any) => String(x))
+              .join(" ")
+          : "") ||
+        err?.message ||
+        'Something went wrong. Please try again.';
       toast({
         title: 'Error',
-        description: err.response?.data?.error || 'Something went wrong. Please try again.',
+        description: detailed,
         variant: 'destructive',
       });
       setSubmitting(false);
@@ -159,6 +223,30 @@ const AcceptInvite = () => {
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
+                  {password && (
+                    <div className="mt-2 space-y-2">
+                      <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
+                        <div
+                          className={`h-2 ${strength?.color ?? "bg-slate-300"} transition-all`}
+                          style={{ width: `${Math.max(0, score + 1) * 20}%` }}
+                        />
+                      </div>
+                      <p className={`text-xs font-medium ${strength?.text ?? "text-slate-400"}`}>
+                        {strength?.label ?? "Start typing a password"}
+                      </p>
+                      <div className="space-y-1">
+                        {passwordRules.map((rule, idx) => (
+                          <div key={`${rule.label}-${idx}`} className={`flex items-center gap-2 text-xs ${rule.passed ? "text-emerald-600" : "text-slate-500"}`}>
+                            {rule.passed ? <CheckCircle className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                            <span>{rule.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {(zxcvbnWarning || zxcvbnHint) && (
+                        <p className="text-xs text-amber-600">{zxcvbnWarning || zxcvbnHint}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">

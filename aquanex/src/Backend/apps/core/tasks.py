@@ -13,7 +13,14 @@ import requests
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import IntegrityError, transaction
+import logging
 
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+logger = logging.getLogger(__name__)
 try:
     from pypdf import PdfReader
 except Exception:
@@ -361,44 +368,124 @@ def _extract_polygon_from_text(file_path):
             break
     return _normalize_polygon(coords)
 
-
 def _extract_text_from_pdf(file_path: Path) -> Optional[str]:
+    """Helper to pull raw text from PDF for the regex fallback."""
     if PdfReader is None:
         return None
     try:
         reader = PdfReader(str(file_path))
-    except Exception:
+        chunks = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            if page_text:
+                chunks.append(page_text)
+        return "\n".join(chunks) if chunks else None
+    except Exception as e:
+        logger.warning(f"Text extraction failed: {e}")
         return None
 
-    chunks = []
-    for page in reader.pages:
-        try:
-            page_text = page.extract_text() or ""
-        except Exception:
-            page_text = ""
-        if page_text:
-            chunks.append(page_text)
-    return "\n".join(chunks) if chunks else None
+def _dubai_local_grid_to_wgs84(easting: float, northing: float):
+    CENTRAL_MERIDIAN = 54.0
+    FALSE_EASTING    = 370352.0
+    lat     = northing / 110574.0
+    lat_rad = math.radians(lat)
+    lon     = CENTRAL_MERIDIAN + (easting - FALSE_EASTING) / (math.cos(lat_rad) * 111320.0)
+    return lon, lat
 
+def _ocr_pdf_page(file_path: Path) -> str:
+    """Rasterize first page and OCR it. Returns extracted text."""
+    try:  
+        import fitz
+        import pytesseract  # lazy import — won't crash app on startup
+        from PIL import Image
+        import io
+        doc = fitz.open(str(file_path))
+        page = doc[0]
+        # 300 DPI matrix — enough for engineering text
+        mat = fitz.Matrix(300/72, 300/72)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        text = pytesseract.image_to_string(img, config='--psm 11')
+        return text
+    except Exception as e:
+        logger.warning(f"OCR failed: {e}")
+        return ""
 
 def _extract_polygon_from_pdf(file_path: Path):
-    pdf_text = _extract_text_from_pdf(file_path)
-    if not pdf_text:
-        return []
+    from pyproj import Transformer
 
-    matches = re.findall(r"(-?\d{1,3}\.\d+)\s*[, ]\s*(-?\d{1,3}\.\d+)", pdf_text)
-    coords = []
-    for first, second in matches:
-        a = float(first)
-        b = float(second)
-        if -180 <= a <= 180 and -90 <= b <= 90:
-            coords.append((a, b))
-        elif -90 <= a <= 90 and -180 <= b <= 180:
-            coords.append((b, a))
-        if len(coords) >= 200:
-            break
-    return _normalize_polygon(coords)
+    # ── PHASE 0: Try normal text extraction first, fall back to OCR ──
+    pdf_text = _extract_text_from_pdf(file_path) or ""
+    if len(pdf_text.strip()) < 50:
+        logger.info("Scanned PDF detected — running OCR")
+        pdf_text = _ocr_pdf_page(file_path)
 
+    if pdf_text:
+        # FIX 1: Flexible digit counts to handle varying coordinate formats
+        # N values like 2785047.035 → 7 digits before decimal
+        # E values like 403062.810  → 6 digits before decimal
+        # Using ranges (6,8) and (5,7) to be safe across different surveys
+        n_vals = re.findall(r'\bN\s+(\d{6,8}\.\d+)', pdf_text, re.IGNORECASE)
+        e_vals = re.findall(r'\bE\s+(\d{5,7}\.\d+)', pdf_text, re.IGNORECASE)
+        logger.info(f"Regex extraction — N={len(n_vals)}, E={len(e_vals)}")
+
+        if len(n_vals) >= 3 and len(e_vals) >= 3:
+            # FIX 2: Try EPSG:3997 (Dubai Local Grid) first, then UTM Zone 40N
+            for epsg in ["EPSG:3997", "EPSG:32640"]:
+                try:
+                    t = Transformer.from_crs(epsg, "EPSG:4326", always_xy=True)
+                    coords = []
+                    for n_str, e_str in zip(n_vals, e_vals):
+                        # always_xy=True means transform(easting, northing)
+                        lon, lat = t.transform(float(e_str), float(n_str))
+                        # FIX 3: Slightly wider bbox to avoid edge-case misses
+                        if 24.0 <= lat <= 26.0 and 54.0 <= lon <= 56.5:
+                            coords.append((lon, lat))
+                    if len(coords) >= 3:
+                        logger.info(f"PDF+{epsg} success: {len(coords)} points")
+                        return _normalize_polygon(coords)
+                    else:
+                        logger.warning(f"{epsg} projected {len(coords)} valid points — trying next CRS")
+                except Exception as e:
+                    logger.warning(f"{epsg} failed: {e}")
+
+        # FIX 4: Fallback — try inline "N=... E=..." or "N:... E:..." formats
+        inline_matches = re.findall(
+            r'N[=:\s]\s*(\d{6,8}\.\d+)[,\s]+E[=:\s]\s*(\d{5,7}\.\d+)',
+            pdf_text, re.IGNORECASE
+        )
+        if len(inline_matches) >= 3:
+            for epsg in ["EPSG:3997", "EPSG:32640"]:
+                try:
+                    t = Transformer.from_crs(epsg, "EPSG:4326", always_xy=True)
+                    coords = []
+                    for n_str, e_str in inline_matches:
+                        lon, lat = t.transform(float(e_str), float(n_str))
+                        if 24.0 <= lat <= 26.0 and 54.0 <= lon <= 56.5:
+                            coords.append((lon, lat))
+                    if len(coords) >= 3:
+                        logger.info(f"Inline+{epsg} success: {len(coords)} points")
+                        return _normalize_polygon(coords)
+                except Exception as e:
+                    logger.warning(f"Inline {epsg} failed: {e}")
+
+    # ── PHASE 1: Try _extract_enclosure_from_engineering_text ──
+    if pdf_text:
+        try:
+            extracted, extracted_points, epsg_used = _extract_enclosure_from_engineering_text(
+                pdf_text,
+                location_hint="Dubai",
+                crs_override="auto",
+            )
+            if len(extracted) >= 3:
+                logger.info(f"Engineering text extraction success: {len(extracted)} points")
+                return extracted
+        except Exception as e:
+            logger.warning(f"Engineering text extraction failed: {e}")
+
+    # ── PHASE 2: Generic lat/lng regex fallback ──
+    logger.info("Falling back to generic lat/lng regex extraction")
+    return _extract_polygon_from_text(file_path)
 
 @shared_task
 def layout_process(workspace_id, file_path, original_filename, crs_override="auto"):

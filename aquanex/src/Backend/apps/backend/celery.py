@@ -5,12 +5,12 @@ import platform
 # Path to Backend/ root (3 dirs up from celery.py)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-# Django settings
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'apps.backend.settings')
+# Django settings - FORCE the override (changed from setdefault)
+os.environ['DJANGO_SETTINGS_MODULE'] = 'apps.backend.settings'
 
-# Celery app
+# Celery app - MUST include the 'apps.' prefix
 from celery import Celery
-app = Celery('backend')
+app = Celery('apps.backend')
 
 # Load Django Celery config
 app.config_from_object('django.conf:settings', namespace='CELERY')

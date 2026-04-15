@@ -245,8 +245,10 @@ function formatTs(iso: string | null): string {
 const WaterQualityMonitoring = () => {
   const { workspace } = useAuth();
   const navigate = useNavigate();
+  const setupDismissKey = `wq_setup_dismissed:${workspace?.id || "default"}`;
   const [forceSetup, setForceSetup] = useState(false);
   const [wasScanning, setWasScanning] = useState(false);
+  const [setupDismissed, setSetupDismissed] = useState(false);
 
   const moduleSetup = useModuleDeviceSetup(["ph_sensor", "turbidity_sensor"]);
   const {
@@ -258,6 +260,7 @@ const WaterQualityMonitoring = () => {
     missingTypes,
     geolocatedModuleDevices,
     isConfigured,
+    fallbackConfigured,
     stripModuleDevices,
   } = moduleSetup;
 
@@ -265,15 +268,40 @@ const WaterQualityMonitoring = () => {
     if (scanning) setWasScanning(true);
   }, [scanning]);
   useEffect(() => {
+    if (setupDismissed) return;
     if (wasScanning && !scanning && !error && forceSetup) {
       setWasScanning(false);
       setForceSetup(false);
     }
-  }, [error, forceSetup, scanning, wasScanning]);
+  }, [error, forceSetup, scanning, setupDismissed, wasScanning]);
+
+  useEffect(() => {
+    try {
+      setSetupDismissed(localStorage.getItem(setupDismissKey) === "1");
+    } catch {
+      setSetupDismissed(false);
+    }
+  }, [setupDismissKey]);
+
+  useEffect(() => {
+    try {
+      if (setupDismissed) localStorage.setItem(setupDismissKey, "1");
+      else localStorage.removeItem(setupDismissKey);
+    } catch {
+      // no-op
+    }
+  }, [setupDismissKey, setupDismissed]);
 
   const handleStartRescan = async () => {
+    setSetupDismissed(false);
     setForceSetup(true);
     await stripModuleDevices();
+  };
+
+  const handleCancelSetup = () => {
+    setForceSetup(false);
+    setWasScanning(false);
+    setSetupDismissed(true);
   };
 
   const deviceTypeLabels: Record<string, string> = {
@@ -486,7 +514,7 @@ const WaterQualityMonitoring = () => {
   // True all-clear: has readings, none are warning/critical, and no active alerts
   const allClear = sensorsWithReadings.length > 0 && warning === 0 && critical === 0 && activeAlerts.length === 0;
 
-  const showSetupPanel = !isConfigured || forceSetup;
+  const showSetupPanel = forceSetup || (!isConfigured && !setupDismissed);
 
   // ── configured view ────────────────────────────────────────────────────────
   return (
@@ -536,22 +564,41 @@ const WaterQualityMonitoring = () => {
       </div>
 
       <div className="container mx-auto px-6 py-8 space-y-6">
+        {!showSetupPanel && !isConfigured && !fallbackConfigured && (
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => setSetupDismissed(false)}>
+              Show Setup Panel
+            </Button>
+          </div>
+        )}
+
         {showSetupPanel && (
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <CardTitle>{forceSetup ? "Rescan Devices" : "Devices Not Configured"}</CardTitle>
                 {forceSetup && (
-                  <Button variant="outline" size="sm" onClick={() => setForceSetup(false)}>Cancel</Button>
+                  <Button variant="outline" size="sm" onClick={handleCancelSetup}>Cancel</Button>
                 )}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {fallbackConfigured ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <p className="text-sm font-medium text-emerald-700">Fallback Active</p>
+                  <p className="text-xs text-emerald-700/90">
+                    Live scan could not find required sensors. Water Quality is running with demo values.
+                  </p>
+                </div>
+              ) : (
+                <>
               <p className="text-sm text-muted-foreground">Configure required water quality devices to continue.</p>
               <p className="text-sm">
                 Missing:{" "}
                 <span className="font-medium">{missingTypes.map((t) => deviceTypeLabels[t] || t).join(", ")}</span>
               </p>
+                </>
+              )}
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
@@ -565,7 +612,7 @@ const WaterQualityMonitoring = () => {
                 </Button>
               </div>
               {scanStatus && <p className="text-xs text-muted-foreground">{scanStatus}</p>}
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              {!fallbackConfigured && error && <p className="text-sm text-destructive">{error}</p>}
             </CardContent>
           </Card>
         )}
