@@ -21,6 +21,16 @@ AquaNex is built on a distributed microservices architecture:
 
 ---
 
+<img width="1408" height="768" alt="aquanex_marketing_poster" src="https://github.com/user-attachments/assets/258c3d28-dc9e-484b-bc6b-d194ff674ec3" />
+AquaNex: Marketing Poster
+
+---
+
+<img width="1344" height="768" alt="aquanex-technical-poster" src="https://github.com/user-attachments/assets/bd6697b3-eb05-4d71-89be-84376fcc68a3" />
+AquaNex: Technical Poster
+
+---
+
 ## ✨ Key Features
 
 -   **Multi-Workspace Management:** Create and manage multiple farms or industrial sites under a single account.
