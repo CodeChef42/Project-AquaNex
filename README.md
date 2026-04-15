@@ -9,6 +9,16 @@ Youtube product demo video link: https://youtu.be/lELn8OGBGAc
 
 ---
 
+<img width="1408" height="768" alt="aquanex_marketing_poster" src="https://github.com/user-attachments/assets/258c3d28-dc9e-484b-bc6b-d194ff674ec3" />
+AquaNex: Marketing Poster
+
+---
+
+<img width="1344" height="768" alt="aquanex-technical-poster" src="https://github.com/user-attachments/assets/bd6697b3-eb05-4d71-89be-84376fcc68a3" />
+AquaNex: Technical Poster
+
+---
+
 ## 🛠 Project Logic & Architecture
 
 AquaNex is built on a distributed microservices architecture:
@@ -18,16 +28,6 @@ AquaNex is built on a distributed microservices architecture:
 3.  **ML API (FastAPI):** A specialized service that processes high-frequency sensor data (flow/pressure) via MQTT and uses both rule-based logic and XGBoost models to detect anomalies.
 4.  **IoT System:** Includes MQTT-based simulators and handlers for real-time telemetry ingestion from field devices.
 5.  **Task Orchestration:** Uses Celery and Redis for background processing, such as processing large workspace layout uploads and automated reports.
-
----
-
-<img width="1408" height="768" alt="aquanex_marketing_poster" src="https://github.com/user-attachments/assets/258c3d28-dc9e-484b-bc6b-d194ff674ec3" />
-AquaNex: Marketing Poster
-
----
-
-<img width="1344" height="768" alt="aquanex-technical-poster" src="https://github.com/user-attachments/assets/bd6697b3-eb05-4d71-89be-84376fcc68a3" />
-AquaNex: Technical Poster
 
 ---
 
